@@ -49,8 +49,9 @@ import-linter, pip-tools, Docker Compose.
 
 **Decisions this plan takes that the user should approve while reviewing** (spec section 11 leaves
 them to the builder; each lives in one constants module so changing it is a one-line edit):
-- History windows start at 2000-01. Before that, inflation ran near 10% a year under a different
-  monetary regime, and it would set the CPI worst case for every linked track.
+- History windows start within the last ten years of the series (a rolling 120 months). A worst
+  case named after a period the person lived through is believed, and the 1990s, when inflation
+  ran near 10% a year under a different monetary regime, stay out.
 - Base path for "today's payment" and total cost: current rate held flat; inflation 2% a year
   (the middle of the Bank of Israel's 1-3% target) for CPI-linked tracks.
 - The Bank of Israel rate is floored at 0 when a historical decrease is applied to today's rate.
@@ -227,7 +228,7 @@ payment shown = pmt + monthly_fee
 **Interfaces:**
 - Consumes: `schedule`, `Schedule`, `Track`, `Loan`.
 - Produces:
-  - `assumptions.py`: `HISTORY_START = date(2000, 1, 1)`, `BASE_ANNUAL_INFLATION =
+  - `assumptions.py`: `HISTORY_MONTHS = 120`, `BASE_ANNUAL_INFLATION =
     Decimal("2.0")`, `PRIME_MARGIN = Decimal("1.5")`, `BOI_RATE_FLOOR = Decimal("0")`.
   - `MarketHistory(months: tuple[date, ...], boi_rate: tuple[Decimal, ...], monthly_inflation:
     tuple[Decimal, ...], current_boi_rate: Decimal, rate_as_of: date, cpi_as_of: date,
@@ -245,8 +246,8 @@ payment shown = pmt + monthly_fee
   - `NoHistoryWindowError(ValueError)` raised when the term exceeds every window.
 
 Rules (spec section 5): base path = today's rate flat, inflation `BASE_ANNUAL_INFLATION` as
-`(1.02)^(1/12) - 1` per month. Windows start at every month s from `HISTORY_START` with s + term
-inside the series; month k of window s uses rate `max(current + (boi[s+k] - boi[s]),
+`(1.02)^(1/12) - 1` per month. Windows start at every month s in the last `HISTORY_MONTHS` months with s +
+term inside the series; month k of window s uses rate `max(current + (boi[s+k] - boi[s]),
 BOI_RATE_FLOOR) + PRIME_MARGIN + spread` for prime tracks (fixed tracks keep their rate) and
 inflation `monthly_inflation[s+k]` for linked tracks. Worst = highest `max_payment`, earliest on a
 tie.
@@ -266,7 +267,8 @@ tie.
 - [ ] **Step 3: Implement `simulate`** and the window enumeration.
 - [ ] **Step 4: Run them.** Expected: PASS.
 - [ ] **Step 5: Write the replay section of `docs/calculations.md`**: changes not levels and why,
-  the floor, worst by peak payment, the 2000 start and the 2% base inflation with their reasons.
+  the floor, worst by peak payment, the rolling ten years and the 2% base inflation with their
+  reasons.
 - [ ] **Step 6: Commit** ("Measure each variable track against every historical window of its
   term").
 

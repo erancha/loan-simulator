@@ -64,10 +64,11 @@ middle of the Bank of Israel's 1-3% inflation target.
 
 ### Windows
 
-A window is a run of consecutive months of history as long as the term. Every month from
-2000-01 that still has the whole term of history after it starts one window, so a 48-month
-track over 300 months of history has 253 windows. When the term is longer than the history
-from 2000-01, `NoHistoryWindowError` names the term and the months available.
+A window is a run of consecutive months of history as long as the term. Windows start only
+within the last 120 months of the series (`HISTORY_MONTHS`), so the period moves forward with the
+data: every month in that span that still has the whole term of history after it starts one
+window, and a 48-month track has 73 windows. When the term is longer than the history in that
+span, `NoHistoryWindowError` names the term and the months available.
 
 What a window moves depends on the track:
 
@@ -100,11 +101,13 @@ window also reports its own `balloon_due`, which for a linked track grows with t
 inflation. The outcome also holds the range of peak recurring payments and of total paid across
 all windows, and the number of windows.
 
-### Why history starts in 2000
+### Why the last ten years
 
-Both series reach further back, but through the 1990s inflation ran near 10% a year under a
-different monetary regime. Those years would set the CPI worst case for every linked track and
-describe an economy that a loan taken today does not face.
+Both series reach back to 1994, but the risk figure has to be one a person believes. A worst
+case named after a period the person lived through, such as the 2022 rate rise, is taken
+seriously; one named after the early 2000s reads as a story about a different economy and is
+dismissed. Ten years also keep out the 1990s, when inflation ran near 10% a year under a
+different monetary regime. A 96-month track still has 25 windows.
 
 ## Policy
 

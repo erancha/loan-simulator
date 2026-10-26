@@ -212,8 +212,8 @@ window as long as the loan term:
   כמו ב-2022". Its folded explanation will show the range across all windows.
 - Rate kinds in phase 1: fixed, prime plus spread; each CPI-linked or not. A variable rate on
   another index is not modelled.
-- History windows start at 2000-01, though both series reach back to 1994;
-  `docs/calculations.md` states the reason.
+- History windows start within the last ten years of the series (a rolling 120 months), though
+  both series reach back to 1994; `docs/calculations.md` states the reason.
 
 ## 6. The recommendation card (the layout the user chose)
 
@@ -308,7 +308,7 @@ Same set and style as home-finance-agent:
 - Tool names and schemas (decided for the engine); the system prompt; the profile panel's fields.
 - Policy numbers (decided, `docs/calculations.md`) and the turn cap, proposed with reasons for the
   user to approve.
-- History start year (decided: 2000-01).
+- History span (decided: a rolling ten years).
 - Where the MCP server keeps market data (decided: a JSON file on a Docker volume).
 - Page layout details within the layout of section 6.
 - The eval harness: persona format, judge rubric, cost reporting.

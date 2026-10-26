@@ -7,7 +7,6 @@
   each month) and replays each window's rate changes and inflation
 """
 
-from bisect import bisect_left
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -17,7 +16,7 @@ from itertools import pairwise
 from loan_engine.domain.assumptions import (
     BASE_ANNUAL_INFLATION,
     BOI_RATE_FLOOR,
-    HISTORY_START,
+    HISTORY_MONTHS,
     PRIME_MARGIN,
 )
 from loan_engine.domain.models import Track
@@ -87,7 +86,7 @@ class TrackOutcome:
 
 
 def simulate(track: Track, history: MarketHistory) -> TrackOutcome:
-    """Price the track on the base path and on every window from HISTORY_START.
+    """Price the track on the base path and on every window starting in the last HISTORY_MONTHS.
 
     Worst is the window with the highest peak recurring payment, the earliest one on a tie; the
     balloon each window clears in its last month is reported beside it, not counted in the peak.
@@ -114,12 +113,12 @@ def _month_index(month: date) -> int:
 
 
 def _window_starts(n: int, history: MarketHistory) -> range:
-    first = bisect_left(history.months, HISTORY_START)
+    first = max(len(history.months) - HISTORY_MONTHS, 0)
     available = len(history.months) - first
     if available < n:
         raise NoHistoryWindowError(
             f"term of {n} months exceeds the {available} months of history available "
-            f"from {HISTORY_START:%Y-%m}"
+            f"in the last {HISTORY_MONTHS} months"
         )
     return range(first, len(history.months) - n + 1)
 

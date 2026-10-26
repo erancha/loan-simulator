@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import pytest
 
-from loan_engine.domain.assumptions import BASE_ANNUAL_INFLATION, PRIME_MARGIN
+from loan_engine.domain.assumptions import BASE_ANNUAL_INFLATION, HISTORY_MONTHS, PRIME_MARGIN
 from loan_engine.domain.history import MarketHistory, NoHistoryWindowError, simulate
 from loan_engine.domain.models import Track
 from loan_engine.domain.schedule import Schedule, schedule
@@ -186,16 +186,16 @@ def test_ranges_span_all_windows() -> None:
     assert outcome.total_paid_range == (min(totals), max(totals))
 
 
-def test_windows_start_from_history_start() -> None:
-    history = make_history(["9", "9"] + ["2"] * 6, start=date(1999, 11, 1))
+def test_windows_start_within_the_last_history_months() -> None:
+    history = make_history(["9", "9"] + ["2"] * HISTORY_MONTHS)
     outcome = simulate(make_track(), history)
-    assert outcome.windows == 1
+    assert outcome.windows == HISTORY_MONTHS - 6 + 1
     assert outcome.worst is not None
-    assert outcome.worst.start == date(2000, 1, 1)
+    assert outcome.worst.start == history.months[2]
 
 
 def test_term_longer_than_history_raises() -> None:
-    with pytest.raises(NoHistoryWindowError, match=r"6 months.*5 months"):
+    with pytest.raises(NoHistoryWindowError, match=r"6 months.*5 months.*last 120 months"):
         simulate(make_track(), make_history(["2"] * 5))
 
 
