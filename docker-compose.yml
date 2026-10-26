@@ -1,0 +1,23 @@
+# The loan engine: the MCP server of loan calculations. The scripts call compose from this
+# directory, so relative paths resolve from the repo root; settings come from .env.
+name: loan-simulator
+
+services:
+  engine:
+    build:
+      context: .
+      dockerfile: mcp-server/Dockerfile
+    env_file:
+      - path: ./.env
+        required: true
+    # The agent will reach the engine at engine:<ENGINE_PORT> inside the Compose network. The
+    # published port is for MCP Inspector during development, on this machine's loopback interface
+    # only. The scripts pass .env as --env-file so these two variables interpolate.
+    ports:
+      - "127.0.0.1:${ENGINE_HOST_PORT:?set in .env}:${ENGINE_PORT:?set in .env}"
+    # The market data the engine stores survives restarts and rebuilds.
+    volumes:
+      - engine-data:/data
+
+volumes:
+  engine-data:

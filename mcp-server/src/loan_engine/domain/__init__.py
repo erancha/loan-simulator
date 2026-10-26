@@ -1,0 +1,1 @@
+"""Pure loan calculations."""

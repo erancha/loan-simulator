@@ -1,0 +1,66 @@
+[project]
+name = "loan-engine"
+version = "0.1.0"
+description = "Loan engine: an MCP server of loan calculations over market data"
+license = "MIT"
+authors = [{ name = "Eran C", email = "erancha@gmail.com" }]
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=2.3,<3",
+    "pydantic>=2.11",
+    "pydantic-settings>=2.15",
+    "httpx2>=2.16",
+    "uvicorn[standard]>=0.54",
+    "structlog>=26",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "import-linter",
+    "ruff>=0.17,<0.18",
+    "mypy",
+    "pip-tools",
+    "packaging",
+]
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+asyncio_mode = "auto"
+
+[tool.ruff]
+src = ["src", "tests"]
+line-length = 100
+
+[tool.ruff.lint]
+extend-select = ["E501"]
+
+[tool.mypy]
+files = ["src"]
+plugins = ["pydantic.mypy"]
+
+[tool.importlinter]
+root_packages = ["loan_engine"]
+include_external_packages = true
+
+# service composes everything; market fetches and stores series using domain types.
+[[tool.importlinter.contracts]]
+name = "Layers: service over market over domain"
+type = "layers"
+layers = ["loan_engine.service", "loan_engine.market", "loan_engine.domain"]
+
+# Pydantic is allowed: the domain models are the tool schemas.
+[[tool.importlinter.contracts]]
+name = "Domain is framework free"
+type = "forbidden"
+source_modules = ["loan_engine.domain"]
+forbidden_modules = ["mcp", "httpx2", "pydantic_settings", "starlette", "uvicorn", "structlog"]
