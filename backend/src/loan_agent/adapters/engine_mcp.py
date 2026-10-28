@@ -1,0 +1,128 @@
+"""LoanEngine over the loan engine's MCP tools, reached over HTTP with a bearer token.
+
+- McpLoanEngine: typed calls that parse each tool's structured content, and model_tools() for
+  the model
+- Parsing helpers that turn the engine's decimal strings and ISO dates into Decimal and date
+
+Each call opens its own MCP session, so the adapter holds no connection between calls.
+"""
+
+from collections.abc import Mapping
+from datetime import date
+from decimal import Decimal
+from typing import Any
+
+from langchain_core.tools import BaseTool
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from mcp.types import CallToolResult, TextContent
+
+from loan_agent.domain.models import OptionFigures
+from loan_agent.ports.engine import Bounds, EngineError, Simulation, Sizing
+
+_SERVER = "engine"
+
+
+class McpLoanEngine:
+    def __init__(self, url: str, token: str) -> None:
+        """url: the engine's MCP endpoint, path included (e.g. http://engine:8020/mcp)."""
+        self._client = MultiServerMCPClient(
+            {
+                _SERVER: {
+                    "transport": "streamable_http",
+                    "url": url,
+                    "headers": {"Authorization": f"Bearer {token}"},
+                }
+            }
+        )
+
+    async def model_tools(self) -> list[BaseTool]:
+        """The engine's tools for the model. Each tool message carries the engine's text as its
+        content (a summary for simulate_loan, the result's JSON for the others) and the
+        structured content, schedules included, as its artifact under the key
+        structured_content."""
+        return await self._client.get_tools(server_name=_SERVER)
+
+    async def assess(self, profile: Mapping[str, object]) -> Bounds:
+        result = await self._call("assess_affordability", {"profile": dict(profile)})
+        return Bounds(
+            payment_ceiling=_money(result, "payment_ceiling"),
+            min_cushion=_money(result, "min_cushion"),
+            reasons=tuple(result["reasons"]),
+        )
+
+    async def size(
+        self, goal_price: Decimal, trade_in_value: Decimal, savings: Decimal, min_cushion: Decimal
+    ) -> Sizing:
+        result = await self._call(
+            "size_loan",
+            {
+                "goal_price": str(goal_price),
+                "trade_in_value": str(trade_in_value),
+                "savings": str(savings),
+                "min_cushion": str(min_cushion),
+            },
+        )
+        return Sizing(
+            loan_amount=_money(result, "loan_amount"),
+            savings_used=_money(result, "savings_used"),
+            cushion_kept=_money(result, "cushion_kept"),
+            spare_savings=_money(result, "spare_savings"),
+        )
+
+    async def simulate(self, loan: Mapping[str, object]) -> Simulation:
+        result = await self._call("simulate_loan", {"loan": dict(loan)})
+        return Simulation(figures=_figures(result), structured=result)
+
+    async def suggest(self, principal: Decimal, term_months: int) -> list[Mapping[str, object]]:
+        result = await self._call(
+            "suggest_tracks", {"principal": str(principal), "term_months": term_months}
+        )
+        tracks: list[Mapping[str, object]] = result["tracks"]
+        return tracks
+
+    async def _call(self, tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        async with self._client.session(_SERVER) as session:
+            result = await session.call_tool(tool, arguments)
+        if result.isError:
+            raise EngineError(_text(result))
+        if result.structuredContent is None:
+            raise ValueError(f"The engine's {tool} returned no structured content")
+        return result.structuredContent
+
+
+def _text(result: CallToolResult) -> str:
+    (block,) = result.content
+    if not isinstance(block, TextContent):
+        raise TypeError(f"Expected a text block from the engine, got {block.type}")
+    return block.text
+
+
+def _money(data: Mapping[str, Any], key: str) -> Decimal:
+    value = data[key]
+    if not isinstance(value, str):
+        raise TypeError(f"The engine sent {key} as {value!r}, not a decimal string")
+    return Decimal(value)
+
+
+def _optional_money(data: Mapping[str, Any], key: str) -> Decimal | None:
+    return None if data[key] is None else _money(data, key)
+
+
+def _figures(simulation: Mapping[str, Any]) -> OptionFigures:
+    """The loan's totals with its single track's worst window and balloon."""
+    tracks = simulation["tracks"]
+    if len(tracks) != 1:
+        raise EngineError("multi-track loans are not supported in phase 1")
+    (track,) = tracks
+    worst = track["worst"]
+    return OptionFigures(
+        first_payment=_money(simulation, "first_payment"),
+        peak_payment=_money(simulation, "max_base_payment"),
+        worst_peak_payment=None if worst is None else _money(worst, "max_payment"),
+        worst_start=None if worst is None else date.fromisoformat(worst["start"]),
+        worst_end=None if worst is None else date.fromisoformat(worst["end"]),
+        balloon_due=_optional_money(track, "balloon_due"),
+        total_paid=_money(simulation, "total_paid"),
+        rate_as_of=date.fromisoformat(simulation["rate_as_of"]),
+        cpi_as_of=date.fromisoformat(simulation["cpi_as_of"]),
+    )

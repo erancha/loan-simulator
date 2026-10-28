@@ -1,0 +1,20 @@
+# syntax=docker/dockerfile:1
+# Build context is the repo root, so the paths below start with backend/.
+FROM python:3.14-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
+    PIP_ROOT_USER_ACTION=ignore PIP_DISABLE_PIP_VERSION_CHECK=1
+RUN useradd --system --no-create-home --shell /usr/sbin/nologin agent
+WORKDIR /app
+# The pinned lockfile installs first so source edits reuse the dependency layer; it is mounted, not
+# copied, so it never lands in the image.
+RUN --mount=type=bind,source=backend/requirements.txt,target=/tmp/requirements.txt \
+    --mount=type=cache,target=/root/.cache/pip \
+    pip install -r /tmp/requirements.txt
+COPY backend/pyproject.toml /build/
+COPY backend/src /build/src
+RUN pip install --no-cache-dir --no-deps /build && rm -rf /build
+COPY backend/alembic.ini ./
+COPY backend/alembic ./alembic
+USER agent
+CMD ["sh", "-c", "exec uvicorn loan_agent.platform.app:create_app --factory --host 0.0.0.0 \
+     --port ${AGENT_PORT:?set AGENT_PORT} --timeout-graceful-shutdown 5"]

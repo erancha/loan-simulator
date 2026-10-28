@@ -10,6 +10,10 @@ __pycache__/
 .ruff_cache/
 node_modules/
 dist/
+docs/superpowers/*
 .claude/
 CLAUDE.local.md
 .superpowers/
+
+# Local copies of a previous .env, kept for reference.
+backup/

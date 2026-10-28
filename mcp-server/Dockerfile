@@ -15,5 +15,4 @@ COPY mcp-server/pyproject.toml /build/
 COPY mcp-server/src /build/src
 RUN pip install --no-cache-dir --no-deps /build && rm -rf /build
 USER engine
-EXPOSE 8020
 CMD ["python", "-m", "loan_engine"]

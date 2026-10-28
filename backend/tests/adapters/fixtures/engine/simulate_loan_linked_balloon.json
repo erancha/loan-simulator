@@ -1,0 +1,417 @@
+{
+  "tracks": [
+    {
+      "first_payment": "1273.80",
+      "max_base_payment": "1376.53",
+      "balloon_due": "32472.96",
+      "total_paid": "96049.73",
+      "worst": {
+        "start": "2021-05-01",
+        "end": "2025-04-01",
+        "max_payment": "1482.61",
+        "balloon_due": "34975.50",
+        "total_paid": "101149.68"
+      },
+      "max_payment_range": {
+        "low": "1297.22",
+        "high": "1482.61"
+      },
+      "total_paid_range": {
+        "low": "91716.73",
+        "high": "101326.32"
+      },
+      "windows": 73,
+      "schedule": [
+        {
+          "month": 1,
+          "annual_rate": "4.9",
+          "payment": "1273.80",
+          "interest": "327.21",
+          "principal": "946.60",
+          "balance": "79185.53"
+        },
+        {
+          "month": 2,
+          "annual_rate": "4.9",
+          "payment": "1275.91",
+          "interest": "323.87",
+          "principal": "952.03",
+          "balance": "78364.28"
+        },
+        {
+          "month": 3,
+          "annual_rate": "4.9",
+          "payment": "1278.01",
+          "interest": "320.52",
+          "principal": "957.50",
+          "balance": "77536.21"
+        },
+        {
+          "month": 4,
+          "annual_rate": "4.9",
+          "payment": "1280.12",
+          "interest": "317.13",
+          "principal": "962.99",
+          "balance": "76701.27"
+        },
+        {
+          "month": 5,
+          "annual_rate": "4.9",
+          "payment": "1282.24",
+          "interest": "313.71",
+          "principal": "968.52",
+          "balance": "75859.43"
+        },
+        {
+          "month": 6,
+          "annual_rate": "4.9",
+          "payment": "1284.36",
+          "interest": "310.27",
+          "principal": "974.08",
+          "balance": "75010.63"
+        },
+        {
+          "month": 7,
+          "annual_rate": "4.9",
+          "payment": "1286.48",
+          "interest": "306.80",
+          "principal": "979.68",
+          "balance": "74154.84"
+        },
+        {
+          "month": 8,
+          "annual_rate": "4.9",
+          "payment": "1288.60",
+          "interest": "303.30",
+          "principal": "985.30",
+          "balance": "73292.01"
+        },
+        {
+          "month": 9,
+          "annual_rate": "4.9",
+          "payment": "1290.73",
+          "interest": "299.77",
+          "principal": "990.96",
+          "balance": "72422.10"
+        },
+        {
+          "month": 10,
+          "annual_rate": "4.9",
+          "payment": "1292.86",
+          "interest": "296.21",
+          "principal": "996.65",
+          "balance": "71545.06"
+        },
+        {
+          "month": 11,
+          "annual_rate": "4.9",
+          "payment": "1295.00",
+          "interest": "292.62",
+          "principal": "1002.37",
+          "balance": "70660.85"
+        },
+        {
+          "month": 12,
+          "annual_rate": "4.9",
+          "payment": "1297.14",
+          "interest": "289.01",
+          "principal": "1008.13",
+          "balance": "69769.43"
+        },
+        {
+          "month": 13,
+          "annual_rate": "4.9",
+          "payment": "1299.28",
+          "interest": "285.36",
+          "principal": "1013.92",
+          "balance": "68870.74"
+        },
+        {
+          "month": 14,
+          "annual_rate": "4.9",
+          "payment": "1301.42",
+          "interest": "281.69",
+          "principal": "1019.74",
+          "balance": "67964.75"
+        },
+        {
+          "month": 15,
+          "annual_rate": "4.9",
+          "payment": "1303.57",
+          "interest": "277.98",
+          "principal": "1025.59",
+          "balance": "67051.41"
+        },
+        {
+          "month": 16,
+          "annual_rate": "4.9",
+          "payment": "1305.73",
+          "interest": "274.25",
+          "principal": "1031.48",
+          "balance": "66130.67"
+        },
+        {
+          "month": 17,
+          "annual_rate": "4.9",
+          "payment": "1307.88",
+          "interest": "270.48",
+          "principal": "1037.40",
+          "balance": "65202.49"
+        },
+        {
+          "month": 18,
+          "annual_rate": "4.9",
+          "payment": "1310.04",
+          "interest": "266.68",
+          "principal": "1043.36",
+          "balance": "64266.82"
+        },
+        {
+          "month": 19,
+          "annual_rate": "4.9",
+          "payment": "1312.21",
+          "interest": "262.86",
+          "principal": "1049.35",
+          "balance": "63323.61"
+        },
+        {
+          "month": 20,
+          "annual_rate": "4.9",
+          "payment": "1314.37",
+          "interest": "259.00",
+          "principal": "1055.37",
+          "balance": "62372.82"
+        },
+        {
+          "month": 21,
+          "annual_rate": "4.9",
+          "payment": "1316.54",
+          "interest": "255.11",
+          "principal": "1061.43",
+          "balance": "61414.40"
+        },
+        {
+          "month": 22,
+          "annual_rate": "4.9",
+          "payment": "1318.72",
+          "interest": "251.19",
+          "principal": "1067.53",
+          "balance": "60448.30"
+        },
+        {
+          "month": 23,
+          "annual_rate": "4.9",
+          "payment": "1320.90",
+          "interest": "247.24",
+          "principal": "1073.66",
+          "balance": "59474.48"
+        },
+        {
+          "month": 24,
+          "annual_rate": "4.9",
+          "payment": "1323.08",
+          "interest": "243.26",
+          "principal": "1079.82",
+          "balance": "58492.88"
+        },
+        {
+          "month": 25,
+          "annual_rate": "4.9",
+          "payment": "1325.26",
+          "interest": "239.24",
+          "principal": "1086.02",
+          "balance": "57503.47"
+        },
+        {
+          "month": 26,
+          "annual_rate": "4.9",
+          "payment": "1327.45",
+          "interest": "235.19",
+          "principal": "1092.26",
+          "balance": "56506.18"
+        },
+        {
+          "month": 27,
+          "annual_rate": "4.9",
+          "payment": "1329.64",
+          "interest": "231.11",
+          "principal": "1098.53",
+          "balance": "55500.97"
+        },
+        {
+          "month": 28,
+          "annual_rate": "4.9",
+          "payment": "1331.84",
+          "interest": "227.00",
+          "principal": "1104.84",
+          "balance": "54487.80"
+        },
+        {
+          "month": 29,
+          "annual_rate": "4.9",
+          "payment": "1334.04",
+          "interest": "222.86",
+          "principal": "1111.18",
+          "balance": "53466.61"
+        },
+        {
+          "month": 30,
+          "annual_rate": "4.9",
+          "payment": "1336.24",
+          "interest": "218.68",
+          "principal": "1117.56",
+          "balance": "52437.36"
+        },
+        {
+          "month": 31,
+          "annual_rate": "4.9",
+          "payment": "1338.45",
+          "interest": "214.47",
+          "principal": "1123.98",
+          "balance": "51399.98"
+        },
+        {
+          "month": 32,
+          "annual_rate": "4.9",
+          "payment": "1340.66",
+          "interest": "210.23",
+          "principal": "1130.43",
+          "balance": "50354.44"
+        },
+        {
+          "month": 33,
+          "annual_rate": "4.9",
+          "payment": "1342.87",
+          "interest": "205.95",
+          "principal": "1136.92",
+          "balance": "49300.69"
+        },
+        {
+          "month": 34,
+          "annual_rate": "4.9",
+          "payment": "1345.09",
+          "interest": "201.64",
+          "principal": "1143.45",
+          "balance": "48238.66"
+        },
+        {
+          "month": 35,
+          "annual_rate": "4.9",
+          "payment": "1347.31",
+          "interest": "197.30",
+          "principal": "1150.01",
+          "balance": "47168.32"
+        },
+        {
+          "month": 36,
+          "annual_rate": "4.9",
+          "payment": "1349.54",
+          "interest": "192.92",
+          "principal": "1156.62",
+          "balance": "46089.60"
+        },
+        {
+          "month": 37,
+          "annual_rate": "4.9",
+          "payment": "1351.77",
+          "interest": "188.51",
+          "principal": "1163.26",
+          "balance": "45002.47"
+        },
+        {
+          "month": 38,
+          "annual_rate": "4.9",
+          "payment": "1354.00",
+          "interest": "184.06",
+          "principal": "1169.94",
+          "balance": "43906.85"
+        },
+        {
+          "month": 39,
+          "annual_rate": "4.9",
+          "payment": "1356.24",
+          "interest": "179.58",
+          "principal": "1176.65",
+          "balance": "42802.71"
+        },
+        {
+          "month": 40,
+          "annual_rate": "4.9",
+          "payment": "1358.48",
+          "interest": "175.07",
+          "principal": "1183.41",
+          "balance": "41690.00"
+        },
+        {
+          "month": 41,
+          "annual_rate": "4.9",
+          "payment": "1360.72",
+          "interest": "170.52",
+          "principal": "1190.21",
+          "balance": "40568.64"
+        },
+        {
+          "month": 42,
+          "annual_rate": "4.9",
+          "payment": "1362.97",
+          "interest": "165.93",
+          "principal": "1197.04",
+          "balance": "39438.61"
+        },
+        {
+          "month": 43,
+          "annual_rate": "4.9",
+          "payment": "1365.22",
+          "interest": "161.31",
+          "principal": "1203.91",
+          "balance": "38299.83"
+        },
+        {
+          "month": 44,
+          "annual_rate": "4.9",
+          "payment": "1367.47",
+          "interest": "156.65",
+          "principal": "1210.82",
+          "balance": "37152.26"
+        },
+        {
+          "month": 45,
+          "annual_rate": "4.9",
+          "payment": "1369.73",
+          "interest": "151.96",
+          "principal": "1217.78",
+          "balance": "35995.85"
+        },
+        {
+          "month": 46,
+          "annual_rate": "4.9",
+          "payment": "1371.99",
+          "interest": "147.23",
+          "principal": "1224.77",
+          "balance": "34830.53"
+        },
+        {
+          "month": 47,
+          "annual_rate": "4.9",
+          "payment": "1374.26",
+          "interest": "142.46",
+          "principal": "1231.80",
+          "balance": "33656.25"
+        },
+        {
+          "month": 48,
+          "annual_rate": "4.9",
+          "payment": "33849.49",
+          "interest": "137.66",
+          "principal": "33711.84",
+          "balance": "0.00"
+        }
+      ]
+    }
+  ],
+  "first_payment": "1273.80",
+  "max_base_payment": "1376.53",
+  "total_paid": "96049.73",
+  "rate_as_of": "2026-10-26",
+  "cpi_as_of": "2026-09-01"
+}

@@ -1,23 +1,128 @@
-# The loan engine: the MCP server of loan calculations. The scripts call compose from this
-# directory, so relative paths resolve from the repo root; settings come from .env.
+# The loan simulator's services: the engine, the agent, its Postgres and the one-shot migration.
+# The scripts call compose from this directory, so relative paths resolve from the repo root;
+# settings come from .env, which they also pass as --env-file so the ${...} values below
+# interpolate. The published ports bind to this machine's loopback interface only, since Docker
+# otherwise publishes on every host interface and exposes the port to the whole network.
 name: loan-simulator
+
+x-agent-build: &agent-build
+  context: .
+  dockerfile: backend/Dockerfile
+
+x-agent-image: &agent-image loan-agent:local
+
+# Each container receives only the .env keys it reads, listed once per service below. A key
+# listed without a value takes its value from .env (the --env-file above) and stays unset when .env
+# leaves it commented out, so the service keeps its default.
+x-engine-access: &engine-access
+  ENGINE_BEARER_TOKEN:
+
+x-engine-env: &engine-env
+  <<: *engine-access
+  ENGINE_ALLOWED_HOSTS:
+  ENGINE_PUBLIC_URL:
+  ENGINE_PORT:
+  ENGINE_DATA_DIR:
+
+# The in-network address, overriding the host form .env holds.
+x-database-env: &database-env
+  DATABASE_URL: "postgresql+psycopg://${POSTGRES_USER:?set in .env}:\
+    ${POSTGRES_PASSWORD:?set in .env}@db:${DB_PORT:?set in .env}/${POSTGRES_DB:?set in .env}"
+
+x-agent-env: &agent-env
+  <<: [*engine-access, *database-env]
+  # In-network, like DATABASE_URL above.
+  ENGINE_URL: http://engine:${ENGINE_PORT:?set in .env}/mcp
+  LLM_MODEL:
+  LLM_API_KEY:
+  GOOGLE_CLIENT_ID:
+  AUTH_ISSUER:
+  AUTH_JWKS_URL:
+  AUTH_PUBLIC_KEY_FILE:
+  AGENT_TURN_LIMIT:
+  AGENT_TURN_WINDOW_HOURS:
+  AGENT_LOG_LEVEL:
+  AGENT_PORT:
 
 services:
   engine:
     build:
       context: .
       dockerfile: mcp-server/Dockerfile
-    env_file:
-      - path: ./.env
-        required: true
-    # The agent will reach the engine at engine:<ENGINE_PORT> inside the Compose network. The
-    # published port is for MCP Inspector during development, on this machine's loopback interface
-    # only. The scripts pass .env as --env-file so these two variables interpolate.
+    environment: *engine-env
+    # The agent reaches the engine at engine:<ENGINE_PORT> inside the Compose network. The
+    # published port is for MCP Inspector during development.
     ports:
       - "127.0.0.1:${ENGINE_HOST_PORT:?set in .env}:${ENGINE_PORT:?set in .env}"
     # The market data the engine stores survives restarts and rebuilds.
     volumes:
       - engine-data:/data
+    # Healthy once the engine listens, which is after its market data fetch; the agent lists the
+    # engine's tools at startup and exits when it cannot.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket; socket.create_connection(('localhost', ${ENGINE_PORT:?set in .env}), 2)"
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?set in .env}
+      # Moves the server, and pg_isready below, off the default port.
+      PGPORT: ${DB_PORT:?set in .env}
+    ports:
+      - "127.0.0.1:${DB_HOST_PORT:?set in .env}:${DB_PORT:?set in .env}"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
+  # Brings the schema and the checkpoint tables to the image's version, then exits.
+  migrate:
+    build: *agent-build
+    image: *agent-image
+    command: alembic upgrade head
+    environment: *database-env
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # One replica: turns in flight live in this process's memory. The app ends its event streams on
+  # SIGTERM; the graceful timeout in the image is a backstop.
+  agent:
+    build: *agent-build
+    image: *agent-image
+    environment: *agent-env
+    ports:
+      - "127.0.0.1:${AGENT_HOST_PORT:?set in .env}:${AGENT_PORT:?set in .env}"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; \
+          urllib.request.urlopen('http://localhost:${AGENT_PORT:?set in .env}/health')"
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      engine:
+        condition: service_healthy
 
 volumes:
   engine-data:
+  db-data:

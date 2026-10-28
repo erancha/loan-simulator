@@ -1,8 +1,9 @@
-"""Checks that .env.example documents exactly the keys the engine reads.
+"""Checks that .env.example documents exactly the keys the engine owns.
 
 A key counts as documented when a line of the file assigns it, commented out or not
-(KEY=value or # KEY=value). The documented keys are the Settings fields with the ENGINE_ prefix
-plus the keys only docker-compose.yml reads.
+(KEY=value or # KEY=value). The one .env serves two services, so a key belongs to exactly one: the
+engine owns the ENGINE_-prefixed keys (its Settings fields plus the keys only docker-compose.yml
+reads) except ENGINE_URL, which the agent owns. The agent's own test checks every other key.
 """
 
 import re
@@ -20,14 +21,16 @@ ENV_EXAMPLE = REPO / ".env.example"
 SCRIPTS = REPO / "scripts"
 PREFIX = Settings.model_config["env_prefix"]
 
-# Read by docker-compose.yml, not by the engine.
 COMPOSE_ONLY_KEYS = {"ENGINE_HOST_PORT"}
+AGENT_ENGINE_KEYS = {"ENGINE_URL"}
 
 _ASSIGNMENT = re.compile(r"^(?:#\s*)?([A-Z][A-Z0-9_]*)=", re.MULTILINE)
 
 
 def _documented_keys() -> set[str]:
-    return set(_ASSIGNMENT.findall(ENV_EXAMPLE.read_text(encoding="utf-8")))
+    """The ENGINE_ keys the engine owns; the agent's keys share the file."""
+    keys = set(_ASSIGNMENT.findall(ENV_EXAMPLE.read_text(encoding="utf-8")))
+    return {k for k in keys if k.startswith(PREFIX) and k not in AGENT_ENGINE_KEYS}
 
 
 def _settings_keys() -> set[str]:
@@ -86,10 +89,10 @@ def test_init_env_writes_settings_the_engine_accepts(
     assert len(settings.bearer_token.get_secret_value()) == 48
     assert settings.allowed_hosts == [
         f"engine:{settings.port}",
-        f"127.0.0.1:{host_port}",
         f"localhost:{host_port}",
+        f"127.0.0.1:{host_port}",
     ]
-    assert settings.public_url == f"http://127.0.0.1:{host_port}"
+    assert settings.public_url == f"http://localhost:{host_port}"
 
 
 def test_init_env_leaves_no_env_when_verification_fails(tmp_path: Path) -> None:

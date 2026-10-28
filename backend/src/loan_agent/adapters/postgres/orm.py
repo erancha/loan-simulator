@@ -1,0 +1,71 @@
+"""Tables of the loan agent: profiles, checks with their options, recommendation and event log.
+
+Every row belongs to a Google account id; options and recommendations reach it through their
+check, while events also carry it themselves. Money inside JSONB columns is a decimal string
+and dates are ISO strings."""
+
+from __future__ import annotations
+
+from datetime import date, datetime
+from typing import Any
+
+from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, Text, func
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class ProfileRow(Base):
+    __tablename__ = "profiles"
+
+    user_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    data: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    """The profile's known fields; a field not yet told is null."""
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class CheckRow(Base):
+    __tablename__ = "checks"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    user_id: Mapped[str] = mapped_column(Text, index=True)
+    goal: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    profile_snapshot_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class OptionRow(Base):
+    __tablename__ = "options"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    check_id: Mapped[str] = mapped_column(ForeignKey("checks.id"), index=True)
+    loan: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    source: Mapped[str] = mapped_column(Text)
+    lender: Mapped[str | None] = mapped_column(Text)
+    offer_date: Mapped[date | None] = mapped_column(Date)
+    figures: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class RecommendationRow(Base):
+    __tablename__ = "recommendations"
+
+    check_id: Mapped[str] = mapped_column(ForeignKey("checks.id"), primary_key=True)
+    data: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class CheckEventRow(Base):
+    __tablename__ = "check_events"
+    __table_args__ = (Index("check_events_user_type_time", "user_id", "type", "created_at"),)
+
+    check_id: Mapped[str] = mapped_column(ForeignKey("checks.id"), primary_key=True)
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True)
+    type: Mapped[str] = mapped_column(Text)
+    data: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    user_id: Mapped[str] = mapped_column(Text)
+    """The check's owner, repeated so the per-person message count needs no join."""
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

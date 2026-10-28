@@ -1,0 +1,95 @@
+[project]
+name = "loan-agent"
+version = "0.1.0"
+description = "Loan agent: a conversation that sizes and compares loans through the loan engine"
+license = "MIT"
+authors = [{ name = "Eran C", email = "erancha@gmail.com" }]
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.143",
+    "uvicorn[standard]>=0.54",
+    "pydantic>=2.11",
+    "pydantic-settings>=2.15",
+    "sqlalchemy[asyncio]>=2.1",
+    "psycopg[binary,pool]>=3.3",
+    "alembic>=1.20",
+    "structlog>=26",
+    "langgraph>=1.2.14",
+    "langgraph-checkpoint-postgres>=3.1.2",
+    "langchain>=1.4.4",
+    "langchain-core>=1.6.10",
+    "langchain-anthropic>=1.7.6",
+    "langchain-openai>=1.7.1",
+    "langchain-mcp-adapters>=0.3.2,<0.4",
+    "PyJWT[crypto]>=2.10",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=1.4",
+    "import-linter>=2.15",
+    "testcontainers>=4.15",
+    "ruff>=0.17,<0.18",
+    "mypy>=2.4",
+    "pip-tools>=7.6",
+    "packaging>=24",
+    "pyyaml>=6.0",
+]
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"loan_agent.application" = ["prompts/*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+asyncio_mode = "auto"
+
+[tool.ruff]
+src = ["src", "tests"]
+line-length = 100
+
+[tool.ruff.lint]
+extend-select = ["E501"]
+
+[tool.mypy]
+files = ["src"]
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["testcontainers.*"]
+ignore_missing_imports = true
+
+[tool.importlinter]
+root_packages = ["loan_agent"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Layers: platform over application over ports over domain"
+type = "layers"
+layers = ["loan_agent.platform", "loan_agent.application", "loan_agent.ports", "loan_agent.domain"]
+
+[[tool.importlinter.contracts]]
+name = "Adapters implement ports and never reach application or platform"
+type = "forbidden"
+source_modules = ["loan_agent.adapters"]
+forbidden_modules = ["loan_agent.application", "loan_agent.platform"]
+
+[[tool.importlinter.contracts]]
+name = "Inner layers are framework free"
+type = "forbidden"
+source_modules = ["loan_agent.domain", "loan_agent.ports", "loan_agent.application"]
+forbidden_modules = ["fastapi", "starlette", "sqlalchemy", "psycopg", "langchain", "langchain_core",
+    "langchain_anthropic", "langchain_openai", "langchain_mcp_adapters", "langgraph", "mcp",
+    "httpx", "structlog", "jwt"]
+ignore_imports = [
+    "loan_agent.application.agent_graph -> langgraph",
+    "loan_agent.application.agent_graph -> langchain_core",
+]

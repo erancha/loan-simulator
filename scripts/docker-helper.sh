@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 #
-# Docker Compose helper for the engine: teardown, logs, status. Bringing it up is start.sh's job.
+# Docker Compose helper for the stack: teardown, logs, status. Bringing it up is start.sh's job.
 #
 #   ./scripts/docker-helper.sh --stop [--volumes]
-#       Stop and remove the engine's container and network. The engine-data volume is KEPT by
-#       default so the stored market data survives a restart; --volumes (alias -v) also removes it.
+#       Stop and remove the stack's containers and network. The engine-data volume (market data)
+#       and the db-data volume (checks, profiles, conversations) are KEPT by default so they
+#       survive a restart; --volumes (alias -v) also removes both.
 #   ./scripts/docker-helper.sh --logs [-e|--errors]
-#       Follow the engine's logs live (last 200 lines). -e filters to ERROR/EXCEPTION/FATAL lines.
+#       Follow the stack's logs live (last 200 lines). -e filters to ERROR/EXCEPTION/FATAL lines.
 #   ./scripts/docker-helper.sh --ps
-#       Show the engine's container status.
+#       Show the containers' status.
 #   -h, --help
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
