@@ -38,11 +38,17 @@ class CheckSummary(BaseModel):
     created_at: datetime
     goal: Goal | None
     recommendation: RecommendationSummary | None
+    recommends_examples_only: bool
+    """Every option the recommendation names is an example nobody can take."""
     profile_stale: bool
 
     @classmethod
     def of(
-        cls, check: Check, recommendation: DomainRecommendation | None, profile_stale: bool
+        cls,
+        check: Check,
+        recommendation: DomainRecommendation | None,
+        recommends_examples_only: bool,
+        profile_stale: bool,
     ) -> Self:
         return cls(
             id=check.id,
@@ -51,6 +57,7 @@ class CheckSummary(BaseModel):
             recommendation=None
             if recommendation is None
             else RecommendationSummary.of(recommendation),
+            recommends_examples_only=recommends_examples_only,
             profile_stale=profile_stale,
         )
 

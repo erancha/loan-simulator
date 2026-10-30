@@ -8,11 +8,14 @@ Core building blocks:
 """
 
 import math
+from datetime import datetime
 
 from fastapi import APIRouter, FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
 from loan_agent.domain.errors import CheckNotFoundError, TurnConflictError, TurnLimitError
+from loan_agent.domain.models import Check
+from loan_agent.domain.models import Recommendation as DomainRecommendation
 from loan_agent.platform.api.auth import CurrentUser
 from loan_agent.platform.api.schemas import (
     CheckSummary,
@@ -22,9 +25,36 @@ from loan_agent.platform.api.schemas import (
     OptionView,
     Recommendation,
 )
-from loan_agent.platform.dependencies import Deps, Runner, get_deps
+from loan_agent.platform.dependencies import AppDeps, Deps, Runner, get_deps
 
 router = APIRouter(prefix="/api/checks")
+
+
+async def _recommends_examples_only(
+    deps: AppDeps, recommendation: DomainRecommendation | None
+) -> bool:
+    if recommendation is None:
+        return False
+    named = [recommendation.preferred_option_id]
+    if recommendation.alternative_option_id is not None:
+        named.append(recommendation.alternative_option_id)
+    for option_id in named:
+        option = await deps.options.get(recommendation.check_id, option_id)
+        if option.source != "published_average":
+            return False
+    return True
+
+
+async def _summary(
+    deps: AppDeps, check: Check, profile_updated_at: datetime | None
+) -> CheckSummary:
+    recommendation = await deps.recommendations.latest(check.id)
+    return CheckSummary.of(
+        check,
+        recommendation,
+        await _recommends_examples_only(deps, recommendation),
+        check.is_stale(profile_updated_at),
+    )
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -38,12 +68,7 @@ async def list_checks(user: CurrentUser, deps: Deps) -> list[CheckSummary]:
     """Newest first."""
     _, profile_updated_at = await deps.profiles.get(user.id)
     return [
-        CheckSummary.of(
-            check,
-            await deps.recommendations.latest(check.id),
-            check.is_stale(profile_updated_at),
-        )
-        for check in await deps.checks.list(user.id)
+        await _summary(deps, check, profile_updated_at) for check in await deps.checks.list(user.id)
     ]
 
 

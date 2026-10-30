@@ -9,7 +9,15 @@ import { Shell } from './Shell.tsx'
 const dana: User = { id: '1001', email: 'dana@example.com', name: 'Dana' }
 
 function summary(id: string, created_at: string, over: Partial<CheckSummary> = {}): CheckSummary {
-  return { id, created_at, goal: null, recommendation: null, profile_stale: false, ...over }
+  return {
+    id,
+    created_at,
+    goal: null,
+    recommendation: null,
+    recommends_examples_only: false,
+    profile_stale: false,
+    ...over,
+  }
 }
 
 const RECOMMENDATION = {} as CheckSummary['recommendation']
@@ -129,6 +137,27 @@ test('lists checks with price, recommendation and stale markers; the newest open
   expect(fresh.querySelector('[aria-current="true"]')).not.toBeNull()
   expect(openedStreams()).toEqual(['/api/checks/new/events'])
   expect(window.location.hash).toBe('#check=new')
+})
+
+test('a check recommending only examples says so beside its ready chip', async () => {
+  stubApi([
+    [
+      summary('examples', '2026-03-01T00:00:00Z', {
+        goal,
+        recommendation: RECOMMENDATION,
+        recommends_examples_only: true,
+      }),
+      summary('offer', '2026-01-01T00:00:00Z', { goal, recommendation: RECOMMENDATION }),
+    ],
+  ])
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+
+  const list = await screen.findByRole('navigation', { name: 'הבדיקות שלי' })
+  const [examples, offer] = within(list).getAllByRole('listitem')
+  expect(within(examples).getByText('המלצה מוכנה')).toBeInTheDocument()
+  expect(within(examples).getByText('דוגמא')).toBeInTheDocument()
+  expect(within(offer).getByText('המלצה מוכנה')).toBeInTheDocument()
+  expect(within(offer).queryByText('דוגמא')).not.toBeInTheDocument()
 })
 
 test('the hash selects a check; clicking another switches stream and hash', async () => {

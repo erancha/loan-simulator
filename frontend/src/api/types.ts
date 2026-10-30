@@ -124,10 +124,13 @@ export interface CheckSummary {
   created_at: string
   goal: Goal | null
   recommendation: RecommendationSummary | null
+  /** Every option the recommendation names is an example nobody can take. */
+  recommends_examples_only: boolean
   profile_stale: boolean
 }
 
-export interface CheckView extends Omit<CheckSummary, 'recommendation'> {
+export interface CheckView
+  extends Omit<CheckSummary, 'recommendation' | 'recommends_examples_only'> {
   options: OptionView[]
   recommendation: RecommendationView | null
 }

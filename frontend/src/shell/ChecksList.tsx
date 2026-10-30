@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { CheckSummary } from '../api/types.ts'
+import { CHIP_EXAMPLE } from '../check/copy.ts'
 import { formatShekels } from '../money.ts'
 import {
   CHECKS_HEADING,
@@ -49,7 +50,12 @@ export function ChecksList({ checks, selectedId, onSelect, onCreate, onDelete }:
                 <span className="check-title">{check.goal?.purpose ?? UNTITLED_CHECK}</span>
                 {check.goal !== null && <span>{formatShekels(check.goal.price)}</span>}
                 {check.recommendation !== null && (
-                  <span className="chip chip-green">{RECOMMENDATION_READY}</span>
+                  <span className="check-chips">
+                    <span className="chip chip-green">{RECOMMENDATION_READY}</span>
+                    {check.recommends_examples_only && (
+                      <span className="chip chip-example">{CHIP_EXAMPLE}</span>
+                    )}
+                  </span>
                 )}
                 {check.profile_stale && <span className="chip chip-amber">{STALE_PROFILE}</span>}
               </button>

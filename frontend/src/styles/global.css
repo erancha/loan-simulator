@@ -985,6 +985,13 @@ button.primary {
   font-weight: 600;
 }
 
+.check-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
 .pane-side .profile-panel {
   margin-block-start: 12px;
 }

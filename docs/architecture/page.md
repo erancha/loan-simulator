@@ -164,13 +164,13 @@ arrive, unless the person has scrolled up; it follows again when they return to 
 
 ## Refreshing the checks list
 
-The list shows each check's purpose, price, whether it has a recommendation and whether it is
-stale, so a turn can change it. The page loads it on start and after it creates a check. It
-refetches it when a turn this page started has ended, and after a profile save. The reducer
-counts a turn end when a running turn goes idle. The page records that count when a send is
-accepted and refetches once when the count passes it, so the replay of old turns on opening a
-check, and a turn another tab started, change nothing. Refetches are numbered when sent, and an
-answer older than one already applied is dropped.
+The list shows each check's purpose, price, whether it has a recommendation, a "דוגמא" chip when
+that recommendation names only examples, and whether it is stale, so a turn can change it. The page
+loads it on start and after it creates a check. It refetches it when a turn this page started has
+ended, and after a profile save. The reducer counts a turn end when a running turn goes idle. The
+page records that count when a send is accepted and refetches once when the count passes it, so the
+replay of old turns on opening a check, and a turn another tab started, change nothing. Refetches
+are numbered when sent, and an answer older than one already applied is dropped.
 
 ## Deleting a check
 

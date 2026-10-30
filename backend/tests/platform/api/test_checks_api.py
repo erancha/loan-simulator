@@ -6,6 +6,7 @@ probe needs the database."""
 import asyncio
 import threading
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -18,7 +19,7 @@ from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from fakes import NOW, PRIME_TRACK
-from loan_agent.domain.models import Check
+from loan_agent.domain.models import Check, OptionSource
 from loan_agent.platform.check_runner import FAILURE_MESSAGE
 
 TIMEOUT_SECONDS = 5.0
@@ -48,6 +49,7 @@ def test_list_shows_only_the_persons_checks_newest_first(world: World, client: T
             "created_at": "2026-10-28T09:00:00Z",
             "goal": None,
             "recommendation": None,
+            "recommends_examples_only": False,
             "profile_stale": False,
         },
         {
@@ -61,9 +63,44 @@ def test_list_shows_only_the_persons_checks_newest_first(world: World, client: T
                 "payment_ceiling": "4700.00",
                 "created_at": "2026-10-27T09:00:00Z",
             },
+            "recommends_examples_only": False,
             "profile_stale": False,
         },
     ]
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "alternative", "examples_only"),
+    [
+        ("published_average", "published_average", None, True),
+        ("published_average", "published_average", "o2", True),
+        ("offer", "published_average", "o2", False),
+        ("published_average", "offer", "o2", False),
+        ("published_average", "offer", None, True),
+        ("offer", "published_average", None, False),
+    ],
+)
+def test_list_says_whether_the_recommendation_names_only_examples(
+    world: World,
+    client: TestClient,
+    first: OptionSource,
+    second: OptionSource,
+    alternative: str | None,
+    examples_only: bool,
+) -> None:
+    seed_recommended_check(world)
+    seeded = world.options.rows["c-rec"][0]
+    world.options.rows["c-rec"] = [
+        replace(seeded, source=first),
+        replace(seeded, id="o2", source=second),
+    ]
+    world.recommendations.rows["c-rec"] = replace(
+        world.recommendations.rows["c-rec"], alternative_option_id=alternative
+    )
+
+    [listed] = client.get("/api/checks").json()
+
+    assert listed["recommends_examples_only"] is examples_only
 
 
 def test_get_shows_the_goal_options_with_figures_and_the_recommendation(
