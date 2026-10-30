@@ -1,20 +1,30 @@
 # Sign-in
 
-People sign in to the loan agent with a Google account, and there is no other way in. Every piece
-of data belongs to the person who signed in: their profile, their checks and the conversations on
-them. This page explains how sign-in works and how to set up the Google side. The page that shows
-the Sign in with Google button is OPEN, not yet implemented; the agent's sign-in API exists.
+People sign in to the loan agent with a Google account, and there is no other way in. Every piece of
+data belongs to the person who signed in: their profile, their checks and the conversations on them.
+This page explains how sign-in works and how to set up the Google side. The "התחברות עם Google"
+button is on the page ([architecture/page.md](architecture/page.md)); the agent's sign-in API is
+what it calls.
 
 **Contents:** [How it works](#how-it-works) · [Setting up Google](#setting-up-google) ·
 [Who may sign in](#who-may-sign-in)
 
 ## How it works
 
-1. The page gets a Google ID token from the Sign in with Google button and posts it to
-   `POST /api/auth/session`.
+1. The page gets a Google ID token by redirect. The "התחברות עם Google" button stores a random
+   nonce in the tab's `sessionStorage` and sends the browser to Google's authorization endpoint
+   with `response_type=id_token`, the client id and the nonce. Google returns the browser to
+   `<origin>/` with the token in the URL fragment. The page clears the fragment, accepts the token
+   only when its `nonce` claim equals the stored nonce, which proves the token answers this tab's
+   own request and not one injected into the URL, and posts it to `POST /api/auth/session`. A
+   person who cancels at Google lands back on the sign-in screen without an error; any other
+   refusal, or a nonce mismatch, shows a short line there.
 2. The agent verifies the token locally: the signature against Google's published keys (chosen
    by the key id in the token), the issuer, the expiry and the audience, which must be
-   `GOOGLE_CLIENT_ID`. A token issued for any other application is refused.
+   `GOOGLE_CLIENT_ID`. A token issued for any other application is refused. The issue and
+   expiry times allow 60 seconds of difference between Google's clock and this machine's, since
+   a token arrives a moment after Google issues it. A refused token is logged with the failed
+   check, never the token, and the page shows the refusal on the sign-in screen.
 3. The agent answers with the token as an HttpOnly, `SameSite=Strict` cookie named `ls_id_token`
    that lasts until the token expires. There is no server-side session: every protected route
    verifies the cookie again, and the browser's event-stream object, which cannot send headers,
@@ -51,8 +61,11 @@ The app needs its own Google Cloud project with one OAuth client.
 4. **Create the client.** Open **Clients → Create client**, choose **Web application**, give it
    a name, and under **Authorized JavaScript origins** add `http://localhost:8101`, the agent's
    address at `AGENT_HOST_PORT`. If you change that port in `.env`, change the origin to match.
-   Leave **Authorized redirect URIs** empty: the sign-in button hands the token to the page
-   directly. **Create** shows the client id, a long string ending in
+   To run the page with `npm run dev` (Vite's server, which proxies `/api` to the agent), add
+   `http://localhost:5173` as a second origin.
+   Under **Authorized redirect URIs** add `<origin>/`, with the trailing slash: for local use
+   `http://localhost:8101/` (and `http://localhost:5173/` for `npm run dev`). **Create** shows the
+   client id, a long string ending in
    `.apps.googleusercontent.com`, next to a client secret and a JSON download. Only the client
    id is needed. Ignore the secret and the download: the agent verifies tokens and never redeems
    codes, so nothing in this repo has a place for the secret.

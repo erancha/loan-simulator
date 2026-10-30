@@ -2,9 +2,10 @@
 reply's text live, stores the complete reply, and reports a failed turn without losing the check."""
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
+from itertools import pairwise
 from typing import Any
 
 import pytest
@@ -82,7 +83,10 @@ def world() -> World:
 
 
 def runner(
-    world: World, model: ScriptedChatModel, engine_tools: list[BaseTool] | None = None
+    world: World,
+    model: ScriptedChatModel,
+    engine_tools: list[BaseTool] | None = None,
+    turn_limit_overrides: Mapping[str, int] | None = None,
 ) -> CheckRunner:
     graph = build_agent_graph(
         model,
@@ -96,6 +100,7 @@ def runner(
         world.store,
         world.deps.sink,
         turn_limit=TURN_LIMIT,
+        turn_limit_overrides={} if turn_limit_overrides is None else turn_limit_overrides,
         window=WINDOW,
         clock=world.clock,
     )
@@ -155,7 +160,7 @@ async def test_send_emits_user_message_and_runs_turn(world: World) -> None:
     assert model.received[0][-1] == HumanMessage("אני רוצה לקנות רכב", id=model.received[0][-1].id)
 
 
-async def test_reply_streams_deltas_then_stores_the_complete_message(world: World) -> None:
+async def test_reply_streams_the_text_so_far_then_stores_the_complete_message(world: World) -> None:
     checks = runner(world, ScriptedChatModel(replies=[AIMessage(REPLY)]))
     check = await checks.create(PERSON)
 
@@ -169,7 +174,9 @@ async def test_reply_streams_deltas_then_stores_the_complete_message(world: Worl
     assert len(deltas) > 1
     assert all("seq" not in delta for delta in deltas)
     assert {delta["data"]["message_id"] for delta in deltas} == {assistant["data"]["message_id"]}
-    assert "".join(delta["data"]["text"] for delta in deltas) == assistant["data"]["text"] == REPLY
+    texts = [delta["data"]["text"] for delta in deltas]
+    assert all(later.startswith(earlier) for earlier, later in pairwise(texts))
+    assert texts[-1] == assistant["data"]["text"] == REPLY
     assert live.index(deltas[-1]) < live.index(assistant)
     assert "message.delta" not in [type for type, _ in await stored(world, check.id)]
 
@@ -189,7 +196,8 @@ async def test_tool_call_chunks_are_not_published(world: World) -> None:
 
     deltas = [event["data"] for event in live if event["type"] == "message.delta"]
     assert all(set(delta) == {"message_id", "text"} and delta["text"] for delta in deltas)
-    assert "".join(delta["text"] for delta in deltas) == "רגע, אני בודק" + REPLY
+    last_text = {delta["message_id"]: delta["text"] for delta in deltas}
+    assert list(last_text.values()) == ["רגע, אני בודק", REPLY]
     assistant = [event["data"]["text"] for event in live if event["type"] == "message.assistant"]
     assert assistant == ["רגע, אני בודק", REPLY]
 
@@ -224,6 +232,87 @@ async def test_second_message_while_running_is_conflict(world: World) -> None:
         "message.assistant",
         "turn.status",
     ]
+
+
+async def test_an_override_sets_one_persons_limit_and_leaves_the_rest_on_the_default(
+    world: World,
+) -> None:
+    model = ScriptedChatModel(replies=[AIMessage(REPLY) for _ in range(5)])
+    checks = runner(world, model, turn_limit_overrides={PERSON.email: TURN_LIMIT + 1})
+    raised = await checks.create(PERSON)
+    default = await checks.create(OTHER_PERSON)
+
+    for _ in range(TURN_LIMIT + 1):
+        await checks.send(PERSON, raised.id, "שלום")
+        await checks.drain()
+    for _ in range(TURN_LIMIT):
+        await checks.send(OTHER_PERSON, default.id, "שלום")
+        await checks.drain()
+
+    with pytest.raises(TurnLimitError) as refused:
+        await checks.send(PERSON, raised.id, "שלום")
+    assert refused.value.limit == TURN_LIMIT + 1
+    with pytest.raises(TurnLimitError) as refused:
+        await checks.send(OTHER_PERSON, default.id, "שלום")
+    assert refused.value.limit == TURN_LIMIT
+
+
+@pytest.mark.parametrize(
+    ("email", "sends"), [("Dana@Example.com", TURN_LIMIT + 1), (None, TURN_LIMIT)]
+)
+async def test_an_override_ignores_the_emails_case_and_a_person_without_one_has_the_default(
+    world: World, email: str | None, sends: int
+) -> None:
+    model = ScriptedChatModel(replies=[AIMessage(REPLY) for _ in range(sends)])
+    checks = runner(world, model, turn_limit_overrides={"dana@example.com": TURN_LIMIT + 1})
+    person = User(PERSON.id, email, PERSON.name)
+    check = await checks.create(person)
+
+    for _ in range(sends):
+        await checks.send(person, check.id, "שלום")
+        await checks.drain()
+
+    with pytest.raises(TurnLimitError):
+        await checks.send(person, check.id, "שלום")
+
+
+async def test_delete_removes_the_check_and_its_events(world: World) -> None:
+    checks = runner(world, ScriptedChatModel(replies=[AIMessage(REPLY)]))
+    check = await checks.create(PERSON)
+    await checks.send(PERSON, check.id, "שלום")
+    await checks.drain()
+
+    await checks.delete(PERSON, check.id)
+
+    with pytest.raises(CheckNotFoundError):
+        await world.checks.get(PERSON, check.id)
+    assert await stored(world, check.id) == []
+
+
+async def test_delete_refuses_another_persons_check(world: World) -> None:
+    checks = runner(world, ScriptedChatModel(replies=[]))
+    check = await checks.create(OTHER_PERSON)
+
+    with pytest.raises(CheckNotFoundError):
+        await checks.delete(PERSON, check.id)
+
+    assert await world.checks.get(OTHER_PERSON.id, check.id) == check
+
+
+async def test_delete_gives_back_none_of_the_messages_sent_on_the_check(world: World) -> None:
+    model = ScriptedChatModel(replies=[AIMessage(REPLY) for _ in range(TURN_LIMIT)])
+    checks = runner(world, model)
+    deleted = await checks.create(PERSON)
+    for _ in range(TURN_LIMIT):
+        await checks.send(PERSON, deleted.id, "שלום")
+        await checks.drain()
+    await checks.delete(PERSON, deleted.id)
+    next_check = await checks.create(PERSON)
+
+    with pytest.raises(TurnLimitError) as refused:
+        await checks.send(PERSON, next_check.id, "שלום")
+
+    assert refused.value.next_allowed == NOW + WINDOW
 
 
 async def test_turn_limit_counts_messages_across_checks_and_reports_next_time(
@@ -343,8 +432,8 @@ async def test_turn_after_a_model_failure_sends_both_messages_of_the_person(worl
     await checks.drain()
 
     (seen,) = model.received
-    assert [type(message) for message in seen[1:]] == [HumanMessage, HumanMessage]
-    assert [message.content for message in seen[1:]] == ["כמה ללוות?", "ננסה שוב"]
+    assert [type(message) for message in seen[2:]] == [HumanMessage, HumanMessage]
+    assert [message.content for message in seen[2:]] == ["כמה ללוות?", "ננסה שוב"]
     (reply_type, reply), last = (await stored(world, check.id))[-2:]
     assert (reply_type, reply["text"]) == ("message.assistant", REPLY)
     assert last == ("turn.status", {"status": "idle"})
@@ -379,7 +468,12 @@ async def test_saved_sibling_of_a_failed_call_is_reported_as_possibly_done(world
             await asyncio.sleep(0)
         raise EngineError("engine unreachable")
 
-    save = {"loan": {"tracks": [PRIME_TRACK]}, "source": "published_average"}
+    save = {
+        "loan": {"tracks": [PRIME_TRACK]},
+        "source": "offer",
+        "lender": "Bank",
+        "offer_date": "2026-10-20",
+    }
     parallel = AIMessage(
         content="",
         tool_calls=[
@@ -425,6 +519,8 @@ async def test_fail_interrupted_ends_turns_a_stopped_process_left_running(world:
     await world.store.append(finished.id, "turn.status", {"status": "idle"})
     await stopped.send(PERSON, interrupted.id, "כמה ללוות?")
     await started.wait()
+    # The turn stored an event after it started, as a profile save mid-turn does.
+    await world.store.append(interrupted.id, "profile.updated", {})
     await stopped.aclose()
 
     restarted = runner(world, ScriptedChatModel(replies=[]))

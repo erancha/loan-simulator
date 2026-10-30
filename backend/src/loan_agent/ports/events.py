@@ -21,6 +21,8 @@ PROFILE_UPDATED = "profile.updated"
 GOAL_SET = "goal.set"
 OPTION_SAVED = "option.saved"
 RECOMMENDATION_PRESENTED = "recommendation.presented"
+QUESTION_ASKED = "question.asked"
+CHART_SHOWN = "chart.shown"
 
 
 @runtime_checkable

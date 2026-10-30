@@ -111,36 +111,40 @@ different monetary regime. A 96-month track still has 25 windows.
 
 ## Policy
 
-The bounds below are the limits the language-model agent (OPEN, not yet implemented) will have
-to respect when it talks to a person.
-Their values are constants in `domain/assumptions.py`.
+The bounds below are the limits the language-model agent has to respect when it talks to a
+person. Their values are constants in `domain/assumptions.py`.
 
 ### Affordability
 
-Counted income is the net fixed income, plus 50% of the variable income when the person calls it
-stable; unstable variable income counts for 0, because a payment that depends on it cannot be
-relied on in a lean month. Half of a stable variable income is counted since even stable
-variable income fluctuates.
+Counted income is the net fixed income plus the minimum of the variable income, in full. The
+minimum is the part of the variable income that arrives even in a weak month; the average
+variable income is kept in the profile but never counted, because a payment that depends on it
+cannot be relied on in a lean month. The minimum is at least 0 and never above the average
+variable income; a profile that breaks this is refused with an error naming both fields.
 
 The monthly payment ceiling is the lower of two caps, minus the payments on existing loans, and
-never below 0:
+never below 0. An existing loan with 3 months or fewer left is not counted, since its payment
+frees up for the new loan; the agent applies this when it saves the profile, and the profile
+panel's hint states it for a figure the person enters:
 
 - 30% of counted income: the share of income a single loan payment may take.
 - 50% of counted income minus fixed expenses: half of what remains after the fixed costs, so the
   other half stays for variable spending and shocks.
 
-The result names which cap applied (income share on a tie), whether variable income was excluded
-or half counted, whether existing loans were deducted, and whether nothing is left.
+The result names which cap applied (income share on a tie), whether a variable income
+minimum above 0 was counted, whether existing loans were deducted, and whether nothing is left.
 
 The minimum savings cushion is 2 months of fixed expenses; savings below it are never proposed as
 a down payment.
 
 ### Loan sizing
 
-The amount to finance is the goal price minus the trade-in value (at least 0), minus the savings
-above the cushion that are applied to it. Savings below the cushion are untouched, and savings
-beyond what the goal needs are reported as spare. The sizing does not enforce the minimum loan
-amount: a small result is returned as is so the agent will be able to discuss it with the person.
+The amount to finance is the goal price minus the savings above the cushion that are applied to
+it. Savings below the cushion are untouched, and savings beyond what the goal needs are reported
+as spare. Savings mean all liquid money, so money from selling an old car is part of them: it
+fills the cushion before any of it goes to the purchase. The sizing does not enforce the minimum
+loan amount: a small result is returned as is so the agent will be able to discuss it with the
+person.
 
 ### Typical tracks
 
@@ -155,3 +159,16 @@ Both are equal-payment (spitzer) tracks without fees. The series mixes fixed and
 and has no split between them, so the same average prices both kinds. No published series covers
 CPI-linked consumer loans, so there is no typical linked track; a linked track enters only as a
 real offer.
+
+### Comfortable term
+
+The term of the typical tracks is the shortest, in 6-month steps up to the longest term priced,
+at which both tracks' highest recurring payment stays within 90% of the payment ceiling. For the
+prime track that is the payment in its worst historical window, so a past rate rise lengthens the
+term. The 10% left over is room the worst path does not take. When no term fits, the loan is too
+large for the ceiling. The model asks the engine for this term and passes it to the tracks.
+
+An offer that leaves the term open ("up to 84 months") goes through the same search with its own
+rate: 6-month steps below its maximum, then the maximum itself. A longer term only adds interest,
+so the offer is kept at the first term that fits, or at its maximum when none does, and
+`save_option` refuses it at any other term.

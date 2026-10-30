@@ -1,9 +1,10 @@
-"""Check routes: create, list and read a person's checks, and send a message that starts a turn.
+"""Check routes: create, list, read and delete a person's checks, and send a message that starts
+a turn.
 
 Core building blocks:
-- router: POST/GET /api/checks, GET /api/checks/{id}, POST /api/checks/{id}/messages
-- register_error_handlers: another person's check answers 404 like an unknown one; a message
-  while a turn runs answers 409; a message over the cap answers 429 with Retry-After
+- router: POST/GET /api/checks, GET/DELETE /api/checks/{id}, POST /api/checks/{id}/messages
+- register_error_handlers: another person's check answers 404 like an unknown one; a message or a
+  delete while a turn runs answers 409; a message over the cap answers 429 with Retry-After
 """
 
 import math
@@ -59,6 +60,11 @@ async def get_check(check_id: str, user: CurrentUser, deps: Deps) -> CheckView:
         recommendation=None if recommendation is None else Recommendation.of(recommendation),
         profile_stale=check.is_stale(profile_updated_at),
     )
+
+
+@router.delete("/{check_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_check(check_id: str, user: CurrentUser, runner: Runner) -> None:
+    await runner.delete(user, check_id)
 
 
 @router.post("/{check_id}/messages", status_code=status.HTTP_202_ACCEPTED)

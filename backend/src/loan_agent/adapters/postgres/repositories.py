@@ -2,7 +2,8 @@
 
 Core building blocks:
 - PostgresProfileRepository: one profile row per person, stamped with the repository's clock
-- PostgresCheckRepository: check rows, always read through the owning person
+- PostgresCheckRepository: check rows, always read through the owning person; deleting one takes
+  everything it produced in one transaction
 - PostgresOptionRepository, PostgresRecommendationRepository: what a check produced; a check
   keeps one recommendation
 - PostgresCheckEventStore: per-check event log; each append locks the check's row, so sequence
@@ -18,13 +19,14 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, cast
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, union_all, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from loan_agent.adapters.postgres.orm import (
     CheckEventRow,
     CheckRow,
+    DeletedEventTimeRow,
     OptionRow,
     ProfileRow,
     RecommendationRow,
@@ -69,15 +71,11 @@ def _profile(data: Mapping[str, Any]) -> Profile:
 
 
 def _goal_data(goal: Goal) -> dict[str, str]:
-    return {
-        "purpose": goal.purpose,
-        "price": str(goal.price),
-        "trade_in_value": str(goal.trade_in_value),
-    }
+    return {"purpose": goal.purpose, "price": str(goal.price)}
 
 
 def _goal(data: Mapping[str, str]) -> Goal:
-    return Goal(data["purpose"], Decimal(data["price"]), Decimal(data["trade_in_value"]))
+    return Goal(data["purpose"], Decimal(data["price"]))
 
 
 class PostgresProfileRepository:
@@ -100,6 +98,9 @@ class PostgresProfileRepository:
             index_elements=[ProfileRow.user_id], set_={"data": data, "updated_at": saved_at}
         )
         async with self._sessions.begin() as session:
+            row = await session.get(ProfileRow, user_id, with_for_update=True)
+            if row is not None and _profile(row.data) == profile:
+                return _utc(row.updated_at)
             await session.execute(statement)
         return saved_at
 
@@ -137,6 +138,27 @@ class PostgresCheckRepository:
                 .order_by(CheckRow.created_at.desc())
             )
             return [_check(row) for row in rows]
+
+    async def delete(self, check_id: str, kept_type: str, kept_since: datetime) -> None:
+        async with self._sessions.begin() as session:
+            await session.execute(
+                insert(DeletedEventTimeRow).from_select(
+                    ["user_id", "type", "created_at"],
+                    select(
+                        CheckEventRow.user_id, CheckEventRow.type, CheckEventRow.created_at
+                    ).where(
+                        CheckEventRow.check_id == check_id,
+                        CheckEventRow.type == kept_type,
+                        CheckEventRow.created_at > kept_since,
+                    ),
+                )
+            )
+            await session.execute(
+                delete(DeletedEventTimeRow).where(DeletedEventTimeRow.created_at <= kept_since)
+            )
+            for row in (CheckEventRow, RecommendationRow, OptionRow):
+                await session.execute(delete(row).where(row.check_id == check_id))
+            await session.execute(delete(CheckRow).where(CheckRow.id == check_id))
 
     async def set_goal(self, check_id: str, goal: Goal) -> None:
         await self._update(check_id, goal=_goal_data(goal))
@@ -292,20 +314,22 @@ class PostgresCheckEventStore:
     async def count_since(self, user_id: str, type: str, since: datetime) -> tuple[int, EventTimes]:
         async with self._sessions() as session:
             times = await session.scalars(
-                select(CheckEventRow.created_at)
-                .where(
-                    CheckEventRow.user_id == user_id,
-                    CheckEventRow.type == type,
-                    CheckEventRow.created_at > since,
-                )
-                .order_by(CheckEventRow.created_at)
+                union_all(
+                    *(
+                        select(row.created_at).where(
+                            row.user_id == user_id, row.type == type, row.created_at > since
+                        )
+                        for row in (CheckEventRow, DeletedEventTimeRow)
+                    )
+                ).order_by("created_at")
             )
             created = [_utc(t) for t in times]
         return len(created), created
 
-    async def checks_ending_with(self, type: str, data: Mapping[str, object]) -> CheckIds:
+    async def checks_whose_latest(self, type: str, data: Mapping[str, object]) -> CheckIds:
         latest = (
             select(CheckEventRow.check_id, func.max(CheckEventRow.seq).label("seq"))
+            .where(CheckEventRow.type == type)
             .group_by(CheckEventRow.check_id)
             .subquery()
         )
@@ -317,7 +341,7 @@ class PostgresCheckEventStore:
                     (CheckEventRow.check_id == latest.c.check_id)
                     & (CheckEventRow.seq == latest.c.seq),
                 )
-                .where(CheckEventRow.type == type, CheckEventRow.data == dict(data))
+                .where(CheckEventRow.data == dict(data))
                 .order_by(CheckEventRow.check_id)
             )
             return list(ids)

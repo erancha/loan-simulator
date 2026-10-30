@@ -10,7 +10,15 @@ from loan_engine.domain.models import Track
 from loan_engine.service.config import Settings
 from loan_engine.service.server import build_server
 
-TOOLS = {"assess_affordability", "size_loan", "simulate_loan", "suggest_tracks"}
+TOOLS = {
+    "assess_affordability",
+    "size_loan",
+    "simulate_loan",
+    "shortest_comfortable_term",
+    "shortest_comfortable_offer_term",
+    "suggest_tracks",
+    "market_series",
+}
 RESOURCES = {"rates://boi/history", "rates://cpi/history", "rates://current"}
 
 PRIME_TRACK: dict[str, Any] = {
@@ -47,7 +55,7 @@ async def test_assess_affordability_reference_user(
     profile = {
         "net_fixed_income": 8600,
         "variable_income": 5000,
-        "variable_income_stable": False,
+        "variable_income_minimum": 0,
         "fixed_expenses": 5500,
         "existing_loan_payments": 0,
     }
@@ -58,7 +66,7 @@ async def test_assess_affordability_reference_user(
         "payment_ceiling": "1550.00",
         "min_cushion": "11000.00",
         "counted_income": "8600.00",
-        "reasons": ["variable_income_excluded", "ceiling_by_disposable_income"],
+        "reasons": ["ceiling_by_disposable_income"],
     }
 
 
@@ -223,7 +231,7 @@ async def test_size_loan_zero_loan(settings: Settings, history: MarketHistory) -
     async with client(settings, history) as c:
         result = await c.call_tool(
             "size_loan",
-            {"goal_price": 30000, "trade_in_value": 20000, "savings": 15000, "min_cushion": 2000},
+            {"goal_price": 10000, "savings": 15000, "min_cushion": 2000},
         )
     assert not result.is_error, result.content
     assert result.structured_content == {
@@ -247,6 +255,84 @@ async def test_suggest_tracks_names_source_and_month(
     fixed, prime = suggestions["tracks"]
     assert (fixed["rate_kind"], fixed["annual_rate"]) == ("fixed", "7.9")
     assert (prime["rate_kind"], prime["prime_spread"]) == ("prime", "2.9")
+
+
+async def test_shortest_comfortable_term_names_the_term_and_its_payment_limit(
+    settings: Settings, history: MarketHistory
+) -> None:
+    arguments = {"principal": 31000, "payment_ceiling": 1000}
+    async with client(settings, history) as c:
+        result = await c.call_tool("shortest_comfortable_term", arguments)
+    assert not result.is_error, result.content
+    assert result.structured_content is not None
+    assert result.structured_content["payment_limit"] == "900.00"
+    assert result.structured_content["term_months"] % 6 == 0
+
+
+async def test_shortest_comfortable_term_refuses_a_ceiling_no_term_fits(
+    settings: Settings, history: MarketHistory
+) -> None:
+    arguments = {"principal": 31000, "payment_ceiling": 100}
+    async with client(settings, history) as c:
+        result = await c.call_tool("shortest_comfortable_term", arguments)
+    assert result.is_error
+    assert "too large for this ceiling" in result.content[0].text
+
+
+async def test_offer_term_is_the_shortest_comfortable_term_under_the_maximum(
+    settings: Settings, history: MarketHistory
+) -> None:
+    arguments = {"track": {**PRIME_TRACK, "term_months": 84}, "payment_ceiling": 2000}
+    async with client(settings, history) as c:
+        result = await c.call_tool("shortest_comfortable_offer_term", arguments)
+    assert not result.is_error, result.content
+    assert result.structured_content is not None
+    assert result.structured_content["comfortable"] is True
+    assert result.structured_content["term_months"] < 84
+    assert result.structured_content["payment_limit"] == "1800.00"
+
+
+async def test_offer_term_falls_back_to_the_maximum_when_no_term_is_comfortable(
+    settings: Settings, history: MarketHistory
+) -> None:
+    arguments = {"track": {**PRIME_TRACK, "term_months": 84}, "payment_ceiling": 100}
+    async with client(settings, history) as c:
+        result = await c.call_tool("shortest_comfortable_offer_term", arguments)
+    assert not result.is_error, result.content
+    assert result.structured_content is not None
+    assert result.structured_content["comfortable"] is False
+    assert result.structured_content["term_months"] == 84
+
+
+async def test_market_series_returns_the_latest_months_ending_with_today_s_prime(
+    settings: Settings, history: MarketHistory
+) -> None:
+    async with client(settings, history) as c:
+        result = await c.call_tool("market_series", {"prime_months": 3, "cpi_months": 2})
+    assert not result.is_error, result.content
+    assert result.structured_content == {
+        "current_prime": "4.75",
+        "rate_as_of": "2026-10-20",
+        "prime": [
+            {"month": "2009-11-01", "prime": "6.25"},
+            {"month": "2009-12-01", "prime": "6.375"},
+            {"month": "2026-10-01", "prime": "4.75"},
+        ],
+        "cpi_as_of": "2026-09-01",
+        "cpi": [
+            {"month": "2009-11-01", "change_percent": "0.2"},
+            {"month": "2009-12-01", "change_percent": "0.2"},
+        ],
+    }
+
+
+async def test_market_series_refuses_more_months_than_the_history_holds(
+    settings: Settings, history: MarketHistory
+) -> None:
+    async with client(settings, history) as c:
+        result = await c.call_tool("market_series", {"prime_months": 121, "cpi_months": 12})
+    assert result.is_error
+    assert "prime_months" in result.content[0].text
 
 
 async def test_rates_resources_return_json_with_as_of(

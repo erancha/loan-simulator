@@ -1,8 +1,9 @@
 # CLAUDE.md
 
 The loan simulator: a standalone Python MCP server of loan calculations over market data (the
-loan engine), which a LangGraph agent in `backend/` calls as a tool provider (the page and the
-evals are OPEN). The design is described in `docs/architecture.md` and the pages it links.
+loan engine), which a LangGraph agent in `backend/` calls as a tool provider (the evals are
+OPEN). The page is a Hebrew React app in `frontend/` that the agent serves. The design is
+described in `docs/architecture.md` and the pages it links.
 
 ## Layout and the layer rule
 
@@ -16,14 +17,19 @@ implementing the ports and never importing `application` or `platform`. The inne
 framework; only `application/agent_graph.py` may import `langgraph` and `langchain_core`.
 `lint-imports` enforces this from `backend/pyproject.toml`.
 
+The page in `frontend/src`: `api/` (client and types), `auth/`, `shell/` (header, checks list,
+tabs), `check/` (event reducer `events.ts`, card mapping `card.ts`, Hebrew text `copy.ts`),
+`profile/`. Money is formatted from decimal strings by `money.ts`, never through a JS number.
+
 ## Scripts
 
 - `./scripts/lock.sh`: recompile `mcp-server/requirements.txt` and `backend/requirements.txt`
   inside each Dockerfile's Python image after editing a dependency list; each test venv installs
   under the pins of its own lockfile.
-- `./scripts/test.sh [all|engine|backend]` (aliases `en`, `be`; `all` is the default target): bash
-  syntax check of the scripts, ruff lint and format check, mypy, import-linter and pytest for
-  `mcp-server/` and `backend/`.
+- `./scripts/test.sh [all|engine|backend|frontend]` (aliases `en`, `be`, `fe`; `all` is the default
+  target): bash syntax check of the scripts, ruff lint and format check, mypy, import-linter and
+  pytest for `mcp-server/` and `backend/`; oxlint, `tsc`, Vitest and the Vite build for
+  `frontend/`.
 - `./scripts/init-env.sh`, `./scripts/start.sh`, `./scripts/docker-helper.sh`: create `.env` with a
   generated token and database password, run Postgres, the migration, the engine and the agent in
   Docker Compose, and stop them or read their logs. `./scripts/sql-helper.sh` runs psql against
@@ -37,6 +43,8 @@ copy from `mcp-server/` and `backend/` paths; `docker-compose.yml` sets `context
 the agent. Settings come from `.env` at the repo root (`.env.example` beside it documents every
 key); compose hands each container only the keys it reads, listed once per service, and overrides
 `DATABASE_URL` and `ENGINE_URL` with the in-network addresses, so `.env` holds the host forms.
+`backend/Dockerfile` also builds `frontend/` in a Node stage and sets `AGENT_FRONTEND_DIST` to the
+copy in the image. `npm run dev` in `frontend/` proxies `/api` to the agent on 8101.
 Host commands (pytest, uvicorn) run from the repo root, because the agent reads `.env` from the
 working directory.
 

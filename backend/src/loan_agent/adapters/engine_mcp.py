@@ -2,7 +2,8 @@
 
 - McpLoanEngine: typed calls that parse each tool's structured content, and model_tools() for
   the model
-- Parsing helpers that turn the engine's decimal strings and ISO dates into Decimal and date
+- Parsing helpers that turn the engine's decimal strings and ISO dates into Decimal and date;
+  market_series_of() parses a market_series result
 
 Each call opens its own MCP session, so the adapter holds no connection between calls.
 """
@@ -17,7 +18,15 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from mcp.types import CallToolResult, TextContent
 
 from loan_agent.domain.models import OptionFigures
-from loan_agent.ports.engine import Bounds, EngineError, Simulation, Sizing
+from loan_agent.ports.engine import (
+    Bounds,
+    EngineError,
+    MarketPoint,
+    MarketSeries,
+    OfferTerm,
+    Simulation,
+    Sizing,
+)
 
 _SERVER = "engine"
 
@@ -50,14 +59,11 @@ class McpLoanEngine:
             reasons=tuple(result["reasons"]),
         )
 
-    async def size(
-        self, goal_price: Decimal, trade_in_value: Decimal, savings: Decimal, min_cushion: Decimal
-    ) -> Sizing:
+    async def size(self, goal_price: Decimal, savings: Decimal, min_cushion: Decimal) -> Sizing:
         result = await self._call(
             "size_loan",
             {
                 "goal_price": str(goal_price),
-                "trade_in_value": str(trade_in_value),
                 "savings": str(savings),
                 "min_cushion": str(min_cushion),
             },
@@ -80,6 +86,17 @@ class McpLoanEngine:
         tracks: list[Mapping[str, object]] = result["tracks"]
         return tracks
 
+    async def offer_term(self, track: Mapping[str, object], payment_ceiling: Decimal) -> OfferTerm:
+        result = await self._call(
+            "shortest_comfortable_offer_term",
+            {"track": dict(track), "payment_ceiling": str(payment_ceiling)},
+        )
+        return OfferTerm(term_months=result["term_months"], comfortable=result["comfortable"])
+
+    async def market_series(self, months: int) -> MarketSeries:
+        result = await self._call("market_series", {"prime_months": months, "cpi_months": months})
+        return market_series_of(result)
+
     async def _call(self, tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
         async with self._client.session(_SERVER) as session:
             result = await session.call_tool(tool, arguments)
@@ -95,6 +112,20 @@ def _text(result: CallToolResult) -> str:
     if not isinstance(block, TextContent):
         raise TypeError(f"Expected a text block from the engine, got {block.type}")
     return block.text
+
+
+def market_series_of(result: Mapping[str, Any]) -> MarketSeries:
+    """The engine's market_series result, parsed."""
+    return MarketSeries(
+        prime=tuple(_point(row, "prime") for row in result["prime"]),
+        rate_as_of=date.fromisoformat(result["rate_as_of"]),
+        cpi_change=tuple(_point(row, "change_percent") for row in result["cpi"]),
+        cpi_as_of=date.fromisoformat(result["cpi_as_of"]),
+    )
+
+
+def _point(row: Mapping[str, Any], key: str) -> MarketPoint:
+    return MarketPoint(month=date.fromisoformat(row["month"]), value=_money(row, key))
 
 
 def _money(data: Mapping[str, Any], key: str) -> Decimal:

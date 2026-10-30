@@ -92,7 +92,7 @@ def test_fees_and_profile_amounts_are_non_negative() -> None:
     profile = {
         "net_fixed_income": Decimal(15000),
         "variable_income": Decimal(0),
-        "variable_income_stable": False,
+        "variable_income_minimum": Decimal(0),
         "fixed_expenses": Decimal(8000),
         "existing_loan_payments": Decimal(0),
     }
@@ -133,3 +133,14 @@ def test_multi_track_loan_principal_limits_apply_to_the_sum() -> None:
         with pytest.raises(ValidationError, match="principal"):
             Loan(tracks=tracks)
     assert Loan(tracks=[make_track(principal=Decimal(a)) for a in (4000, 6000)]).principal == 10000
+
+
+def test_profile_minimum_above_variable_income_is_refused() -> None:
+    with pytest.raises(ValidationError, match="variable_income_minimum"):
+        Profile(
+            net_fixed_income=Decimal(15000),
+            variable_income=Decimal(1000),
+            variable_income_minimum=Decimal(1001),
+            fixed_expenses=Decimal(8000),
+            existing_loan_payments=Decimal(0),
+        )

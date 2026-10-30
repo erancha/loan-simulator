@@ -12,6 +12,7 @@ from jwt import PyJWKClient
 
 from auth_keys import CLIENT_ID, KID, OTHER_KEY, PRIVATE_KEY, PUBLIC_PEM, sign
 from loan_agent.adapters.google_tokens import (
+    CLOCK_SKEW,
     GOOGLE_ISSUER,
     GoogleTokenVerifier,
     JwksKeys,
@@ -32,6 +33,16 @@ def test_a_valid_token_names_the_person_and_its_expiry() -> None:
     assert int(verified.expires_at.timestamp()) == now + 60
 
 
+def test_a_token_issued_seconds_ahead_of_the_local_clock_is_accepted() -> None:
+    assert verifier().verify(sign(iat=int(time.time()) + 5)).user.id == "1001"
+
+
+def test_a_token_issued_beyond_the_clock_tolerance_is_refused() -> None:
+    issued = int(time.time()) + 2 * int(CLOCK_SKEW.total_seconds())
+    with pytest.raises(InvalidTokenError, match="not valid"):
+        verifier().verify(sign(iat=issued))
+
+
 def test_email_and_name_are_optional() -> None:
     payload = jwt.decode(sign(), options={"verify_signature": False})
     del payload["email"], payload["name"]
@@ -48,7 +59,7 @@ def test_google_bare_issuer_form_is_accepted_for_google_only() -> None:
 @pytest.mark.parametrize(
     ("claims", "reason"),
     [
-        ({"exp": int(time.time()) - 1}, "expired"),
+        ({"exp": int(time.time()) - 2 * int(CLOCK_SKEW.total_seconds())}, "expired"),
         ({"aud": "other-client"}, "another application"),
         ({"iss": "https://evil.example"}, "not issued by"),
     ],

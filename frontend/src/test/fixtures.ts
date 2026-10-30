@@ -1,0 +1,279 @@
+/**
+ * The reference case as check events. Only `optionPrime36`, `optionFixed36` and
+ * `recommendationPrime` carry figures from an engine run; the other options are hand-made.
+ */
+import type {
+  ChartShown,
+  CheckEvent,
+  Goal,
+  LoanSimulation,
+  OptionSaved,
+  ProfileView,
+  Question,
+  RecommendationPresented,
+  Track,
+  TrackSimulation,
+} from '../api/types.ts'
+
+type EventOf<Type extends CheckEvent['type']> = Extract<CheckEvent, { type: Type }>
+
+export function withSeq<E extends CheckEvent>(event: E, seq: number): E {
+  return { ...event, seq }
+}
+
+export function userMessage(seq: number, text: string): EventOf<'message.user'> {
+  return { type: 'message.user', data: { text }, seq }
+}
+
+export function assistantMessage(
+  seq: number,
+  message_id: string,
+  text: string,
+): EventOf<'message.assistant'> {
+  return { type: 'message.assistant', data: { message_id, text }, seq }
+}
+
+export function delta(message_id: string, text: string): EventOf<'message.delta'> {
+  return { type: 'message.delta', data: { message_id, text }, seq: null }
+}
+
+export function turnStatus(seq: number, status: 'idle' | 'running'): EventOf<'turn.status'> {
+  return { type: 'turn.status', data: { status }, seq }
+}
+
+export function turnFailed(seq: number, message: string): EventOf<'turn.failed'> {
+  return { type: 'turn.failed', data: { message }, seq }
+}
+
+export function questionAsked(
+  seq: number,
+  question: Question,
+  lead_in: string | null = null,
+): EventOf<'question.asked'> {
+  return { type: 'question.asked', data: { question, lead_in }, seq }
+}
+
+export const cpiChart: ChartShown = {
+  series: 'cpi',
+  as_of: '2026-09-01',
+  points: [
+    { month: '2026-07-01', value: '0.3' },
+    { month: '2026-08-01', value: '0.7' },
+    { month: '2026-09-01', value: '-0.5' },
+  ],
+}
+
+export function chartShown(seq: number, chart: ChartShown = cpiChart): EventOf<'chart.shown'> {
+  return { type: 'chart.shown', data: chart, seq }
+}
+
+export const profileView: ProfileView = {
+  profile: {
+    net_fixed_income: '8300',
+    variable_income: '5000',
+    variable_income_minimum: '1000',
+    fixed_expenses: '4500',
+    existing_loan_payments: '0',
+    savings: '15000',
+  },
+  missing: [],
+}
+
+export const goal: Goal = {
+  purpose: 'רכב',
+  price: '55000',
+}
+
+export const profileUpdated: EventOf<'profile.updated'> = {
+  type: 'profile.updated',
+  data: profileView,
+  seq: 2,
+}
+
+export const goalSet: EventOf<'goal.set'> = {
+  type: 'goal.set',
+  data: goal,
+  seq: 3,
+}
+
+const RATES_AS_OF = '2026-10-28'
+const CPI_AS_OF = '2026-09-01'
+
+interface OptionSpec {
+  option_id: string
+  source: OptionSaved['source']
+  lender: string | null
+  offer_date: string | null
+  track: Track
+  simulation: Omit<TrackSimulation, 'schedule' | 'balloon_due'> & {
+    balloon_due?: string | null
+  }
+  seq: number
+}
+
+function savedOption(spec: OptionSpec): EventOf<'option.saved'> {
+  const track: TrackSimulation = {
+    balloon_due: null,
+    ...spec.simulation,
+    schedule: [],
+  }
+  const result: LoanSimulation = {
+    tracks: [track],
+    first_payment: track.first_payment,
+    max_base_payment: track.max_base_payment,
+    total_paid: track.total_paid,
+    rate_as_of: RATES_AS_OF,
+    cpi_as_of: CPI_AS_OF,
+  }
+  const data: OptionSaved = {
+    option_id: spec.option_id,
+    loan: { tracks: [spec.track] },
+    source: spec.source,
+    lender: spec.lender,
+    offer_date: spec.offer_date,
+    figures: {
+      first_payment: track.first_payment,
+      peak_payment: track.max_base_payment,
+      worst_peak_payment: track.worst?.max_payment ?? null,
+      worst_start: track.worst?.start ?? null,
+      worst_end: track.worst?.end ?? null,
+      balloon_due: track.balloon_due,
+      total_paid: track.total_paid,
+      rate_as_of: RATES_AS_OF,
+      cpi_as_of: CPI_AS_OF,
+    },
+    result,
+  }
+  return { type: 'option.saved', data, seq: spec.seq }
+}
+
+const primeTrack: Track = {
+  principal: '29000.00',
+  term_months: 36,
+  rate_kind: 'prime',
+  annual_rate: null,
+  prime_spread: '-0.5',
+  cpi_linked: false,
+  method: 'spitzer',
+}
+
+export const optionPrime36 = savedOption({
+  option_id: 'prime-36',
+  source: 'published_average',
+  lender: null,
+  offer_date: null,
+  track: primeTrack,
+  seq: 4,
+  simulation: {
+    first_payment: '904.08',
+    max_base_payment: '904.08',
+    total_paid: '32546.86',
+    worst: {
+      start: '2022-04-01',
+      end: '2025-03-01',
+      max_payment: '955.37',
+      balloon_due: null,
+      total_paid: '34025.57',
+    },
+    max_payment_range: { low: '861.20', high: '955.37' },
+    total_paid_range: { low: '32432.14', high: '34025.57' },
+    windows: 85,
+  },
+})
+
+const fixedTrack: Track = {
+  principal: '29000.00',
+  term_months: 36,
+  rate_kind: 'fixed',
+  annual_rate: '6.9',
+  prime_spread: null,
+  cpi_linked: false,
+  method: 'spitzer',
+}
+
+export const optionFixed36 = savedOption({
+  option_id: 'fixed-36',
+  source: 'published_average',
+  lender: null,
+  offer_date: null,
+  track: fixedTrack,
+  seq: 5,
+  simulation: {
+    first_payment: '907.42',
+    max_base_payment: '907.42',
+    total_paid: '32667.03',
+    worst: null,
+    max_payment_range: null,
+    total_paid_range: null,
+    windows: 0,
+  },
+})
+
+export const optionOfferFixed = savedOption({
+  option_id: 'offer-hapoalim',
+  source: 'offer',
+  lender: 'בנק הפועלים',
+  offer_date: '2026-11-02',
+  track: fixedTrack,
+  seq: 7,
+  simulation: {
+    first_payment: '890.00',
+    max_base_payment: '890.00',
+    total_paid: '32040.00',
+    worst: null,
+    max_payment_range: null,
+    total_paid_range: null,
+    windows: 0,
+  },
+})
+
+export const optionBalloon = savedOption({
+  option_id: 'balloon-36',
+  source: 'published_average',
+  lender: null,
+  offer_date: null,
+  track: { ...primeTrack, method: 'balloon', balloon_amount: '10000' },
+  seq: 8,
+  simulation: {
+    first_payment: '640.50',
+    max_base_payment: '640.50',
+    balloon_due: '10000',
+    total_paid: '33058.00',
+    worst: {
+      start: '2022-04-01',
+      end: '2025-03-01',
+      max_payment: '688.30',
+      balloon_due: '10000',
+      total_paid: '34780.00',
+    },
+    max_payment_range: { low: '610.40', high: '688.30' },
+    total_paid_range: { low: '32910.00', high: '34780.00' },
+    windows: 85,
+  },
+})
+
+export const recommendationPrime: EventOf<'recommendation.presented'> = {
+  type: 'recommendation.presented',
+  seq: 6,
+  data: {
+    bounds: {
+      payment_ceiling: '1900.00',
+      min_cushion: '9000.00',
+      counted_income: '9300',
+      reasons: ['variable_income_minimum_counted', 'ceiling_by_disposable_income'],
+    },
+    sizing: {
+      loan_amount: '29000.00',
+      savings_used: '6000.00',
+      cushion_kept: '9000.00',
+      spare_savings: '0.00',
+    },
+    preferred: optionPrime36.data,
+    alternative: optionFixed36.data,
+    reasoning: 'ריבית פריים עם מרווח שלילי זולה יותר, והתשלום הגרוע ביותר נשאר מתחת לתקרה.',
+  } satisfies RecommendationPresented,
+}
+
+/** The card's decision sentence for `recommendationPrime`. */
+export const REFERENCE_DECISION =
+  'הלוואה של 29,000 ₪ ל-36 חודשים, כ-904 ₪ בחודש, ו-9,000 ₪ נשארים בצד לביטחון.'

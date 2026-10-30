@@ -1,0 +1,10 @@
+.git
+**/.env*
+backup
+.superpowers
+docs
+**/node_modules
+**/dist
+**/.venv
+**/__pycache__
+**/.*_cache

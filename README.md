@@ -5,21 +5,21 @@ medium-term loan (a car, a renovation, a consumer purchase): how much to borrow,
 to keep, for how long, and on which track. The model leads the conversation and decides what to
 ask; code computes every number and sets the bounds the recommendation must respect. The engine
 prices each track at what it costs today and at what it would have cost had interest rates or
-inflation moved as they did in the worst comparable period on record; the page will show both.
+inflation moved as they did in the worst comparable period on record; the page shows both.
 
-This repo holds the loan engine and the agent. The page and the evals are OPEN, not yet
-implemented.
+This repo holds the loan engine, the agent and the page. The evals are OPEN, not yet
+implemented (#2).
 
 **Contents:** [Architecture](#architecture) · [The loan engine](#the-loan-engine) ·
-[The agent](#the-agent) · [Getting started](#getting-started) · [Scripts](#scripts) ·
-[Testing](#testing) · [License](#license)
+[The agent](#the-agent) · [The page](#the-page) · [Getting started](#getting-started) ·
+[Scripts](#scripts) · [Testing](#testing) · [License](#license)
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  U((Person)) --> P["Page<br/>OPEN, not yet implemented"]
-  P --> A
+  U((Person)) --> P["Page - frontend/<br/>React, Hebrew"]
+  P -->|"HTTP API, event stream"| A
   subgraph AGENT[Agent - backend/]
     A["FastAPI and LangGraph loop:<br/>sign-in, profile, checks"] --> DB[(Postgres)]
   end
@@ -29,10 +29,8 @@ flowchart LR
     E --> M[(Stored market data)]
   end
   M -.->|daily refresh| S["Bank of Israel and<br/>Central Bureau of Statistics"]
-  classDef open fill:#f3f4f6,stroke:#9ca3af,color:#111827,stroke-dasharray: 4 3
   classDef done fill:#dbeafe,stroke:#1d4ed8,color:#111827
-  class P,U open
-  class A,DB,E,D,M done
+  class P,U,A,DB,E,D,M done
   style AGENT fill:#eff6ff,stroke:#1d4ed8
   style ENGINE fill:#eff6ff,stroke:#1d4ed8
 ```
@@ -44,7 +42,7 @@ and policy number with its reasoning: [docs/calculations.md](docs/calculations.m
 data sources and what happens when one is down: [docs/market-data.md](docs/market-data.md).
 
 **Stack:** Python, the MCP SDK, LangGraph, FastAPI, SQLAlchemy and Alembic, Postgres, uvicorn,
-Docker.
+TypeScript, React, Vite, Docker.
 
 ## The loan engine
 
@@ -55,9 +53,12 @@ Docker.
 | Tool | Returns |
 |---|---|
 | `assess_affordability` | A monthly payment ceiling and a minimum savings cushion from a profile, with reason codes. |
-| `size_loan` | The loan amount for a goal price, trade-in, savings and cushion. |
+| `size_loan` | The loan amount for a goal price, savings and cushion. |
 | `simulate_loan` | A short text summary for the model; the full result, schedule included, as structured content. |
+| `shortest_comfortable_term` | The shortest term, in 6-month steps, at which the suggested tracks' worst-case payment stays within 90% of the ceiling. |
+| `shortest_comfortable_offer_term` | The same search for one real offer, up to the longest term it allows. |
 | `suggest_tracks` | A fixed and a prime track priced from the published average bank rate. |
+| `market_series` | Today's prime and, for the latest months, the prime and the CPI's monthly change. |
 
 **Resources:** `rates://boi/history`, `rates://cpi/history` and `rates://current`.
 
@@ -69,13 +70,22 @@ refreshes them daily.
 
 `backend/` is a FastAPI service that leads a Hebrew conversation with a language model, calls the
 engine's tools and its own, and keeps each person's profile, checks, options and recommendation in
-Postgres. People sign in with Google ([docs/sign-in.md](docs/sign-in.md)); sign-in is restricted
-by the OAuth app's list of test users. The model never produces a figure: every number comes from
-a tool result, and `present_recommendation` refuses an option that borrows less than the loan the
-engine sized or whose worst-case payment is above the ceiling. A reply streams to the page as it
-is written, and a person may send `AGENT_TURN_LIMIT` messages per `AGENT_TURN_WINDOW_HOURS`
-(50 per 24 hours as shipped). The loop, the tools, the events and what happens on failure:
-[docs/architecture/agent.md](docs/architecture/agent.md).
+Postgres. People sign in with Google ([docs/sign-in.md](docs/sign-in.md)); sign-in is restricted by
+the OAuth app's list of test users. The model never produces a figure: every number comes from a
+tool result, and `present_recommendation` refuses an option that borrows less than the loan the
+engine sized or whose worst-case payment is above the ceiling. A reply streams to the page as it is
+written, and a person may send `AGENT_TURN_LIMIT` messages per `AGENT_TURN_WINDOW_HOURS` (20 per 24
+hours as shipped), unless `AGENT_TURN_LIMIT_OVERRIDES` sets their own limit. The loop, the tools,
+the events and what happens on failure: [docs/architecture/agent.md](docs/architecture/agent.md).
+
+## The page
+
+`frontend/` is a Hebrew, right-to-left React app that the agent serves. A person signs in with
+Google, chats with the assistant, corrects their profile in a side panel and reads the
+recommendation as a card: the loan amount, term and payment, each option's worst-case payment and
+the period it comes from, and the ceiling and cushion behind it. Every figure on the card comes
+from stored engine results, never from the model's text. The layout, the data flow and how the
+page is served: [docs/architecture/page.md](docs/architecture/page.md).
 
 ## Getting started
 
@@ -88,6 +98,9 @@ Requires Docker.
                            # the agent, and returns once the agent answers
 ```
 
+Then open `http://localhost:8101`, sign in with a Google account listed as a test user, and start
+a check.
+
 Every setting is explained once, in [.env.example](.env.example). The agent refuses to start while
 `LLM_MODEL`, `LLM_API_KEY` or `GOOGLE_CLIENT_ID` is blank. Stop the stack, follow its logs or see
 its status with `./scripts/docker-helper.sh --stop | --logs | --ps` (`--stop --volumes` also
@@ -99,13 +112,13 @@ it. As shipped in `.env.example`:
 
 | Service | On this machine | Inside the Compose network |
 |---|---|---|
-| Agent | `http://localhost:8101` (`AGENT_HOST_PORT`): `/health`, `/ready`, `/api` | `agent:8000` (`AGENT_PORT`) |
+| Agent | `http://localhost:8101` (`AGENT_HOST_PORT`): the page at `/`, `/health`, `/ready`, `/api` | `agent:8000` (`AGENT_PORT`) |
 | Engine | `http://localhost:8100/mcp` (`ENGINE_HOST_PORT`), for MCP Inspector | `engine:8020` (`ENGINE_PORT`) |
 | Postgres | `127.0.0.1:8102` (`DB_HOST_PORT`), for an agent or a psql run on the host | `db:5432` (`DB_PORT`) |
 
 A published port must be free on this machine; change it in `.env` if it is not. Open the agent as
 `localhost`, the origin Google sign-in is registered for; a new `AGENT_HOST_PORT` needs the same
-change in the Google client's origin ([docs/sign-in.md](docs/sign-in.md)).
+change in the Google client's authorized redirect URI ([docs/sign-in.md](docs/sign-in.md)).
 
 ### Try the engine with MCP Inspector
 
@@ -148,18 +161,22 @@ All live in `scripts/`; run with `--help` for full usage.
 | `docker-helper.sh` | Stop (`--stop`, `--volumes` also removes the market data and the database), follow logs, or show status. |
 | `sql-helper.sh` | Run psql against the stack's database: a shell, `-c`, a SQL file, or row counts (`--counts`) and rows (`--rows`) of every table. |
 | `lock.sh` | Recompile `mcp-server/requirements.txt` and `backend/requirements.txt` inside each Dockerfile's Python image. |
-| `test.sh` | Script syntax, lint, types, import layers and tests, for the engine and the backend. |
+| `test.sh` | Script syntax, lint, types, import layers and tests for the engine and the backend; lint, types, tests and a build for the page. |
 
 ## Testing
 
 ```bash
-./scripts/test.sh          # every target: the engine and the backend
+./scripts/test.sh          # every target: the engine, the backend and the page
 ./scripts/test.sh engine   # lint, types, import layers, tests
 ./scripts/test.sh backend  # the same for the agent; its database tests need Docker
+./scripts/test.sh frontend # lint, types, component tests and a build; needs Node.js 22
 ```
 
 What each layer proves: [docs/testing.md](docs/testing.md).
 
 ## License
 
-Released under the MIT License. See [LICENSE](LICENSE).
+Source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE). Reading the source,
+forking it and running a private deployment are free for anyone, companies included:
+[NOTICE](NOTICE) grants that explicitly for evaluating the project or its author. Building a
+commercial product or service on it needs a commercial license: erancha@gmail.com.

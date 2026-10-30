@@ -9,7 +9,7 @@ from loan_agent.domain.models import Check, Goal, OptionFigures, Profile
 FULL = {
     "net_fixed_income": "20000.50",
     "variable_income": 1000,
-    "variable_income_stable": False,
+    "variable_income_minimum": "400",
     "fixed_expenses": Decimal(9000),
     "existing_loan_payments": "0",
     "savings": "50000",
@@ -37,7 +37,7 @@ def test_profile_merge_sets_fields_and_reports_missing() -> None:
     assert profile.savings == Decimal(5)
     assert profile.missing() == (
         "variable_income",
-        "variable_income_stable",
+        "variable_income_minimum",
         "fixed_expenses",
         "existing_loan_payments",
     )
@@ -49,7 +49,7 @@ def test_profile_merge_sets_fields_and_reports_missing() -> None:
         ({"colour": 1}, "colour"),
         ({"savings": "-1"}, "savings"),
         ({"fixed_expenses": 1.5}, "fixed_expenses"),
-        ({"variable_income_stable": "yes"}, "variable_income_stable"),
+        ({"variable_income_minimum": "-1"}, "variable_income_minimum"),
         ({"variable_income": "abc"}, "variable_income"),
     ],
 )
@@ -63,7 +63,7 @@ def test_profile_merge_rejects_unknown_and_negative_naming_field(
 def test_engine_profile_requires_complete_profile() -> None:
     profile = Profile().merged({"net_fixed_income": 1})
 
-    with pytest.raises(ProfileError, match="variable_income, variable_income_stable"):
+    with pytest.raises(ProfileError, match="variable_income, variable_income_minimum"):
         profile.engine_profile()
 
 
@@ -71,18 +71,16 @@ def test_engine_profile_sends_decimal_strings() -> None:
     assert Profile().merged(FULL).engine_profile() == {
         "net_fixed_income": "20000.50",
         "variable_income": "1000",
-        "variable_income_stable": False,
+        "variable_income_minimum": "400",
         "fixed_expenses": "9000",
         "existing_loan_payments": "0",
     }
 
 
 def test_goal_validation() -> None:
-    Goal("car", Decimal(100000), Decimal(0))
+    Goal("car", Decimal(100000))
     with pytest.raises(GoalError, match="price"):
-        Goal("car", Decimal(0), Decimal(0))
-    with pytest.raises(GoalError, match="trade_in_value"):
-        Goal("car", Decimal(1), Decimal(-1))
+        Goal("car", Decimal(0))
 
 
 def test_risk_payment_prefers_worst_window() -> None:
@@ -143,3 +141,62 @@ def test_option_figures_encode_as_json_ready_text_and_decode_back() -> None:
     }
     for value in (worst, figures(None)):
         assert OptionFigures.from_json(value.to_json()) == value
+
+
+def test_minimum_is_not_missing_when_variable_income_is_zero() -> None:
+    profile = Profile().merged({"net_fixed_income": "8000", "variable_income": "0"})
+    assert "variable_income_minimum" not in profile.missing()
+    assert "variable_income" not in profile.missing()
+
+
+def test_minimum_is_missing_while_variable_income_is_unset_or_positive() -> None:
+    assert "variable_income_minimum" in Profile().missing()
+    positive = Profile().merged({"variable_income": "2500"})
+    assert "variable_income_minimum" in positive.missing()
+
+
+def test_minimum_needed_again_once_variable_income_is_positive() -> None:
+    zero = Profile().merged({"variable_income": "0"})
+    raised = zero.merged({"variable_income": "3000"})
+    assert "variable_income_minimum" in raised.missing()
+
+
+def test_engine_profile_sends_a_zero_minimum_when_variable_income_is_zero() -> None:
+    profile = Profile().merged(
+        {
+            "net_fixed_income": "8000",
+            "variable_income": "0",
+            "fixed_expenses": "3000",
+            "existing_loan_payments": "0",
+            "savings": "10000",
+        }
+    )
+    assert profile.engine_profile()["variable_income_minimum"] == "0"
+
+
+def test_missing_lists_fields_from_money_at_hand_to_outgoings() -> None:
+    assert Profile().missing() == (
+        "savings",
+        "net_fixed_income",
+        "variable_income",
+        "variable_income_minimum",
+        "fixed_expenses",
+        "existing_loan_payments",
+    )
+
+
+def test_minimum_above_variable_income_is_refused_naming_both() -> None:
+    with pytest.raises(ProfileError, match="variable_income_minimum.*variable_income"):
+        Profile().merged({"variable_income": "1000", "variable_income_minimum": "1001"})
+
+
+def test_lowering_variable_income_below_the_stored_minimum_is_refused() -> None:
+    profile = Profile().merged({"variable_income": "3000", "variable_income_minimum": "2000"})
+    with pytest.raises(ProfileError, match="variable_income_minimum.*variable_income"):
+        profile.merged({"variable_income": "1500"})
+    assert profile.merged({"variable_income": "2000"}).variable_income == Decimal(2000)
+
+
+def test_minimum_may_equal_variable_income() -> None:
+    profile = Profile().merged({"variable_income": "1000", "variable_income_minimum": "1000"})
+    assert profile.variable_income_minimum == Decimal(1000)

@@ -16,6 +16,7 @@ Core building blocks:
 from datetime import UTC, datetime
 from typing import Annotated, Self
 
+import structlog
 from fastapi import APIRouter, Depends, FastAPI, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -26,6 +27,8 @@ from loan_agent.platform.dependencies import Deps
 
 COOKIE = "ls_id_token"
 NOT_SIGNED_IN = "sign in to continue"
+
+log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/api/auth")
 
@@ -47,7 +50,7 @@ CurrentUser = Annotated[User, Depends(current_user)]
 
 class CredentialRequest(BaseModel):
     credential: str
-    """The ID token Google's sign-in button hands the page."""
+    """The ID token Google's redirect hands the page."""
 
 
 class UserResponse(BaseModel):
@@ -106,6 +109,9 @@ def set_session_cookie(
 def register_error_handlers(app: FastAPI) -> None:
     async def unauthorized(request: Request, error: Exception) -> JSONResponse:
         assert isinstance(error, InvalidTokenError | NotSignedInError)
+        if isinstance(error, InvalidTokenError):
+            # The reason names the failed check, never the token itself.
+            log.warning("token refused", path=request.url.path, reason=str(error))
         return JSONResponse(
             {"detail": str(error)},
             status_code=status.HTTP_401_UNAUTHORIZED,

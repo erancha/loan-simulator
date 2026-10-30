@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+# Each job runs scripts/test.sh, the entry point developers use locally, so CI and local
+# verification cannot drift. The script provisions its own virtualenvs and frontend
+# dependencies.
+jobs:
+  python:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [engine, backend]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          # The python:3.14-slim image both services ship on, so the suites run on the interpreter
+          # and the pins of the containers; each pyproject.toml keeps 3.12 as the floor elsewhere.
+          python-version: "3.14"
+      # ruff, mypy, import-linter contracts and pytest; the backend's Postgres tests start a
+      # Testcontainers database on the runner's Docker.
+      - name: Tests
+        run: bash scripts/test.sh ${{ matrix.target }}
+
+  frontend:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      # oxlint, Vitest, tsc and the production build.
+      - name: Tests
+        run: bash scripts/test.sh frontend

@@ -1,26 +1,30 @@
 """Affordability bounds from the borrower's profile, loan sizing and typical tracks.
 
 - assess_affordability(): payment ceiling and savings cushion from the borrower's profile
-- size_loan(): the amount to borrow after trade-in and spendable savings
+- size_loan(): the amount to borrow after spendable savings
 - suggest_tracks(): fixed and prime tracks priced from the published average bank rate
+- shortest_comfortable_term(): the shortest term at which those tracks fit the payment ceiling
+- shortest_comfortable_offer_term(): the same search for one real offer, up to its longest term
 """
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Literal
 
 from loan_engine.domain.assumptions import (
+    COMFORT_SHARE,
     CUSHION_MONTHS,
     DISPOSABLE_SHARE_CAP,
     INCOME_SHARE_CAP,
-    STABLE_VARIABLE_SHARE,
+    TERM_STEP,
 )
-from loan_engine.domain.history import MarketHistory
+from loan_engine.domain.history import MarketHistory, simulate
+from loan_engine.domain.limits import MAX_TERM
 from loan_engine.domain.models import Profile, Track
 
 Reason = Literal[
-    "variable_income_excluded",
-    "variable_income_half_counted",
+    "variable_income_minimum_counted",
     "ceiling_by_income_share",
     "ceiling_by_disposable_income",
     "existing_loans_deducted",
@@ -48,13 +52,9 @@ class Sizing:
 
 def assess_affordability(profile: Profile) -> Bounds:
     reasons: list[Reason] = []
-    counted = profile.net_fixed_income
-    if profile.variable_income > 0:
-        if profile.variable_income_stable:
-            counted += STABLE_VARIABLE_SHARE * profile.variable_income
-            reasons.append("variable_income_half_counted")
-        else:
-            reasons.append("variable_income_excluded")
+    counted = profile.net_fixed_income + profile.variable_income_minimum
+    if profile.variable_income_minimum > 0:
+        reasons.append("variable_income_minimum_counted")
 
     by_share = INCOME_SHARE_CAP * counted
     by_disposable = DISPOSABLE_SHARE_CAP * (counted - profile.fixed_expenses)
@@ -71,10 +71,8 @@ def assess_affordability(profile: Profile) -> Bounds:
     return Bounds(ceiling, CUSHION_MONTHS * profile.fixed_expenses, counted, reasons)
 
 
-def size_loan(
-    goal_price: Decimal, trade_in_value: Decimal, savings: Decimal, min_cushion: Decimal
-) -> Sizing:
-    need = max(goal_price - trade_in_value, Decimal(0))
+def size_loan(goal_price: Decimal, savings: Decimal, min_cushion: Decimal) -> Sizing:
+    need = goal_price
     available = max(savings - min_cushion, Decimal(0))
     savings_used = min(available, need)
     return Sizing(
@@ -101,3 +99,45 @@ def suggest_tracks(principal: Decimal, term_months: int, history: MarketHistory)
             **common,  # type: ignore[arg-type]
         ),
     ]
+
+
+def shortest_comfortable_term(
+    principal: Decimal, payment_ceiling: Decimal, history: MarketHistory
+) -> int | None:
+    """The shortest term, in TERM_STEP-month steps up to MAX_TERM, at which every suggested
+    track's highest recurring payment, in its worst historical window for a variable track, stays
+    within COMFORT_SHARE of the payment ceiling; None when no term does."""
+    return _first_comfortable_term(
+        range(TERM_STEP, MAX_TERM + 1, TERM_STEP),
+        lambda term: suggest_tracks(principal, term, history),
+        payment_ceiling,
+        history,
+    )
+
+
+def shortest_comfortable_offer_term(
+    offer: Track, payment_ceiling: Decimal, history: MarketHistory
+) -> int | None:
+    """The same search for a real offer whose term_months is the longest it allows: TERM_STEP-month
+    steps below that term, then that term itself; None when no term fits."""
+    return _first_comfortable_term(
+        [*range(TERM_STEP, offer.term_months, TERM_STEP), offer.term_months],
+        lambda term: [offer.model_copy(update={"term_months": term})],
+        payment_ceiling,
+        history,
+    )
+
+
+def _first_comfortable_term(
+    terms: Iterable[int],
+    tracks_at: Callable[[int], list[Track]],
+    payment_ceiling: Decimal,
+    history: MarketHistory,
+) -> int | None:
+    limit = payment_ceiling * COMFORT_SHARE
+    for term in terms:
+        outcomes = [simulate(track, history) for track in tracks_at(term)]
+        peaks = [o.base.max_payment if o.worst is None else o.worst.max_payment for o in outcomes]
+        if max(peaks) <= limit:
+            return term
+    return None

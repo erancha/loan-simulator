@@ -3,20 +3,22 @@
 Core building blocks:
 - CheckRunner.create: a new, empty check for the signed-in person
 - CheckRunner.send: records the person's message and runs the turn as a background task
+- CheckRunner.delete: removes an idle check, its conversation and all it produced
 - CheckRunner.fail_interrupted: at startup, ends the turns a stopped process left running
 - CheckRunner.drain and aclose: wait for or cancel the turns in flight
 
 A check has at most one turn in flight; turns on different checks run concurrently. Every message
-costs model calls, so a person may send at most turn_limit messages, across all their checks, in
-any rolling window of the configured length. Turns live in this process's memory, so the agent
-runs as one replica.
+costs model calls, so a person may send at most turn_limit messages, or their override's number,
+across all their checks, in any rolling window of the configured length, and deleting a check gives
+none of them back. Turns live in this process's memory, so the agent runs as one replica.
 
-A turn streams the model's text to open pages as live message.delta fragments and stores each
-complete model message with text as message.assistant under the same message id, so a page that
-replays the log sees complete messages only. A turn ends with turn.status idle, preceded by
-turn.failed when it raised or was cut short by a restart; the error itself goes to the log, never
-to the page. A cut-short turn leaves the thread at its last checkpoint, and the next turn
-continues from there.
+A turn streams the model's text to open pages as live message.delta events, each carrying the
+whole text of its message so far, so a page that joins mid-reply catches up from the next one.
+It stores each complete model message with text as message.assistant under the same message id,
+so a page that replays the log sees complete messages only. A turn ends with turn.status idle,
+preceded by turn.failed when it raised or was cut short by a restart; the error itself goes to the
+log, never to the page. A cut-short turn leaves the thread at its last checkpoint, and the next
+turn continues from there.
 """
 
 import asyncio
@@ -29,7 +31,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import MessagesState
 
-from loan_agent.application.agent_graph import AgentGraph, check_config
+from loan_agent.application.agent_graph import AgentGraph, check_config, delete_conversation
 from loan_agent.domain.errors import TurnConflictError, TurnLimitError
 from loan_agent.domain.models import Check, User
 from loan_agent.ports.events import (
@@ -66,6 +68,7 @@ class CheckRunner:
         events: CheckEventStore,
         sink: EventSink,
         turn_limit: int,
+        turn_limit_overrides: Mapping[str, int],
         window: timedelta,
         clock: Callable[[], datetime],
     ) -> None:
@@ -74,6 +77,7 @@ class CheckRunner:
         self._events = events
         self._sink = sink
         self._turn_limit = turn_limit
+        self._turn_limit_overrides = turn_limit_overrides
         self._window = window
         self._clock = clock
         # Key: check id. Value: its turn in flight; the strong reference keeps the task from being
@@ -95,18 +99,31 @@ class CheckRunner:
             await self._checks.get(user.id, check_id)
             if check_id in self._turns:
                 raise TurnConflictError(check_id)
-            await self._require_message_left(user.id)
+            await self._require_message_left(user)
             await self._sink.emit(check_id, MESSAGE_USER, {"text": text})
             await self._sink.emit(check_id, TURN_STATUS, RUNNING)
             turn = asyncio.create_task(self._run(check_config(user.id, check_id), check_id, text))
             self._turns[check_id] = turn
             turn.add_done_callback(lambda done: self._forget(check_id, done))
 
-    async def fail_interrupted(self) -> None:
-        """Ends every turn whose log stops at turn.status running while no turn of this process
-        runs on the check: its process stopped mid-turn, and nothing else would end it."""
+    async def delete(self, user: User, check_id: str) -> None:
+        """Raises CheckNotFoundError for an unknown check or another person's, and
+        TurnConflictError while the check runs a turn. The conversation goes first and is in
+        another store, so a failure between the two leaves a check that can be deleted again,
+        never a conversation that no check reaches."""
         async with self._send_lock:
-            for check_id in await self._events.checks_ending_with(TURN_STATUS, RUNNING):
+            await self._checks.get(user.id, check_id)
+            if check_id in self._turns:
+                raise TurnConflictError(check_id)
+            await delete_conversation(self._graph, check_id)
+            await self._checks.delete(check_id, MESSAGE_USER, self._clock() - self._window)
+
+    async def fail_interrupted(self) -> None:
+        """Ends every turn whose latest turn.status is running while no turn of this process runs
+        on the check: its process stopped mid-turn, and nothing else would end it. The turn may
+        have stored other events after it started."""
+        async with self._send_lock:
+            for check_id in await self._events.checks_whose_latest(TURN_STATUS, RUNNING):
                 if check_id not in self._turns:
                     log.warning("ending a turn interrupted by a restart", check_id=check_id)
                     await self._report_failure(check_id)
@@ -123,25 +140,33 @@ class CheckRunner:
             turn.cancel()
         await asyncio.gather(*turns, return_exceptions=True)
 
-    async def _require_message_left(self, user_id: str) -> None:
+    def _limit_of(self, user: User) -> int:
+        if user.email is None:
+            return self._turn_limit
+        return self._turn_limit_overrides.get(user.email.lower(), self._turn_limit)
+
+    async def _require_message_left(self, user: User) -> None:
         now = self._clock()
-        count, times = await self._events.count_since(user_id, MESSAGE_USER, now - self._window)
-        if count >= self._turn_limit:
-            # The message whose expiry leaves turn_limit - 1 in the window frees the next one; a
-            # message stops counting once it is a full window old.
-            freeing = times[count - self._turn_limit]
-            raise TurnLimitError(self._turn_limit, freeing + self._window)
+        count, times = await self._events.count_since(user.id, MESSAGE_USER, now - self._window)
+        limit = self._limit_of(user)
+        if count >= limit:
+            # The message whose expiry leaves limit - 1 in the window frees the next one; a message
+            # stops counting once it is a full window old.
+            freeing = times[count - limit]
+            raise TurnLimitError(limit, freeing + self._window)
 
     async def _run(self, config: RunnableConfig, check_id: str, text: str) -> None:
         try:
             unfinished = await self._close_unfinished_tool_calls(config)
             turn_input = MessagesState(messages=[*unfinished, HumanMessage(text)])
+            # Key: model message id; value: the text its chunks have streamed so far.
+            streamed: dict[str, str] = {}
             async for part in self._graph.astream(
                 turn_input, config, stream_mode=["messages", "updates"], version="v2"
             ):
                 if part["type"] == "messages":
                     message, _metadata = part["data"]
-                    await self._publish_fragment(check_id, message)
+                    await self._publish_text_so_far(check_id, message, streamed)
                 elif part["type"] == "updates":
                     await self._store_replies(check_id, part["data"])
                 else:
@@ -174,10 +199,15 @@ class CheckRunner:
             )
         return closing
 
-    async def _publish_fragment(self, check_id: str, message: BaseMessage) -> None:
-        said = _model_text(message)
+    async def _publish_text_so_far(
+        self, check_id: str, chunk: BaseMessage, streamed: dict[str, str]
+    ) -> None:
+        said = _model_text(chunk)
         if said is not None:
-            await self._sink.publish_live(check_id, MESSAGE_DELTA, said)
+            message_id = said["message_id"]
+            streamed[message_id] = streamed.get(message_id, "") + said["text"]
+            so_far = {"message_id": message_id, "text": streamed[message_id]}
+            await self._sink.publish_live(check_id, MESSAGE_DELTA, so_far)
 
     async def _store_replies(self, check_id: str, update: Mapping[str, MessagesState]) -> None:
         for node_update in update.values():

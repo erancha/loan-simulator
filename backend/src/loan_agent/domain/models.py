@@ -17,16 +17,17 @@ from typing import Any, Literal
 from loan_agent.domain.errors import GoalError, ProfileError
 
 _MONEY_FIELDS = (
+    "savings",
     "net_fixed_income",
     "variable_income",
+    "variable_income_minimum",
     "fixed_expenses",
     "existing_loan_payments",
-    "savings",
 )
 _ENGINE_FIELDS = (
     "net_fixed_income",
     "variable_income",
-    "variable_income_stable",
+    "variable_income_minimum",
     "fixed_expenses",
     "existing_loan_payments",
 )
@@ -70,42 +71,55 @@ class VerifiedToken:
 
 @dataclass(frozen=True)
 class Profile:
-    """The person's monthly finances in ₪ and their savings; None marks a field not yet told."""
+    """The person's monthly finances in ₪ and their savings; None marks a field not yet told,
+    except variable_income_minimum, which stays None without being missing when variable_income
+    is 0: there is no variable income to hold a minimum of. A minimum never exceeds
+    variable_income.
 
+    Fields run from the money already at hand to money coming in and then money going out, the
+    order the profile panel shows and missing() lists them, so the agent asks in that order too."""
+
+    savings: Decimal | None = None
     net_fixed_income: Decimal | None = None
     variable_income: Decimal | None = None
-    variable_income_stable: bool | None = None
+    variable_income_minimum: Decimal | None = None
     fixed_expenses: Decimal | None = None
     existing_loan_payments: Decimal | None = None
-    savings: Decimal | None = None
 
     def missing(self) -> tuple[str, ...]:
-        return tuple(f.name for f in fields(self) if getattr(self, f.name) is None)
+        no_variable_income = self.variable_income == 0
+        return tuple(
+            f.name
+            for f in fields(self)
+            if getattr(self, f.name) is None
+            and not (f.name == "variable_income_minimum" and no_variable_income)
+        )
 
     def merged(self, update: Mapping[str, object]) -> "Profile":
         known = {f.name for f in fields(self)}
         unknown = sorted(set(update) - known)
         if unknown:
             raise ProfileError(f"Unknown profile field: {', '.join(unknown)}")
-        converted: dict[str, Any] = {}
-        for name, value in update.items():
-            if name == "variable_income_stable":
-                if not isinstance(value, bool):
-                    raise ProfileError("variable_income_stable must be true or false")
-                converted[name] = value
-            else:
-                converted[name] = _money(name, value)
-        return replace(self, **converted)
+        converted = {name: _money(name, value) for name, value in update.items()}
+        merged = replace(self, **converted)
+        minimum, variable = merged.variable_income_minimum, merged.variable_income
+        if minimum is not None and variable is not None and minimum > variable:
+            raise ProfileError(
+                f"variable_income_minimum ({minimum}) cannot exceed variable_income ({variable})"
+            )
+        return merged
 
-    def engine_profile(self) -> dict[str, str | bool]:
+    def engine_profile(self) -> dict[str, str]:
         """The engine's Profile arguments; savings stay agent-side (they go to size_loan)."""
         missing = [name for name in self.missing() if name in _ENGINE_FIELDS]
         if missing:
             raise ProfileError(f"Profile is incomplete; still missing: {', '.join(missing)}")
-        result: dict[str, str | bool] = {}
+        result: dict[str, str] = {}
         for name in _ENGINE_FIELDS:
             value = getattr(self, name)
-            result[name] = value if isinstance(value, bool) else str(value)
+            if name == "variable_income_minimum" and value is None:
+                value = Decimal(0)  # missing() lets it stay unset only when variable_income is 0
+            result[name] = str(value)
         return result
 
 
@@ -113,13 +127,10 @@ class Profile:
 class Goal:
     purpose: str
     price: Decimal
-    trade_in_value: Decimal
 
     def __post_init__(self) -> None:
         if self.price <= 0:
             raise GoalError("price must be greater than zero")
-        if self.trade_in_value < 0:
-            raise GoalError("trade_in_value cannot be negative")
 
 
 @dataclass(frozen=True)

@@ -53,7 +53,7 @@ def test_list_shows_only_the_persons_checks_newest_first(world: World, client: T
         {
             "id": "c-rec",
             "created_at": "2026-10-27T09:00:00Z",
-            "goal": {"purpose": "רכב משפחתי", "price": "120000", "trade_in_value": "10000"},
+            "goal": {"purpose": "רכב משפחתי", "price": "120000"},
             "recommendation": {
                 "preferred_option_id": "o1",
                 "alternative_option_id": None,
@@ -76,11 +76,7 @@ def test_get_shows_the_goal_options_with_figures_and_the_recommendation(
     assert response.status_code == 200
     body = response.json()
     assert body["id"] == "c-rec"
-    assert body["goal"] == {
-        "purpose": "רכב משפחתי",
-        "price": "120000",
-        "trade_in_value": "10000",
-    }
+    assert body["goal"] == {"purpose": "רכב משפחתי", "price": "120000"}
     assert body["options"] == [
         {
             "id": "o1",
@@ -213,6 +209,51 @@ def test_a_message_while_a_turn_runs_is_409_naming_the_check(
     gate.opened.set()
     world.drain(client)
     assert client.post(f"/api/checks/{check_id}/messages", json={"text": "ג"}).status_code == 202
+
+
+def test_delete_answers_204_and_removes_the_check_and_its_conversation(
+    world: World, client: TestClient
+) -> None:
+    world.replies(AIMessage("שלום"))
+    check_id = client.post("/api/checks").json()["id"]
+    assert client.post(f"/api/checks/{check_id}/messages", json={"text": "א"}).status_code == 202
+    world.drain(client)
+    assert check_id in world.saver.storage
+
+    assert client.delete(f"/api/checks/{check_id}").status_code == 204
+
+    assert client.get(f"/api/checks/{check_id}").status_code == 404
+    assert client.get("/api/checks").json() == []
+    assert check_id not in world.saver.storage
+    assert client.delete(f"/api/checks/{check_id}").status_code == 404
+
+
+def test_delete_of_another_persons_check_is_404_and_keeps_it(
+    world: World, public_key: Path
+) -> None:
+    with world.client(public_key, token=OMER_TOKEN) as omer:
+        omers = omer.post("/api/checks").json()["id"]
+    with world.client(public_key, token=DANA_TOKEN) as dana:
+        assert dana.delete(f"/api/checks/{omers}").status_code == 404
+    assert omers in world.checks.rows
+
+
+def test_delete_while_a_turn_runs_is_409_and_keeps_the_check(
+    world: World, gate: Gate, client: TestClient
+) -> None:
+    """gate comes before client, so the app is built with the gated tool."""
+    world.replies(calls_size_loan(), AIMessage("בבקשה"))
+    check_id = client.post("/api/checks").json()["id"]
+    assert client.post(f"/api/checks/{check_id}/messages", json={"text": "א"}).status_code == 202
+    assert gate.entered.wait(TIMEOUT_SECONDS)
+
+    response = client.delete(f"/api/checks/{check_id}")
+
+    assert response.status_code == 409
+    assert response.json()["check_id"] == check_id
+    gate.opened.set()
+    world.drain(client)
+    assert client.delete(f"/api/checks/{check_id}").status_code == 204
 
 
 def test_a_message_over_the_cap_is_429_with_retry_after_rounded_up(

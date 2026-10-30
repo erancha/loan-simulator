@@ -26,9 +26,17 @@ from langchain_core.messages.tool import tool_call_chunk
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from pydantic import Field
 
+from loan_agent.adapters.engine_mcp import market_series_of
 from loan_agent.domain.errors import CheckNotFoundError
 from loan_agent.domain.models import Check, Goal, Option, OptionFigures, Profile, Recommendation
-from loan_agent.ports.engine import Bounds, EngineError, Simulation, Sizing
+from loan_agent.ports.engine import (
+    Bounds,
+    EngineError,
+    MarketSeries,
+    OfferTerm,
+    Simulation,
+    Sizing,
+)
 from loan_agent.ports.repositories import CheckIds, EventTimes, StoredEvent
 
 PRIME_TRACK = {
@@ -40,7 +48,16 @@ PRIME_TRACK = {
     "method": "spitzer",
 }
 # The tools the engine in mcp-server/ lists.
-ENGINE_TOOL_NAMES = {"assess_affordability", "size_loan", "simulate_loan", "suggest_tracks"}
+ENGINE_TOOL_NAMES = {
+    "assess_affordability",
+    "size_loan",
+    "simulate_loan",
+    "shortest_comfortable_term",
+    "shortest_comfortable_offer_term",
+    "suggest_tracks",
+    "market_series",
+}
+COMFORTABLE_OFFER_TERM = OfferTerm(term_months=24, comfortable=True)
 ENGINE_FIXTURES = Path(__file__).parent / "adapters" / "fixtures" / "engine"
 NOW = datetime(2026, 10, 27, 9, 0, tzinfo=UTC)
 
@@ -54,7 +71,7 @@ ASSESSED_BOUNDS = Bounds(
     payment_ceiling=Decimal("4700.00"),
     min_cushion=Decimal("18000.00"),
     reasons=(
-        "variable_income_half_counted",
+        "variable_income_minimum_counted",
         "ceiling_by_disposable_income",
         "existing_loans_deducted",
     ),
@@ -124,6 +141,8 @@ class InMemoryProfileRepository:
         return self.rows[user_id]
 
     async def save(self, user_id: str, profile: Profile) -> datetime:
+        if user_id in self.rows and self.rows[user_id][0] == profile:
+            return self.rows[user_id][1]
         saved_at = self._clock()
         self.rows[user_id] = (profile, saved_at)
         return saved_at
@@ -132,6 +151,7 @@ class InMemoryProfileRepository:
 class InMemoryCheckRepository:
     def __init__(self) -> None:
         self.rows: dict[str, Check] = {}
+        self.event_store: InMemoryCheckEventStore | None = None
 
     async def add(self, check: Check) -> None:
         self.rows[check.id] = check
@@ -145,6 +165,13 @@ class InMemoryCheckRepository:
     async def list(self, user_id: str) -> list[Check]:
         mine = [check for check in self.rows.values() if check.user_id == user_id]
         return sorted(mine, key=lambda check: check.created_at, reverse=True)
+
+    async def delete(self, check_id: str, kept_type: str, kept_since: datetime) -> None:
+        """Options and recommendations stay in their fakes, where nothing reaches them without
+        the check; the Postgres tests prove they go."""
+        check = self.rows.pop(check_id)
+        assert self.event_store is not None
+        self.event_store.forget(check, kept_type, kept_since)
 
     async def set_goal(self, check_id: str, goal: Goal) -> None:
         self.rows[check_id] = replace(self.rows[check_id], goal=goal)
@@ -186,6 +213,9 @@ class InMemoryCheckEventStore:
         self._checks = checks
         self._clock = clock
         self.rows: dict[str, list[StoredEvent]] = {}
+        checks.event_store = self
+        # Key: person and event type. Value: the kept times of a deleted check's events.
+        self._kept: dict[tuple[str, str], list[datetime]] = {}
 
     async def append(self, check_id: str, type: str, data: Mapping[str, object]) -> int:
         if check_id not in self._checks.rows:
@@ -205,39 +235,53 @@ class InMemoryCheckEventStore:
             for event in log
             if event.type == type and event.created_at > since
         )
+        kept = [time for time in self._kept.get((user_id, type), []) if time > since]
+        times = sorted(times + kept)
         return len(times), times
 
-    async def checks_ending_with(self, type: str, data: Mapping[str, object]) -> CheckIds:
-        return sorted(
-            check_id
-            for check_id, log in self.rows.items()
-            if log and (log[-1].type, log[-1].data) == (type, data)
-        )
+    def forget(self, check: Check, kept_type: str, kept_since: datetime) -> None:
+        self._kept[(check.user_id, kept_type)] = [
+            *self._kept.get((check.user_id, kept_type), []),
+            *(
+                event.created_at
+                for event in self.rows.pop(check.id, [])
+                if event.type == kept_type and event.created_at > kept_since
+            ),
+        ]
+
+    async def checks_whose_latest(self, type: str, data: Mapping[str, object]) -> CheckIds:
+        latest = {}
+        for check_id, log in self.rows.items():
+            of_type = [event for event in log if event.type == type]
+            if of_type:
+                latest[check_id] = of_type[-1].data
+        return sorted(check_id for check_id, found in latest.items() if found == data)
 
 
 @dataclass
 class FakeLoanEngine:
-    """simulations are answered in order; simulate_error, when set, is raised instead."""
+    """simulations are answered in order; simulate_error and market_error, when set, are raised
+    instead; market_series answers from the captured engine result."""
 
     bounds: Bounds = ASSESSED_BOUNDS
     sizing: Sizing = SIZED_LOAN
     simulations: list[Simulation] = field(default_factory=list)
     simulate_error: EngineError | None = None
+    market_error: EngineError | None = None
+    offer_terms: OfferTerm = COMFORTABLE_OFFER_TERM
+    offer_term_error: EngineError | None = None
     calls: list[tuple[str, Mapping[str, object]]] = field(default_factory=list)
 
     async def assess(self, profile: Mapping[str, object]) -> Bounds:
         self.calls.append(("assess", profile))
         return self.bounds
 
-    async def size(
-        self, goal_price: Decimal, trade_in_value: Decimal, savings: Decimal, min_cushion: Decimal
-    ) -> Sizing:
+    async def size(self, goal_price: Decimal, savings: Decimal, min_cushion: Decimal) -> Sizing:
         self.calls.append(
             (
                 "size",
                 {
                     "goal_price": goal_price,
-                    "trade_in_value": trade_in_value,
                     "savings": savings,
                     "min_cushion": min_cushion,
                 },
@@ -254,6 +298,18 @@ class FakeLoanEngine:
     async def suggest(self, principal: Decimal, term_months: int) -> list[Mapping[str, object]]:
         tracks: list[Mapping[str, object]] = engine_fixture("suggest_tracks")["tracks"]
         return tracks
+
+    async def offer_term(self, track: Mapping[str, object], payment_ceiling: Decimal) -> OfferTerm:
+        self.calls.append(("offer_term", {"track": track, "payment_ceiling": payment_ceiling}))
+        if self.offer_term_error is not None:
+            raise self.offer_term_error
+        return self.offer_terms
+
+    async def market_series(self, months: int) -> MarketSeries:
+        self.calls.append(("market_series", {"months": months}))
+        if self.market_error is not None:
+            raise self.market_error
+        return market_series_of(engine_fixture("market_series"))
 
 
 @dataclass(frozen=True)

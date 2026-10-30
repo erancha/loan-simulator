@@ -24,7 +24,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from fakes import ENGINE_TOOL_NAMES
 from loan_agent.adapters.engine_mcp import McpLoanEngine
-from loan_agent.ports.engine import Bounds, EngineError, Sizing
+from loan_agent.ports.engine import Bounds, EngineError, MarketPoint, OfferTerm, Sizing
 
 FIXTURES = Path(__file__).parent / "fixtures" / "engine"
 TOKEN = "0123456789abcdef" * 3
@@ -74,12 +74,9 @@ def _stub_server(calls: list[tuple[str, dict[str, Any]]]) -> FastMCP:
         return _result(bounds, json.dumps(bounds))
 
     @server.tool()
-    def size_loan(
-        goal_price: str, trade_in_value: str, savings: str, min_cushion: str
-    ) -> CallToolResult:
+    def size_loan(goal_price: str, savings: str, min_cushion: str) -> CallToolResult:
         arguments = {
             "goal_price": goal_price,
-            "trade_in_value": trade_in_value,
             "savings": savings,
             "min_cushion": min_cushion,
         }
@@ -108,6 +105,30 @@ def _stub_server(calls: list[tuple[str, dict[str, Any]]]) -> FastMCP:
         calls.append(("suggest_tracks", {"principal": str(principal), "term_months": term_months}))
         suggestions = _fixture("suggest_tracks")
         return _result(suggestions, json.dumps(suggestions))
+
+    @server.tool()
+    def shortest_comfortable_term(principal: str, payment_ceiling: str) -> CallToolResult:
+        term = {"term_months": 24, "payment_limit": "1800.00"}
+        return _result(term, json.dumps(term))
+
+    @server.tool()
+    def shortest_comfortable_offer_term(
+        track: dict[str, Any], payment_ceiling: str
+    ) -> CallToolResult:
+        calls.append(
+            (
+                "shortest_comfortable_offer_term",
+                {"track": track, "payment_ceiling": payment_ceiling},
+            )
+        )
+        term = {"term_months": 24, "comfortable": True, "payment_limit": "1800.00"}
+        return _result(term, json.dumps(term))
+
+    @server.tool()
+    def market_series(prime_months: int, cpi_months: int) -> CallToolResult:
+        calls.append(("market_series", {"prime_months": prime_months, "cpi_months": cpi_months}))
+        series = _fixture("market_series")
+        return _result(series, json.dumps(series))
 
     return server
 
@@ -152,11 +173,24 @@ def engine(stub: StubEngine) -> McpLoanEngine:
     return McpLoanEngine(stub.url, TOKEN)
 
 
+async def test_offer_term_sends_the_track_and_parses_the_term(
+    engine: McpLoanEngine, stub: StubEngine
+) -> None:
+    track = {"principal": "32000", "term_months": 84}
+
+    term = await engine.offer_term(track, Decimal(2000))
+
+    assert term == OfferTerm(term_months=24, comfortable=True)
+    assert stub.calls == [
+        ("shortest_comfortable_offer_term", {"track": track, "payment_ceiling": "2000"})
+    ]
+
+
 async def test_assess_parses_bounds(engine: McpLoanEngine, stub: StubEngine) -> None:
     profile = {
         "net_fixed_income": "18000",
         "variable_income": "4000",
-        "variable_income_stable": True,
+        "variable_income_minimum": "2000",
         "fixed_expenses": "9000",
         "existing_loan_payments": "800",
     }
@@ -167,7 +201,7 @@ async def test_assess_parses_bounds(engine: McpLoanEngine, stub: StubEngine) -> 
         payment_ceiling=Decimal("4700.00"),
         min_cushion=Decimal("18000.00"),
         reasons=(
-            "variable_income_half_counted",
+            "variable_income_minimum_counted",
             "ceiling_by_disposable_income",
             "existing_loans_deducted",
         ),
@@ -179,8 +213,7 @@ async def test_size_sends_decimal_strings_and_parses_sizing(
     engine: McpLoanEngine, stub: StubEngine
 ) -> None:
     sizing = await engine.size(
-        goal_price=Decimal(160000),
-        trade_in_value=Decimal(40000),
+        goal_price=Decimal(120000),
         savings=Decimal(70000),
         min_cushion=Decimal("30000.00"),
     )
@@ -195,8 +228,7 @@ async def test_size_sends_decimal_strings_and_parses_sizing(
         (
             "size_loan",
             {
-                "goal_price": "160000",
-                "trade_in_value": "40000",
+                "goal_price": "120000",
                 "savings": "70000",
                 "min_cushion": "30000.00",
             },
@@ -238,6 +270,16 @@ async def test_suggest_returns_engine_tracks(engine: McpLoanEngine, stub: StubEn
 
     assert tracks == _fixture("suggest_tracks")["tracks"]
     assert stub.calls == [("suggest_tracks", {"principal": "80000", "term_months": 48})]
+
+
+async def test_market_series_parses_both_series(engine: McpLoanEngine, stub: StubEngine) -> None:
+    market = await engine.market_series(60)
+
+    assert stub.calls == [("market_series", {"prime_months": 60, "cpi_months": 60})]
+    assert (len(market.prime), len(market.cpi_change)) == (60, 12)
+    assert market.prime[-1] == MarketPoint(date(2026, 10, 1), Decimal("4.75"))
+    assert market.cpi_change[-1] == MarketPoint(date(2026, 9, 1), Decimal("-0.5"))
+    assert (market.rate_as_of, market.cpi_as_of) == (date(2026, 10, 30), date(2026, 9, 1))
 
 
 async def test_tool_error_raises_engine_error_with_message(engine: McpLoanEngine) -> None:

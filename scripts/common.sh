@@ -8,6 +8,7 @@ ENGINE="$ROOT/mcp-server"
 ENGINE_VENV="$ENGINE/.venv"
 BACKEND="$ROOT/backend"
 BACKEND_VENV="$BACKEND/.venv"
+FRONTEND="$ROOT/frontend"
 ENV_FILE="$ROOT/.env"
 COMPOSE_FILE="$ROOT/docker-compose.yml"
 # Print the calling script's header comment block as --help text (single source of usage docs).

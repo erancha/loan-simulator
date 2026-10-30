@@ -39,7 +39,8 @@ class ProfileRepository(Protocol):
 
     async def save(self, user_id: str, profile: Profile) -> datetime:
         """Replaces the stored profile; returns the save time, which snapshot_profile records on a
-        check to tell later saves apart."""
+        check to tell later saves apart. A save of the same values keeps the stored time, so
+        repeating the figures marks no check stale."""
         ...
 
 
@@ -53,6 +54,12 @@ class CheckRepository(Protocol):
 
     async def list(self, user_id: str) -> list[Check]:
         """Newest first."""
+        ...
+
+    async def delete(self, check_id: str, kept_type: str, kept_since: datetime) -> None:
+        """Deletes the check, its options, its recommendation and its events together. Only the
+        person and the time of its kept_type events after kept_since stay, for count_since; they
+        go at a later delete that finds them older than its own kept_since."""
         ...
 
     async def set_goal(self, check_id: str, goal: Goal) -> None: ...
@@ -95,9 +102,9 @@ class CheckEventStore(Protocol):
 
     async def count_since(self, user_id: str, type: str, since: datetime) -> tuple[int, EventTimes]:
         """How many events of this type the person logged strictly after the given time, across
-        all their checks, with their times in ascending order."""
+        all their checks, deleted ones included, with their times in ascending order."""
         ...
 
-    async def checks_ending_with(self, type: str, data: Mapping[str, object]) -> CheckIds:
-        """Ids of the checks, of every person, whose latest event has this type and data."""
+    async def checks_whose_latest(self, type: str, data: Mapping[str, object]) -> CheckIds:
+        """Ids of the checks, of every person, whose latest event of this type has this data."""
         ...

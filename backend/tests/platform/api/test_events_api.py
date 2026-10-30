@@ -143,7 +143,7 @@ def test_the_stream_replays_after_last_event_id_then_streams_live(
     stored = [frame for frame in live if frame["type"] != "message.delta"]
     assert len(deltas) > 1
     assert not [frame for frame in deltas if "id" in frame]
-    assert "".join(frame["data"]["text"] for frame in deltas) == SECOND_REPLY
+    assert deltas[-1]["data"]["text"] == SECOND_REPLY
     assert [(frame["id"], frame["type"]) for frame in stored] == [
         (5, "message.user"),
         (6, "turn.status"),

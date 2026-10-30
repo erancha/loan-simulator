@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Self
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, PositiveInt, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from loan_agent.adapters.google_tokens import GOOGLE_ISSUER, GOOGLE_JWKS_URL
@@ -39,11 +39,25 @@ class Settings(BaseSettings):
     """The engine's MCP endpoint, path included (e.g. http://engine:8020/mcp)."""
     engine_bearer_token: SecretStr
     """The engine's own ENGINE_BEARER_TOKEN, presented on every engine call."""
-    agent_turn_limit: int = Field(default=50, gt=0)
+    agent_turn_limit: int = Field(default=20, gt=0)
     """Messages a person may send, across all their checks, in any rolling window of
     agent_turn_window_hours."""
+    agent_turn_limit_overrides: dict[str, PositiveInt] = Field(default_factory=dict)
+    """Key: a person's email, lowercase. Value: the limit that replaces agent_turn_limit for
+    them."""
     agent_turn_window_hours: int = Field(default=24, gt=0)
     agent_log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "WARNING"
+    agent_frontend_dist: Path | None = None
+    """The built page to serve at /, mounted after the API routes; unset when only the API runs
+    (tests, a Vite dev server in front)."""
+
+    @field_validator("agent_turn_limit_overrides")
+    @classmethod
+    def _require_lowercase_emails(cls, overrides: dict[str, int]) -> dict[str, int]:
+        mixed = [email for email in overrides if email != email.lower()]
+        if mixed:
+            raise ValueError(f"AGENT_TURN_LIMIT_OVERRIDES keys must be lowercase: {mixed}")
+        return overrides
 
     @model_validator(mode="after")
     def _require_supported_model(self) -> Self:

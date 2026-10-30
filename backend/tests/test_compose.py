@@ -19,6 +19,9 @@ COMPOSE = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8
 SERVICES = COMPOSE["services"]
 # Read by the image's command rather than by Settings: the port it serves on.
 AGENT_IMAGE_KEYS = {"AGENT_PORT"}
+# Set by the agent image's Dockerfile ENV to its own copy of the page; a host path in .env would
+# replace it.
+IMAGE_SET_KEYS = {"AGENT_FRONTEND_DIST"}
 
 
 def test_every_published_port_binds_to_loopback_through_variables() -> None:
@@ -87,7 +90,8 @@ def test_the_network_addresses_override_the_host_forms_in_env() -> None:
 
 def test_each_container_receives_only_the_keys_it_reads() -> None:
     assert not [name for name, spec in SERVICES.items() if "env_file" in spec]
-    agent_keys = {name.upper() for name in Settings.model_fields} | AGENT_IMAGE_KEYS
+    settings_keys = {name.upper() for name in Settings.model_fields}
+    agent_keys = (settings_keys - IMAGE_SET_KEYS) | AGENT_IMAGE_KEYS
     assert set(SERVICES["agent"]["environment"]) == agent_keys
     assert set(SERVICES["migrate"]["environment"]) == {"DATABASE_URL"}
 

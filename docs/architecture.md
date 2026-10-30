@@ -3,7 +3,8 @@
 How the loan simulator is built, and why. This page maps what the repo holds and marks what it
 does not yet. Formulas and policy numbers are in [calculations.md](calculations.md), the market
 data in [market-data.md](market-data.md), the agent in
-[architecture/agent.md](architecture/agent.md), sign-in in [sign-in.md](sign-in.md), and how each
+[architecture/agent.md](architecture/agent.md), the page in
+[architecture/page.md](architecture/page.md), sign-in in [sign-in.md](sign-in.md), and how each
 part is tested in [testing.md](testing.md).
 
 ## Parts
@@ -12,8 +13,8 @@ part is tested in [testing.md](testing.md).
 |---|---|
 | Loan engine, `mcp-server/` | Implemented. |
 | Agent, `backend/` | Implemented: [architecture/agent.md](architecture/agent.md). |
-| Page, `frontend/` | OPEN — not yet implemented. |
-| Evals | OPEN — not yet implemented. |
+| Page, `frontend/` | Implemented: [architecture/page.md](architecture/page.md). |
+| Evals | OPEN — not yet implemented (#2). |
 
 ## The loan engine
 
@@ -64,6 +65,14 @@ How a conversation runs, the guardrail, the turn cap and the events are in
 [architecture/agent.md](architecture/agent.md). One Postgres holds the agent's tables and the
 LangGraph checkpoints.
 
+## The page
+
+A React app in `frontend/` that the agent serves from the same origin as its API. It holds no
+data the agent does not hold: one event stream per open check feeds a reducer, and
+the conversation and the recommendation card render from the reducer's state. The layout, the
+data flow, where each figure on the card comes from and how the build reaches the agent image are
+in [architecture/page.md](architecture/page.md).
+
 ## Configuration
 
 Settings come from environment variables, which Compose reads from `.env` at the repo root: the
@@ -89,7 +98,8 @@ does not read. `ENGINE_BEARER_TOKEN` is defined once and read by both services.
   completed and `engine` is healthy (it accepts connections, which is after its market data
   fetch). Compose overrides `DATABASE_URL` and `ENGINE_URL` with the in-network addresses
   (`db:<DB_PORT>`, `engine:<ENGINE_PORT>`); `.env` holds the host forms. Its healthcheck calls
-  `/health`.
+  `/health`. A Node stage of its Dockerfile builds `frontend/` into the image, and the agent
+  serves the result at `/`.
 
 Three ports are published, each on `127.0.0.1` only through its `.env` variable (the reason is in
 the header of `docker-compose.yml`; `backend/tests/test_compose.py` checks it): `ENGINE_HOST_PORT`

@@ -1,32 +1,36 @@
 """The agent loop: a language model leads the Hebrew conversation and calls the engine's tools and
-the check tools until it has a reply for the person; each check's conversation is one checkpoint
-thread.
+the check tools until it has a reply for the person or has asked them a question through ask;
+each check's conversation is one checkpoint thread.
 
 - build_agent_graph: the model node and the tool node over the thread's messages, as an AgentGraph
 - check_config: the run configuration naming the person and the check, with the turn's step
   limit
-- SYSTEM_PROMPT: the Hebrew instructions sent ahead of the messages on every model call
+- delete_conversation: removes a check's saved conversation from the graph's checkpointer
+- SYSTEM_PROMPT: the Hebrew instructions sent ahead of the messages on every model call, followed
+  by the turn_state block of the person's stored figures
 - The check tools' argument schemas, with money as decimal strings like the engine's own schema
 
 The person and the check come from the run configuration, never from the model's arguments, so
 the model can only act on the check it is talking about.
 """
 
+import re
 from collections.abc import Sequence
 from importlib.resources import files
-from typing import Any, Literal
+from typing import Annotated, Any, Literal, Self
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, StructuredTool, ToolException
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.prebuilt import ToolNode, tools_condition
-from pydantic import BaseModel, ConfigDict, Field
+from langgraph.prebuilt import InjectedState, ToolNode, tools_condition
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from loan_agent.application.check_tools import CheckTools, ToolDeps, ToolError
+from loan_agent.application.check_tools import ChartSeries, CheckTools, ToolDeps, ToolError
+from loan_agent.application.turn_state import turn_state
 from loan_agent.domain.models import OptionSource
 
 SYSTEM_PROMPT = (files(__package__) / "prompts" / "system_he.md").read_text(encoding="utf-8")
@@ -36,6 +40,18 @@ SYSTEM_PROMPT = (files(__package__) / "prompts" / "system_he.md").read_text(enco
 # limit stops a model that keeps calling tools after about 20 model calls; the per-person message
 # cap (Settings.agent_turn_limit) bounds messages, not the model calls inside one.
 TURN_STEP_LIMIT = 40
+
+RECOMMENDATION_HEADING = "ההמלצה שלי"
+"""The section of a reply that recommends, as the system prompt writes it. The person's card
+changes only through present_recommendation, so this section without that call is a false
+promise."""
+_RECOMMENDATION_SECTION = re.compile(rf"^\W*{RECOMMENDATION_HEADING}\W*$", re.MULTILINE)
+_REDO_THE_RECOMMENDATION = (
+    "Your reply was discarded and the person did not see it: it has a recommendation section, but "
+    "present_recommendation did not succeed in this turn, so nothing was calculated or saved. Make "
+    "the calls the recommendation needs, ending with present_recommendation, and write the reply "
+    "from their results. If no recommendation is possible, write the reply without that section."
+)
 
 _USER_ID = "user_id"
 # The checkpoint thread of a check is named by the check's id.
@@ -62,29 +78,31 @@ class _Args(BaseModel):
 
 
 class UpdateProfileArgs(_Args):
+    savings: str | None = _optional_money(
+        "All liquid money for the purchase, including what selling an old car brings, ₪ "
+        "(an amount, not per month)"
+    )
     net_fixed_income: str | None = _optional_money(
         "Fixed income after tax, from the payslip, ₪ per month"
     )
     variable_income: str | None = _optional_money(
         "Income that varies (tips, bonuses, freelance work), net, ₪ per month on average"
     )
-    variable_income_stable: bool | None = Field(
-        default=None,
-        description="true when the variable income is steady month to month; omit when not told",
+    variable_income_minimum: str | None = _optional_money(
+        "The part of the variable income that arrives even in a weak month, at most the average "
+        "variable income, net, ₪ per month"
     )
     fixed_expenses: str | None = _optional_money(
-        "Rent, bills and other recurring spending, ₪ per month"
+        "Rent, bills, shopping, leisure and other recurring spending, ₪ per month"
     )
     existing_loan_payments: str | None = _optional_money(
-        "Payments on loans already running, ₪ per month"
+        "Payments on running loans with more than 3 months left, ₪ per month"
     )
-    savings: str | None = _optional_money("Total savings, ₪ (an amount, not per month)")
 
 
 class SetGoalArgs(_Args):
     purpose: str = Field(description="What the loan is for, in the person's words")
     price: str = _money("Price of the purchase, ₪")
-    trade_in_value: str = _money("Value of what the person trades in, ₪; '0' if nothing")
 
 
 class TrackArgs(_Args):
@@ -128,6 +146,12 @@ class SaveOptionArgs(_Args):
     offer_date: str | None = Field(
         default=None, description="Date of the offer, ISO like 2026-10-20; offers only"
     )
+    max_term_months: int | None = Field(
+        default=None,
+        description="The longest term of an offer that leaves the term open ('up to 84 months'), "
+        "with term_months the term shortest_comfortable_offer_term gave; omit when the offer "
+        "fixes the term or the person chose it",
+    )
 
 
 class PresentRecommendationArgs(_Args):
@@ -136,6 +160,65 @@ class PresentRecommendationArgs(_Args):
     alternative_option_id: str | None = Field(
         default=None, description="option_id of a second choice, if any"
     )
+
+
+QuestionField = Literal[
+    "purpose",
+    "price",
+    "savings",
+    "net_fixed_income",
+    "variable_income",
+    "variable_income_minimum",
+    "fixed_expenses",
+    "existing_loan_payments",
+]
+
+
+class AskQuestion(_Args):
+    field: QuestionField | None = Field(
+        default=None,
+        description="The profile or goal field asked for; the page shows its own control. "
+        "Omit when asking a free question with text",
+    )
+    text: str | None = Field(
+        default=None,
+        min_length=1,
+        description="A free question in Hebrew; omit when asking for a field",
+    )
+    choices: list[str] | None = Field(
+        default=None,
+        min_length=2,
+        description="Two or more answers to pick from, in Hebrew; free questions only",
+    )
+
+    @model_validator(mode="after")
+    def _one_of_field_and_text(self) -> Self:
+        if (self.field is None) == (self.text is None):
+            raise ValueError("give exactly one of field and text")
+        if self.choices is not None and self.text is None:
+            raise ValueError("choices go with a free question in text, not with a field")
+        return self
+
+
+class ShowChartArgs(_Args):
+    series: ChartSeries = Field(
+        description="'prime' for the prime rate by month, 'cpi' for the consumer price index's "
+        "monthly change"
+    )
+    months: int = Field(description="How many latest months to draw, at most 120")
+
+
+class AskArgs(_Args):
+    question: AskQuestion
+    lead_in: str | None = Field(
+        default=None,
+        description=(
+            "Usually left out: the page shows the field's own label and hint. Only a short "
+            "Hebrew condition the label does not state; never why the figure is needed"
+        ),
+    )
+    # Filled by the tool node from the graph state and hidden from the model's schema.
+    state: Annotated[MessagesState, InjectedState]
 
 
 AgentGraph = CompiledStateGraph[MessagesState, None, MessagesState, MessagesState]
@@ -148,6 +231,11 @@ def check_config(user_id: str, check_id: str) -> RunnableConfig:
     }
 
 
+async def delete_conversation(graph: AgentGraph, check_id: str) -> None:
+    assert isinstance(graph.checkpointer, BaseCheckpointSaver)
+    await graph.checkpointer.adelete_thread(check_id)
+
+
 def _tools_for(config: RunnableConfig, deps: ToolDeps) -> CheckTools:
     configurable = config["configurable"]
     return CheckTools(configurable[_USER_ID], configurable[_CHECK_ID], deps)
@@ -158,10 +246,8 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
         told = {name: value for name, value in fields.items() if value is not None}
         return await _tools_for(config, deps).update_profile(**told)
 
-    async def set_goal(
-        purpose: str, price: str, trade_in_value: str, config: RunnableConfig
-    ) -> str:
-        return await _tools_for(config, deps).set_goal(purpose, price, trade_in_value)
+    async def set_goal(purpose: str, price: str, config: RunnableConfig) -> str:
+        return await _tools_for(config, deps).set_goal(purpose, price)
 
     async def save_option(
         loan: LoanArgs,
@@ -169,9 +255,10 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
         config: RunnableConfig,
         lender: str | None = None,
         offer_date: str | None = None,
+        max_term_months: int | None = None,
     ) -> str:
         return await _tools_for(config, deps).save_option(
-            loan.model_dump(exclude_none=True), source, lender, offer_date
+            loan.model_dump(exclude_none=True), source, lender, offer_date, max_term_months
         )
 
     async def present_recommendation(
@@ -183,6 +270,21 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
         return await _tools_for(config, deps).present_recommendation(
             preferred_option_id, reasoning, alternative_option_id
         )
+
+    async def show_chart(series: str, months: int, config: RunnableConfig) -> str:
+        return await _tools_for(config, deps).show_chart(series, months)
+
+    async def ask(
+        question: AskQuestion,
+        config: RunnableConfig,
+        state: Annotated[MessagesState, InjectedState],
+        lead_in: str | None = None,
+    ) -> str:
+        if _ask_call_count(state) > 1:
+            raise ToolException(
+                "one question per turn: call ask once, with the one question to ask now"
+            )
+        return await _tools_for(config, deps).ask(question.model_dump(), lead_in)
 
     return [
         StructuredTool.from_function(
@@ -204,7 +306,10 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
             coroutine=save_option,
             name="save_option",
             description="Price a loan with the engine and keep it as an option of this check. "
-            "Returns its option_id and figures.",
+            "Returns its option_id and figures. An example (source published_average) is "
+            "refused until the whole profile is known, and when its worst-case payment is above "
+            "the payment ceiling; a real offer is kept whatever its payment. An offer with "
+            "max_term_months is refused at any term but its shortest comfortable one.",
             args_schema=SaveOptionArgs,
         ),
         StructuredTool.from_function(
@@ -212,10 +317,73 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
             name="present_recommendation",
             description="Present the recommendation card: the preferred option and an optional "
             "alternative, with your reasoning. Refused, with the reason, when an option is "
-            "outside the engine's bounds.",
+            "outside the engine's bounds, or when an example is preferred over a real offer "
+            "within them.",
             args_schema=PresentRecommendationArgs,
         ),
+        StructuredTool.from_function(
+            coroutine=ask,
+            name="ask",
+            description="Ask the person one question. The page shows it with the right control "
+            "and a skip, and the turn ends; the answer arrives as their next message. A profile "
+            "field already known is refused.",
+            args_schema=AskArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=show_chart,
+            name="show_chart",
+            description="Draw a chart of the prime or of the CPI's monthly change for the latest "
+            "months in the conversation, from the market data the loans are priced with. Use it "
+            "when the person asks to see how the prime or prices moved.",
+            args_schema=ShowChartArgs,
+        ),
     ]
+
+
+def _last_ai_message(state: MessagesState) -> AIMessage:
+    return next(m for m in reversed(state["messages"]) if isinstance(m, AIMessage))
+
+
+def _ask_call_ids(state: MessagesState) -> set[str | None]:
+    return {call["id"] for call in _last_ai_message(state).tool_calls if call["name"] == "ask"}
+
+
+def _ask_call_count(state: MessagesState) -> int:
+    return sum(call["name"] == "ask" for call in _last_ai_message(state).tool_calls)
+
+
+def _recommends_without_the_tool(reply: AIMessage, messages: Sequence[BaseMessage]) -> bool:
+    """A model can write the recommendation as text and skip the tools. The check runs before the
+    reply reaches the conversation, so a discarded reply is never stored; a second one stands
+    whatever it says, because a reply about a case with no recommendation may share the heading."""
+    if reply.tool_calls or _RECOMMENDATION_SECTION.search(reply.text) is None:
+        return False
+    for message in reversed(messages):
+        if isinstance(message, HumanMessage):
+            return True
+        if (
+            isinstance(message, ToolMessage)
+            and message.name == "present_recommendation"
+            and message.status != "error"
+        ):
+            return False
+    raise AssertionError("a turn starts with the person's message")
+
+
+def _after_tools(state: MessagesState) -> Literal["model", "__end__"]:
+    """Ends the turn once ask put a question on the person's screen; a refused ask, like any other
+    tool result, goes back to the model."""
+    asked = _ask_call_ids(state)
+    for message in reversed(state["messages"]):
+        if isinstance(message, AIMessage):
+            break
+        if (
+            isinstance(message, ToolMessage)
+            and message.tool_call_id in asked
+            and message.status != "error"
+        ):
+            return "__end__"
+    return "model"
 
 
 def _tool_error_text(error: ToolError | ToolException) -> str:
@@ -234,7 +402,14 @@ def build_agent_graph(
     bound = model.bind_tools(tools)
 
     async def call_model(state: MessagesState, config: RunnableConfig) -> MessagesState:
-        reply = await bound.ainvoke([SystemMessage(SYSTEM_PROMPT), *state["messages"]], config)
+        configurable = config["configurable"]
+        block = await turn_state(configurable[_USER_ID], configurable[_CHECK_ID], tool_deps)
+        prefix = [SystemMessage(SYSTEM_PROMPT), SystemMessage(block)]
+        conversation = [*prefix, *state["messages"]]
+        reply = await bound.ainvoke(conversation, config)
+        if _recommends_without_the_tool(reply, state["messages"]):
+            correction = HumanMessage(_REDO_THE_RECOMMENDATION)
+            reply = await bound.ainvoke([*conversation, reply, correction], config)
         return {"messages": [reply]}
 
     builder = StateGraph(MessagesState)
@@ -242,5 +417,5 @@ def build_agent_graph(
     builder.add_node("tools", ToolNode(tools, handle_tool_errors=_tool_error_text))
     builder.add_edge(START, "model")
     builder.add_conditional_edges("model", tools_condition, ["tools", END])
-    builder.add_edge("tools", "model")
+    builder.add_conditional_edges("tools", _after_tools, ["model", END])
     return builder.compile(checkpointer=checkpointer)

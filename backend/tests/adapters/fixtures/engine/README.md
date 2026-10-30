@@ -6,11 +6,14 @@ of that day: rate as of 2026-10-26, CPI as of 2026-09, consumer loan average as 
 
 Each file holds the result of one call:
 
-- `assess_affordability.json`: net fixed income 18000, variable 4000 (stable), fixed expenses
+- `assess_affordability.json`: net fixed income 18000, variable 4000 (minimum 2000), fixed expenses
   9000, existing loans 800
-- `size_loan.json`: price 160000, trade-in 40000, savings 70000, cushion 30000
+- `size_loan.json`: price 120000, savings 70000, cushion 30000
 - `simulate_loan_unlinked_prime.json`: one track, 80000 over 48 months, prime + 1.5, unlinked,
   spitzer
 - `simulate_loan_linked_balloon.json`: one track, 80000 over 48 months, fixed 4.9%, CPI-linked,
   balloon 30000
 - `suggest_tracks.json`: principal 80000, 48 months
+- `market_series.json`: prime_months 60, cpi_months 12, captured on 2026-10-30 from the engine's
+  stored market data (rate as of 2026-10-30, CPI as of 2026-09); the prime ends at 2026-10 with
+  today's prime, the CPI at 2026-09

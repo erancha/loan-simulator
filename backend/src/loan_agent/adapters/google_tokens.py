@@ -10,7 +10,7 @@ Google issues its ID tokens under "https://accounts.google.com" and also the bar
 "accounts.google.com"; the verifier accepts the bare form only for Google's issuer.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol, Self
 
@@ -57,6 +57,12 @@ class StaticKey:
         return self._key
 
 
+# Google's clock and this machine's differ by seconds, so a token arriving right after it was
+# issued can carry an issue time still ahead of the local clock; the tolerance applies to the
+# expiry the same way.
+CLOCK_SKEW = timedelta(seconds=60)
+
+
 class GoogleTokenVerifier:
     def __init__(self, client_id: str, issuer: str, keys: KeySource) -> None:
         self._client_id = client_id
@@ -72,6 +78,7 @@ class GoogleTokenVerifier:
                 audience=self._client_id,
                 issuer=self._issuers,
                 options={"require": ["exp", "iat", "sub", "aud", "iss"]},
+                leeway=CLOCK_SKEW,
             )
         except jwt.ExpiredSignatureError as error:
             raise InvalidTokenError("the sign-in has expired") from error

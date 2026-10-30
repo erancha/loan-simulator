@@ -69,3 +69,16 @@ class CheckEventRow(Base):
     user_id: Mapped[str] = mapped_column(Text)
     """The check's owner, repeated so the per-person message count needs no join."""
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DeletedEventTimeRow(Base):
+    """When a deleted check's event happened, with no content, so a count over time still sees it
+    until it falls out of the counted window."""
+
+    __tablename__ = "deleted_event_times"
+    __table_args__ = (Index("deleted_event_times_user_type_time", "user_id", "type", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[str] = mapped_column(Text)
+    type: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

@@ -25,12 +25,14 @@ from contextlib import (
     contextmanager,
 )
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import FrameType
 from typing import Any
 
 import structlog
 from fastapi import FastAPI, status
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from loan_agent.adapters.chat_model import build_chat_model
@@ -198,6 +200,7 @@ def create_app(
                 opened.events,
                 sink,
                 turn_limit=settings.agent_turn_limit,
+                turn_limit_overrides=settings.agent_turn_limit_overrides,
                 window=timedelta(hours=settings.agent_turn_window_hours),
                 clock=opened.clock,
             )
@@ -249,4 +252,14 @@ def create_app(
             )
         return JSONResponse({"status": "ok"})
 
+    # After the routers, so API paths take precedence over the catch-all mount.
+    if settings.agent_frontend_dist is not None:
+        _mount_frontend(app, settings.agent_frontend_dist)
     return app
+
+
+def _mount_frontend(app: FastAPI, dist: Path) -> None:
+    """Serves the built page's folder at /; refuses a folder without index.html."""
+    if not (dist / "index.html").is_file():
+        raise FileNotFoundError(f"AGENT_FRONTEND_DIST={dist} has no index.html; build the frontend")
+    app.mount("/", StaticFiles(directory=dist, html=True), name="frontend")

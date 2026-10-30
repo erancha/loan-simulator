@@ -12,12 +12,12 @@ from fakes import NOW
 from loan_agent.domain.models import Profile
 
 ALL_FIELDS = [
+    "savings",
     "net_fixed_income",
     "variable_income",
-    "variable_income_stable",
+    "variable_income_minimum",
     "fixed_expenses",
     "existing_loan_payments",
-    "savings",
 ]
 
 
@@ -36,7 +36,7 @@ def test_put_updates_only_the_fields_sent(world: World, client: TestClient) -> N
 
     response = client.put(
         "/api/profile",
-        json={"net_fixed_income": "14000.50", "variable_income_stable": True},
+        json={"net_fixed_income": "14000.50", "variable_income_minimum": "500"},
     )
 
     assert response.status_code == 200
@@ -44,7 +44,7 @@ def test_put_updates_only_the_fields_sent(world: World, client: TestClient) -> N
         "profile": {
             "net_fixed_income": "14000.50",
             "variable_income": None,
-            "variable_income_stable": True,
+            "variable_income_minimum": "500",
             "fixed_expenses": None,
             "existing_loan_payments": None,
             "savings": "70000",
@@ -63,7 +63,7 @@ def test_put_updates_only_the_fields_sent(world: World, client: TestClient) -> N
         ({"fixed_expenses": "abc"}, "fixed_expenses"),
         ({"net_fixed_income": None}, "net_fixed_income"),
         ({"net_fixed_income": 14000.5}, "net_fixed_income"),
-        ({"variable_income_stable": "maybe"}, "variable_income_stable"),
+        ({"variable_income_minimum": "-1"}, "variable_income_minimum"),
         ({"salary": "1"}, "salary"),
     ],
 )
@@ -85,3 +85,15 @@ def test_a_profile_edit_makes_a_recommended_check_stale(world: World, client: Te
 
     assert client.get("/api/checks/c-rec").json()["profile_stale"] is True
     assert [check["profile_stale"] for check in client.get("/api/checks").json()] == [True]
+
+
+def test_saving_the_same_figures_keeps_a_recommended_check_fresh(
+    world: World, client: TestClient
+) -> None:
+    seed_recommended_check(world)
+    saved = client.get("/api/profile").json()["profile"]["savings"]
+
+    world.clock.value = NOW + timedelta(minutes=5)
+    assert client.put("/api/profile", json={"savings": saved}).status_code == 200
+
+    assert client.get("/api/checks/c-rec").json()["profile_stale"] is False

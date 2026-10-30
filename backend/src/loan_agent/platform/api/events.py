@@ -4,11 +4,11 @@ The stream subscribes to the check's bus channel before reading the log, so an e
 between the two arrives on the queue; queued events the replay already sent are skipped by
 sequence number. The log assigns sequences in commit order without gaps, so a replay holds every
 sequence up to its last. A reconnecting browser sends Last-Event-ID and gets only what follows it.
-Queued message.delta fragments of a message the replay already sent complete are dropped, so the
-stream never sends a fragment after its complete message.
+Queued message.delta events of a message the replay already sent complete are dropped, so the
+stream never sends a partial text after its complete message.
 
 Stored events are framed with their sequence number as the frame's id. Live-only events (the
-reply's message.delta fragments) are framed without one, so the browser's Last-Event-ID always
+reply's message.delta events) are framed without one, so the browser's Last-Event-ID always
 names a stored event and a reconnect resumes from the log. Only the check's owner may subscribe;
 the session cookie identifies them, since the browser's event-stream object sends no headers.
 """

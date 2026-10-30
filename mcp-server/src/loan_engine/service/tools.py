@@ -1,7 +1,8 @@
-"""The four loan-engine tools, described for a language model, with money rounded to agorot
+"""The loan-engine tools, described for a language model, with money rounded to agorot
 (hundredths of a shekel).
 
-- Output models: Bounds, Sizing, LoanSimulation (TrackSimulation, MonthRow), TrackSuggestions
+- Output models: Bounds, Sizing, LoanSimulation (TrackSimulation, MonthRow), ComfortableTerm,
+  OfferTerm, TrackSuggestions, MarketSeries (PrimeMonth, CpiMonth)
 - register_tools(): adds the tools to a server; each reads market data from history_provider
 
 simulate_loan returns its LoanSimulation as structured content and only a short summary as text,
@@ -23,7 +24,12 @@ from mcp.types import CallToolResult, TextContent
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
 from loan_engine.domain import history, policy, schedule
-from loan_engine.domain.assumptions import BASE_ANNUAL_INFLATION
+from loan_engine.domain.assumptions import (
+    BASE_ANNUAL_INFLATION,
+    COMFORT_SHARE,
+    HISTORY_MONTHS,
+    PRIME_MARGIN,
+)
 from loan_engine.domain.limits import (
     MAX_ANNUAL_RATE,
     MAX_PRIME_SPREAD,
@@ -53,8 +59,9 @@ _BASE_PATH = (
 
 _PROFILE = (
     "The person's monthly finances, every amount in ₪ per month: net_fixed_income (salary after "
-    "tax), variable_income (bonuses, commissions, freelance work), variable_income_stable (true "
-    "when the person says the variable income is steady month to month), fixed_expenses (rent, "
+    "tax), variable_income (bonuses, commissions, freelance work), variable_income_minimum (the "
+    "part of the variable income that arrives even in a weak month, at most variable_income; "
+    "only this part counts toward the payment limit), fixed_expenses (rent, "
     "bills and other recurring spending), existing_loan_payments (payments on loans already "
     "running)."
 )
@@ -176,10 +183,54 @@ class LoanSimulation(_Output):
     cpi_as_of: date = Field(description="Month of the latest consumer price index used")
 
 
+class ComfortableTerm(_Output):
+    term_months: int = Field(description="The shortest comfortable term, months")
+    payment_limit: Money = Field(
+        description="The most the payment may reach at that term: 90% of the ceiling, ₪ per month"
+    )
+
+
+class OfferTerm(_Output):
+    term_months: int = Field(
+        description="The term to price the offer at: the shortest comfortable term, or the "
+        "offer's longest term when none is comfortable"
+    )
+    comfortable: bool = Field(description="Whether term_months keeps the payment within the limit")
+    payment_limit: Money = Field(
+        description="The most a comfortable payment may reach: 90% of the ceiling, ₪ per month"
+    )
+
+
 class TrackSuggestions(_Output):
     tracks: list[Track] = Field(description="A fixed track and a prime track, both unlinked")
     as_of: date = Field(description="Month of the average rate the tracks are priced from")
     source: str
+
+
+class PrimeMonth(_Output):
+    month: date
+    prime: Decimal = Field(description="Prime in annual percent in effect on the first of month")
+
+
+class CpiMonth(_Output):
+    month: date
+    change_percent: Decimal = Field(
+        description="That month's change of the consumer price index, percent, to one decimal"
+    )
+
+
+class MarketSeries(_Output):
+    current_prime: Decimal = Field(description="Today's prime, annual percent")
+    rate_as_of: date = Field(description="Date of the latest Bank of Israel rate")
+    prime: list[PrimeMonth] = Field(
+        description="The latest months, oldest first, ending with today's prime under the "
+        "current month"
+    )
+    cpi_as_of: date = Field(description="Month of the latest consumer price index")
+    cpi: list[CpiMonth] = Field(description="The latest months, oldest first")
+
+
+_ONE_DECIMAL = Decimal("0.1")
 
 
 def _summary(loan: LoanSimulation) -> str:
@@ -243,10 +294,9 @@ def register_tools(
     @server.tool()
     def size_loan(
         goal_price: Annotated[Decimal, Field(ge=0, description="Price of the purchase, ₪")],
-        trade_in_value: Annotated[
-            Decimal, Field(ge=0, description="Value of what the person trades in, ₪; 0 if none")
+        savings: Annotated[
+            Decimal, Field(ge=0, description="The person's liquid money for the purchase, ₪")
         ],
-        savings: Annotated[Decimal, Field(ge=0, description="The person's savings, ₪")],
         min_cushion: Annotated[
             Decimal,
             Field(
@@ -254,12 +304,10 @@ def register_tools(
             ),
         ],
     ) -> Sizing:
-        """Call this when the person names a price, to find how much to borrow after the trade-in
-        and the savings above the cushion. Returns the loan amount and how the savings divide.
+        """Call this when the person names a price, to find how much to borrow after the savings
+        above the cushion. Returns the loan amount and how the savings divide.
         """
-        return Sizing.model_validate(
-            policy.size_loan(goal_price, trade_in_value, savings, min_cushion)
-        )
+        return Sizing.model_validate(policy.size_loan(goal_price, savings, min_cushion))
 
     @server.tool()
     def simulate_loan(
@@ -291,14 +339,108 @@ def register_tools(
         )
 
     @server.tool()
+    def market_series(
+        prime_months: Annotated[
+            int, Field(ge=1, le=HISTORY_MONTHS, description="How many latest months of prime")
+        ],
+        cpi_months: Annotated[
+            int,
+            Field(ge=1, le=HISTORY_MONTHS, description="How many latest months of CPI change"),
+        ],
+    ) -> MarketSeries:
+        """Call this when the person asks about the prime rate or the consumer price index: today's
+        prime, how it moved, or how prices rose. Returns today's prime and, oldest first, the prime
+        and the CPI's monthly change for the latest months, from the Bank of Israel and the
+        Central Bureau of Statistics data the loans are priced with.
+        """
+        market = history_provider()
+        # The aligned months end at the latest published CPI, which trails the daily rate by
+        # weeks; the rate's own month closes the prime series, so the chart reaches today.
+        prime_window = list(zip(market.months, market.boi_rate, strict=True))
+        this_month = market.rate_as_of.replace(day=1)
+        if this_month > market.months[-1]:
+            prime_window.append((this_month, market.current_boi_rate))
+        cpi_window = zip(market.months, market.monthly_inflation, strict=True)
+        return MarketSeries(
+            current_prime=market.current_boi_rate + PRIME_MARGIN,
+            rate_as_of=market.rate_as_of,
+            prime=[
+                PrimeMonth(month=month, prime=rate + PRIME_MARGIN)
+                for month, rate in prime_window[-prime_months:]
+            ],
+            cpi_as_of=market.cpi_as_of,
+            cpi=[
+                CpiMonth(
+                    month=month,
+                    change_percent=(inflation * 100).quantize(_ONE_DECIMAL, ROUND_HALF_UP),
+                )
+                for month, inflation in list(cpi_window)[-cpi_months:]
+            ],
+        )
+
+    @server.tool()
+    def shortest_comfortable_term(
+        principal: Annotated[
+            Decimal, Field(ge=MIN_PRINCIPAL, le=MAX_PRINCIPAL, description="Loan amount, ₪")
+        ],
+        payment_ceiling: Annotated[
+            Decimal,
+            Field(gt=0, description="assess_affordability's payment_ceiling, ₪ per month"),
+        ],
+    ) -> ComfortableTerm:
+        """Call this to choose the term of the example tracks: the shortest term, in steps of
+        6 months, at which suggest_tracks' fixed and prime tracks keep their highest payment, in
+        the worst historical window too, within 90% of the payment ceiling. Refused when no term
+        up to the longest the simulator prices fits.
+        """
+        market = history_provider()
+        term = policy.shortest_comfortable_term(principal, payment_ceiling, market)
+        if term is None:
+            raise ToolError(
+                f"no term up to {MAX_TERM} months keeps the payment of a {principal} ₪ loan "
+                f"within {COMFORT_SHARE:.0%} of a {payment_ceiling} ₪ ceiling; the loan is too "
+                "large for this ceiling"
+            )
+        return ComfortableTerm(term_months=term, payment_limit=payment_ceiling * COMFORT_SHARE)
+
+    @server.tool()
+    def shortest_comfortable_offer_term(
+        track: Annotated[
+            Track,
+            Field(
+                description="The real offer as one track, with term_months the longest term the "
+                "offer allows"
+            ),
+        ],
+        payment_ceiling: Annotated[
+            Decimal,
+            Field(gt=0, description="assess_affordability's payment_ceiling, ₪ per month"),
+        ],
+    ) -> OfferTerm:
+        """Call this when a real offer lets the person choose the term up to a maximum ("up to 84
+        months"): a longer term only adds interest, so the offer is priced at the shortest term,
+        in steps of 6 months up to its maximum, that keeps its highest payment, in the worst
+        historical window too, within 90% of the payment ceiling. When no term does, returns the
+        offer's maximum with comfortable false.
+        """
+        market = history_provider()
+        term = policy.shortest_comfortable_offer_term(track, payment_ceiling, market)
+        return OfferTerm(
+            term_months=track.term_months if term is None else term,
+            comfortable=term is not None,
+            payment_limit=payment_ceiling * COMFORT_SHARE,
+        )
+
+    @server.tool()
     def suggest_tracks(
         principal: Annotated[
             Decimal, Field(ge=MIN_PRINCIPAL, le=MAX_PRINCIPAL, description="Loan amount, ₪")
         ],
         term_months: Annotated[int, Field(ge=MIN_TERM, le=MAX_TERM, description="Term, months")],
     ) -> TrackSuggestions:
-        """Call this when the person has no loan offer yet and needs typical tracks to simulate.
-        Returns a fixed and a prime track priced from the Bank of Israel's latest average rate on
+        """Call this when the person has no loan offer yet and needs typical tracks to simulate,
+        with the term shortest_comfortable_term gave unless the person asked for another. Returns
+        a fixed and a prime track priced from the Bank of Israel's latest average rate on
         household consumer loans, and the month of that rate.
         """
         market = history_provider()

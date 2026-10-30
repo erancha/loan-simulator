@@ -16,7 +16,14 @@ from loan_agent.adapters.postgres.orm import Base
 from loan_agent.platform.checkpointer import libpq_dsn
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
-AGENT_TABLES = ("profiles", "checks", "options", "recommendations", "check_events")
+AGENT_TABLES = (
+    "profiles",
+    "checks",
+    "options",
+    "recommendations",
+    "check_events",
+    "deleted_event_times",
+)
 
 
 async def _scalar(pg_url: str, sql: str) -> object:

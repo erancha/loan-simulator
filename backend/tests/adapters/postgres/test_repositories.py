@@ -85,7 +85,7 @@ async def test_profile_round_trip_keeps_decimals(repos: Repos) -> None:
     profile = Profile(
         net_fixed_income=Decimal("12500.50"),
         variable_income=Decimal(0),
-        variable_income_stable=False,
+        variable_income_minimum=None,
         fixed_expenses=Decimal("4200.00"),
         existing_loan_payments=None,
         savings=Decimal("80000.10"),
@@ -117,7 +117,7 @@ async def test_checks_list_newest_first(repos: Repos) -> None:
 
 async def test_check_goal_and_snapshot_round_trip(repos: Repos) -> None:
     await repos.checks.add(make_check("c-goal"))
-    goal = Goal("car", Decimal("150000.00"), Decimal(20000))
+    goal = Goal("car", Decimal("150000.00"))
     await repos.checks.set_goal("c-goal", goal)
     snapshot_at = T0 + timedelta(minutes=5)
     await repos.checks.snapshot_profile("c-goal", snapshot_at)
@@ -203,7 +203,68 @@ async def test_count_since_counts_one_persons_messages_across_checks(repos: Repo
     assert await repos.events.count_since("counter", "message.user", future) == (0, [])
 
 
-async def test_checks_ending_with_matches_the_latest_event_only(repos: Repos) -> None:
+async def test_a_save_that_changes_nothing_keeps_the_save_time(repos: Repos) -> None:
+    first = await repos.profiles.save("unchanged", Profile(savings=Decimal(35000)))
+    repos.clock.value = T0 + timedelta(hours=1)
+
+    assert await repos.profiles.save("unchanged", Profile(savings=Decimal("35000.00"))) == first
+    assert (await repos.profiles.get("unchanged"))[1] == first
+
+    later = await repos.profiles.save("unchanged", Profile(savings=Decimal(36000)))
+    assert later == T0 + timedelta(hours=1)
+
+
+async def test_delete_removes_the_check_and_everything_it_produced(repos: Repos) -> None:
+    await repos.checks.add(make_check("c-del"))
+    option = Option("o-del", "c-del", {}, "offer", "Bank X", date(2026, 10, 2), make_figures(), T0)
+    await repos.options.add(option)
+    await repos.recommendations.save(
+        Recommendation(
+            "c-del",
+            "o-del",
+            None,
+            "why",
+            Decimal("90000.00"),
+            Decimal("2000.00"),
+            Decimal("5000.00"),
+            Decimal("7000.55"),
+            T0,
+        )
+    )
+    await repos.events.append("c-del", "message.user", {"text": "a"})
+
+    await repos.checks.delete("c-del", "message.user", T0)
+
+    with pytest.raises(CheckNotFoundError):
+        await repos.checks.get(PERSON, "c-del")
+    assert await repos.options.list("c-del") == []
+    assert await repos.recommendations.latest("c-del") is None
+    assert await repos.events.list("c-del", 0) == []
+
+
+async def test_delete_keeps_the_recent_times_of_one_event_type_until_they_expire(
+    repos: Repos,
+) -> None:
+    for check_id in ("c-kept", "c-live", "c-later"):
+        await repos.checks.add(make_check(check_id, "keeper"))
+    before = datetime.now(UTC)
+    await repos.events.append("c-kept", "message.user", {})
+    await repos.events.append("c-kept", "message.assistant", {})
+    await repos.events.append("c-live", "message.user", {})
+
+    await repos.checks.delete("c-kept", "message.user", before)
+
+    count, times = await repos.events.count_since("keeper", "message.user", before)
+    assert count == 2
+    assert times == sorted(times)
+    assert await repos.events.count_since("keeper", "message.assistant", before) == (0, [])
+
+    await repos.checks.delete("c-later", "message.user", datetime.now(UTC) + timedelta(hours=1))
+
+    assert (await repos.events.count_since("keeper", "message.user", before))[0] == 1
+
+
+async def test_checks_whose_latest_matches_the_latest_event_of_that_type(repos: Repos) -> None:
     running = {"status": "running"}
     for check_id in ("c-end-running", "c-end-idle", "c-end-other", "c-end-empty"):
         await repos.checks.add(make_check(check_id, user_id=check_id))
@@ -214,9 +275,12 @@ async def test_checks_ending_with_matches_the_latest_event_only(repos: Repos) ->
     await repos.events.append("c-end-other", "turn.status", running)
     await repos.events.append("c-end-other", "message.assistant", running)
 
-    ending = await repos.events.checks_ending_with("turn.status", running)
+    ending = await repos.events.checks_whose_latest("turn.status", running)
 
-    assert [check_id for check_id in ending if check_id.startswith("c-end-")] == ["c-end-running"]
+    assert [check_id for check_id in ending if check_id.startswith("c-end-")] == [
+        "c-end-other",
+        "c-end-running",
+    ]
 
 
 async def test_profile_saved_after_snapshot_marks_check_stale(repos: Repos) -> None:

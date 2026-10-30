@@ -21,6 +21,7 @@ OPTIONAL = (
     "AUTH_JWKS_URL",
     "AUTH_PUBLIC_KEY_FILE",
     "AGENT_TURN_LIMIT",
+    "AGENT_TURN_LIMIT_OVERRIDES",
     "AGENT_TURN_WINDOW_HOURS",
     "AGENT_LOG_LEVEL",
 )
@@ -37,7 +38,8 @@ def env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
 
 def test_defaults_apply_to_the_optional_keys(env: pytest.MonkeyPatch) -> None:
     settings = Settings()
-    assert settings.agent_turn_limit == 50
+    assert settings.agent_turn_limit == 20
+    assert settings.agent_turn_limit_overrides == {}
     assert settings.agent_turn_window_hours == 24
     assert settings.agent_log_level == "WARNING"
     assert settings.auth_issuer == "https://accounts.google.com"
@@ -135,3 +137,20 @@ def test_the_env_file_is_read_from_the_working_directory(
     env.chdir(tmp_path)
     env.setitem(Settings.model_config, "env_file", ".env")
     assert Settings().llm_model == "openai:gpt-5.4"
+
+
+def test_turn_limit_overrides_are_read_as_json(env: pytest.MonkeyPatch) -> None:
+    env.setenv("AGENT_TURN_LIMIT_OVERRIDES", '{"dana@example.com": 50}')
+    assert Settings().agent_turn_limit_overrides == {"dana@example.com": 50}
+
+
+@pytest.mark.parametrize(
+    ("value", "named"),
+    [('{"Dana@Example.com": 50}', "lowercase"), ('{"dana@example.com": 0}', "greater")],
+)
+def test_turn_limit_overrides_refuse_what_could_never_apply(
+    env: pytest.MonkeyPatch, value: str, named: str
+) -> None:
+    env.setenv("AGENT_TURN_LIMIT_OVERRIDES", value)
+    with pytest.raises(ValidationError, match=named):
+        Settings()

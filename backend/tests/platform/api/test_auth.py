@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from auth_keys import CLIENT_ID, OTHER_KEY, sign
+from loan_agent.adapters.google_tokens import CLOCK_SKEW
 from loan_agent.platform.api.auth import COOKIE
 
 # Every other route of the app needs a signed-in person.
@@ -78,7 +79,7 @@ def test_the_cookie_is_secure_over_https(world: World, public_key: Path) -> None
 @pytest.mark.parametrize(
     ("credential", "reason"),
     [
-        (sign(exp=int(time.time()) - 1), "expired"),
+        (sign(exp=int(time.time()) - 2 * int(CLOCK_SKEW.total_seconds())), "expired"),
         (sign(aud="other-client"), "another application"),
         (sign(key=OTHER_KEY), "not valid"),
         ("forged", "not valid"),
@@ -111,7 +112,7 @@ def test_protected_routes_are_401_without_a_cookie(world: World, public_key: Pat
 @pytest.mark.parametrize(
     ("token", "reason"),
     [
-        (sign(exp=int(time.time()) - 1), "expired"),
+        (sign(exp=int(time.time()) - 2 * int(CLOCK_SKEW.total_seconds())), "expired"),
         (sign(aud="other-client"), "another application"),
     ],
 )

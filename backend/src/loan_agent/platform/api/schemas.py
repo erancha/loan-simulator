@@ -5,7 +5,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Self
 
-from pydantic import BaseModel, ConfigDict, StrictBool, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from loan_agent.domain.models import Check, Goal, Option, OptionFigures, OptionSource, Profile
 from loan_agent.domain.models import Recommendation as DomainRecommendation
@@ -115,12 +115,12 @@ class ProfileUpdate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    savings: str | None = None
     net_fixed_income: str | None = None
     variable_income: str | None = None
-    variable_income_stable: StrictBool | None = None
+    variable_income_minimum: str | None = None
     fixed_expenses: str | None = None
     existing_loan_payments: str | None = None
-    savings: str | None = None
 
     def sent(self) -> dict[str, object]:
         """The fields the body named, an explicit null included, which the profile refuses."""

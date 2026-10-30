@@ -40,11 +40,11 @@ OMER = User("2002", "omer@example.com", "Omer")
 DANA_TOKEN = sign()
 OMER_TOKEN = sign(sub=OMER.id, email=OMER.email, name=OMER.name)
 
-GOAL = Goal("רכב משפחתי", Decimal(120000), Decimal(10000))
+GOAL = Goal("רכב משפחתי", Decimal(120000))
 FULL_PROFILE = Profile(
     net_fixed_income=Decimal(14000),
     variable_income=Decimal(2000),
-    variable_income_stable=False,
+    variable_income_minimum=Decimal(0),
     fixed_expenses=Decimal(6500),
     existing_loan_payments=Decimal(800),
     savings=Decimal(70000),
