@@ -11,6 +11,7 @@ __pycache__/
 node_modules/
 dist/
 docs/superpowers/*
+!docs/superpowers/ec2-lift-and-shift.md
 .claude/
 CLAUDE.local.md
 .superpowers/

@@ -48,6 +48,12 @@ copy in the image. `npm run dev` in `frontend/` proxies `/api` to the agent on 8
 Host commands (pytest, uvicorn) run from the repo root, because the agent reads `.env` from the
 working directory.
 
+## AWS
+
+Before any AWS work, read `/mnt/c/Projects/-- docs --/aws-account-inventory.md`: it holds the
+account's state, its ground rules for credentials and changes, and the decisions made and still
+open. This repo holds only the deployment plan, `docs/superpowers/ec2-lift-and-shift.md`.
+
 ## Facts that bite
 
 - Money is `Decimal`, never `float`.
