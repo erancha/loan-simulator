@@ -51,8 +51,10 @@ working directory.
 ## AWS
 
 Before any AWS work, read `/mnt/c/Projects/-- docs --/aws-account-inventory.md`: it holds the
-account's state, its ground rules for credentials and changes, and the decisions made and still
-open. This repo holds only the deployment plan, `docs/superpowers/ec2-lift-and-shift.md`.
+account's state, its ground rules for credentials and changes, and the decisions made. The
+account's open work is tracked as issues, starting at
+https://github.com/erancha/projects-docs/issues. This repo holds only the deployment plan,
+`docs/superpowers/ec2-lift-and-shift.md`.
 
 ## Facts that bite
 
