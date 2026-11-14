@@ -189,9 +189,9 @@ cookie needs ([sign-in.md](../sign-in.md)).
 
 `backend/Dockerfile` has a Node stage that installs the lockfile and runs the build, and copies
 the result into the agent image at `/app/frontend`, where `ENV AGENT_FRONTEND_DIST` points;
-compose does not pass the key from `.env`, so a host path there cannot replace the image's copy.
-An agent started on the host sets it in `.env` to `frontend/dist`, or leaves it unset to serve
-the API only.
+compose does not pass the key from the settings files, so a host path there cannot replace the
+image's copy. An agent started on the host sets it in `scripts/lib/stack-params.sh` to
+`frontend/dist`, or leaves it unset to serve the API only.
 
 In development `npm run dev` in `frontend/` starts Vite, which proxies `/api` to the agent at
 `http://localhost:8101` (`frontend/vite.config.ts`). The page is then at

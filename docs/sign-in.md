@@ -2,12 +2,9 @@
 
 People sign in to the loan agent with a Google account, and there is no other way in. Every piece of
 data belongs to the person who signed in: their profile, their checks and the conversations on them.
-This page explains how sign-in works and how to set up the Google side. The "התחברות עם Google"
-button is on the page ([architecture/page.md](architecture/page.md)); the agent's sign-in API is
-what it calls.
-
-**Contents:** [How it works](#how-it-works) · [Setting up Google](#setting-up-google) ·
-[Who may sign in](#who-may-sign-in)
+This page explains how sign-in works and how to set up the Google side, behind
+[Architecture](architecture.md#the-agent). The "התחברות עם Google" button is on the page
+([architecture/page.md](architecture/page.md)); the agent's sign-in API is what it calls.
 
 ## How it works
 
@@ -60,7 +57,8 @@ The app needs its own Google Cloud project with one OAuth client.
    beyond the defaults.
 4. **Create the client.** Open **Clients → Create client**, choose **Web application**, give it
    a name, and under **Authorized JavaScript origins** add `http://localhost:8101`, the agent's
-   address at `AGENT_HOST_PORT`. If you change that port in `.env`, change the origin to match.
+   address at `AGENT_HOST_PORT`. If you change that port in `scripts/lib/stack-params.sh`,
+   change the origin to match.
    To run the page with `npm run dev` (Vite's server, which proxies `/api` to the agent), add
    `http://localhost:5173` as a second origin.
    Under **Authorized redirect URIs** add `<origin>/`, with the trailing slash: for local use
@@ -69,17 +67,23 @@ The app needs its own Google Cloud project with one OAuth client.
    `.apps.googleusercontent.com`, next to a client secret and a JSON download. Only the client
    id is needed. Ignore the secret and the download: the agent verifies tokens and never redeems
    codes, so nothing in this repo has a place for the secret.
-5. **Give it to the agent.** Copy the client id into `GOOGLE_CLIENT_ID` in `.env`, the file
-   `./scripts/init-env.sh` wrote with that key blank. Without it the agent refuses to start and
-   names the key.
+5. **Give it to the agent.** Copy the client id into `GOOGLE_CLIENT_ID` in
+   `scripts/lib/params.sh`, the file `./scripts/init-env.sh` wrote with that key blank.
+6. **Start the agent.** Run `./scripts/deploy.sh`, which starts it with the client id. Without
+   the id the agent refuses to start and names the key.
 
 Google accepts only `localhost` or a public hostname as an authorized origin, never a private
 address such as `10.0.0.23`, so a phone on the same network cannot sign in until the app is
 reached through a hostname.
+
+A stack deployed with `./scripts/deploy.sh --ec2` is reached at its CloudFront address, which
+the script prints. Add `https://<id>.cloudfront.net` as a further authorized JavaScript origin
+and `https://<id>.cloudfront.net/` as a further authorized redirect URI of the same client.
 
 ## Who may sign in
 
 The list of test users on the OAuth app is the access list: while an app is in testing mode,
 Google signs in nobody else and shows an "access blocked" page. There is no allow-list in the
 agent's code, so adding or removing a person is done in the console, under **Audience → Test
-users**. Google limits a testing app to 100 test users.
+users**. Google limits a testing app to 100 test users. A published app admits any Google
+account, and the agent accepts whoever Google signs in, so the app stays in testing mode.

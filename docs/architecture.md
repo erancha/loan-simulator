@@ -1,29 +1,50 @@
 # Architecture
 
-How the loan simulator is built, and why. This page maps what the repo holds and marks what it
-does not yet. Formulas and policy numbers are in [calculations.md](calculations.md), the market
-data in [market-data.md](market-data.md), the agent in
-[architecture/agent.md](architecture/agent.md), the page in
-[architecture/page.md](architecture/page.md), sign-in in [sign-in.md](sign-in.md), and how each
-part is tested in [testing.md](testing.md).
+This document details how the loan simulator is built, behind the [README](../README.md)'s
+Architecture section. How to run it is in [development.md](development.md). Formulas and policy
+numbers are in [calculations.md](calculations.md), the market data in
+[market-data.md](market-data.md), the agent in [architecture/agent.md](architecture/agent.md),
+the page in [architecture/page.md](architecture/page.md), sign-in in [sign-in.md](sign-in.md),
+and how each part is tested in [testing.md](testing.md). Each founding decision has a record
+under [adr/](adr/).
+
+**Contents:** [Parts](#parts) · [The loan engine](#the-loan-engine) · [The agent](#the-agent) ·
+[The page](#the-page) · [Configuration](#configuration) · [Deployment](#deployment) ·
+[Storage](#storage) · [Codebase](#codebase)
 
 ## Parts
 
-| Part | Status |
-|---|---|
-| Loan engine, `mcp-server/` | Implemented. |
-| Agent, `backend/` | Implemented: [architecture/agent.md](architecture/agent.md). |
-| Page, `frontend/` | Implemented: [architecture/page.md](architecture/page.md). |
-| Evals | OPEN — not yet implemented (#2). |
+```mermaid
+flowchart LR
+  U((Person)) --> P["Page - frontend/<br/>React, Hebrew"]
+  P -->|"HTTP API, event stream"| A
+  subgraph AGENT["Agent - backend/"]
+    A["FastAPI and LangGraph loop:<br/>sign-in, profile, checks"] --> DB[(Postgres)]
+  end
+  A -->|"MCP over Streamable HTTP<br/>bearer token"| E
+  subgraph ENGINE["Loan engine - mcp-server/"]
+    E["MCP server: tools and rate resources"] --> D[Loan calculations]
+    E --> M[(Stored market data)]
+  end
+  M -.->|daily refresh| S["Bank of Israel and<br/>Central Bureau of Statistics"]
+  style AGENT fill:#eff6ff,stroke:#1d4ed8
+  style ENGINE fill:#eff6ff,stroke:#1d4ed8
+```
+
+The model chooses what to ask and which tool to call; the engine returns the numbers and the
+bounds. The engine knows nothing about people and stores nothing personal: it takes a profile and
+loans and returns results.
 
 ## The loan engine
 
 An MCP server that takes a profile and loans and returns numbers. It stores nothing personal and
 receives no sign-in credentials. It serves Streamable HTTP at `/mcp`, stateless, with JSON
 responses. The agent is its only caller, and the person's Google token stays with the agent
-([sign-in.md](sign-in.md)).
+([sign-in.md](sign-in.md)). The engine is a service of its own so that every figure comes from
+code that any MCP client, MCP Inspector included, can call
+([ADR 0001](adr/0001-loan-engine-is-a-standalone-mcp-server.md)).
 
-One package, `loan_engine`, in three layers whose imports point inwards only, enforced by
+One package, `loan_engine`, in layers whose imports point inwards only, enforced by
 import-linter:
 
 - `domain` holds the loan model, schedules, the historical replay and the policy as pure
@@ -31,6 +52,25 @@ import-linter:
 - `market` fetches the Bank of Israel rate, the consumer price index and the Bank of Israel average
   consumer-loan rate, aligns them into a monthly history and keeps the last good copy on disk.
 - `service` is the MCP server, configuration, the bearer-token check and startup.
+
+The tools:
+
+| Tool | Returns |
+|---|---|
+| `assess_affordability` | A monthly payment ceiling and a minimum savings cushion from a profile, with reason codes. |
+| `size_loan` | The loan amount for a goal price, savings and cushion. |
+| `simulate_loan` | A short text summary for the model; the full result, schedule included, as structured content. |
+| `shortest_comfortable_term` | The shortest term, in 6-month steps, at which the suggested tracks' worst-case payment stays within 90% of the ceiling. |
+| `shortest_comfortable_offer_term` | The same search for one real offer, up to the longest term it allows. |
+| `suggest_tracks` | A fixed and a prime track priced from the published average bank rate. |
+| `market_series` | Today's prime and, for the latest months, the prime and the CPI's monthly change. |
+
+**Resources:** `rates://boi/history`, `rates://cpi/history` and `rates://current`.
+
+A worst case replays every stretch of past months as long as the loan's term that starts in the
+last ten years, so it names a period a borrower recalls
+([ADR 0002](adr/0002-worst-case-is-a-ten-year-historical-replay.md));
+[calculations.md](calculations.md) has the replay.
 
 Startup refreshes the market data once, then serves and refreshes daily side by side. With no
 fetchable data and none stored, or when a daily refresh raises, the process exits with the error
@@ -58,12 +98,15 @@ because a person saves several options, compares them, and pauses a check to col
 resumes it days later: state the app must own. LangGraph gives the loop that state: the
 conversation is a graph whose state is checkpointed to Postgres after every step, so a check
 resumes after a restart and a failed turn leaves the conversation where it was. The model leads
-the conversation instead of following a scripted flow, at a higher cost per conversation; the
-chat model is whichever provider `LLM_MODEL` names, so the model changes without a code change.
+the conversation instead of following a scripted flow, at a higher cost per conversation
+([ADR 0003](adr/0003-model-led-agent-with-a-code-guardrail.md)); the chat model is whichever
+provider `LLM_MODEL` names, so the model changes without a code change
+([ADR 0006](adr/0006-model-provider-is-a-setting.md)). People sign in with a Google ID token that
+the agent verifies on every request and never passes on
+([ADR 0005](adr/0005-google-id-token-sign-in.md)).
 
 How a conversation runs, the guardrail, the turn cap and the events are in
-[architecture/agent.md](architecture/agent.md). One Postgres holds the agent's tables and the
-LangGraph checkpoints.
+[architecture/agent.md](architecture/agent.md).
 
 ## The page
 
@@ -71,23 +114,29 @@ A React app in `frontend/` that the agent serves from the same origin as its API
 data the agent does not hold: one event stream per open check feeds a reducer, and
 the conversation and the recommendation card render from the reducer's state. The layout, the
 data flow, where each figure on the card comes from and how the build reaches the agent image are
-in [architecture/page.md](architecture/page.md).
+in [architecture/page.md](architecture/page.md). Serving the page from the agent keeps page and API
+on one origin, which the sign-in cookie needs ([ADR 0008](adr/0008-page-served-by-the-agent.md)).
 
 ## Configuration
 
-Settings come from environment variables, which Compose reads from `.env` at the repo root: the
-engine's are `ENGINE_`-prefixed, the agent's are not. Compose hands each container only the keys
+Settings come from environment variables, which the scripts export from three files under
+`scripts/lib/` before they call Compose: the committed `stack-params.sh`, and the gitignored
+`params.sh` (this deployment's own settings) and `secrets.sh`. The engine's keys are
+`ENGINE_`-prefixed, the agent's are not. Compose hands each container only the keys
 it reads, listed once per service in `docker-compose.yml`, so the engine never receives the
-agent's model key or database password. A host process started from the repo root reads the same
-file. A missing or malformed required setting stops startup, and a blank value counts as missing.
-Each key is explained once, in `.env.example`; `mcp-server/tests/test_env_example.py` and
-`backend/tests/test_env_example.py` fail when it and the settings differ, each owning its
-service's keys, and each service's `test_compose.py` fails when its container receives a key it
+agent's model key or database password. An agent started on the host from the repo root reads
+the same files. A missing or malformed required setting stops startup, and a blank value counts
+as missing. Each key is explained once, in `stack-params.sh` or in the `.example.sh` beside a
+gitignored file; `mcp-server/tests/test_settings_files.py` and
+`backend/tests/test_settings_files.py` fail when the files and the settings differ, each owning
+its service's keys, and each service's `test_compose.py` fails when its container receives a key it
 does not read. `ENGINE_BEARER_TOKEN` is defined once and read by both services.
 
 ## Deployment
 
-`docker-compose.yml` runs four services:
+The whole stack runs on one machine under Docker Compose
+([ADR 0007](adr/0007-docker-compose-on-one-machine.md)); the agent runs as one replica, because
+turns in flight live in its memory. `docker-compose.yml` runs these services:
 
 - `engine`, built from the repo root with `mcp-server/Dockerfile`. The `engine-data` volume is
   mounted at `/data` and holds the stored market data across restarts. The Host header allow-list
@@ -97,12 +146,52 @@ does not read. `ENGINE_BEARER_TOKEN` is defined once and read by both services.
 - `agent`, built from the repo root with `backend/Dockerfile`, after `db` is healthy, `migrate` has
   completed and `engine` is healthy (it accepts connections, which is after its market data
   fetch). Compose overrides `DATABASE_URL` and `ENGINE_URL` with the in-network addresses
-  (`db:<DB_PORT>`, `engine:<ENGINE_PORT>`); `.env` holds the host forms. Its healthcheck calls
-  `/health`. A Node stage of its Dockerfile builds `frontend/` into the image, and the agent
-  serves the result at `/`.
+  (`db:<DB_PORT>`, `engine:<ENGINE_PORT>`); the settings files hold the host forms. Its
+  healthcheck calls `/health`. A Node stage of its Dockerfile builds `frontend/` into the image,
+  and the agent serves the result at `/`.
 
-Three ports are published, each on `127.0.0.1` only through its `.env` variable (the reason is in
-the header of `docker-compose.yml`; `backend/tests/test_compose.py` checks it): `ENGINE_HOST_PORT`
-for MCP Inspector, `AGENT_HOST_PORT` for the agent's API and `DB_HOST_PORT` for Postgres, 8100 to
-8102 as shipped. `./scripts/start.sh` brings the stack up and returns once the engine and the agent
-answer.
+Three ports are published, each on `127.0.0.1` only through its variable of `stack-params.sh`
+(the reason is in the header of `docker-compose.yml`; `backend/tests/test_compose.py` checks
+it): `ENGINE_HOST_PORT` for MCP Inspector, `AGENT_HOST_PORT` for the agent's API and
+`DB_HOST_PORT` for Postgres, 8100 to 8102 as shipped. `./scripts/deploy.sh` brings the stack up
+and returns once the engine and the agent answer.
+
+`./scripts/deploy.sh --ec2` runs the same Compose stack on one EC2 instance
+([ADR 0009](adr/0009-ec2-instance-behind-cloudfront.md)). A CloudFormation stack,
+`scripts/template-ec2.yaml`, holds the instance (ARM, with only the Docker engine), its
+fixed address, a security group and a CloudFront distribution, whose `https` address is the only
+way in: the security group admits the agent's port from CloudFront's servers alone, and port 22
+from the deployer's address. TLS ends at CloudFront, and the hop to the instance is plain HTTP.
+`docker-compose.ec2.yml` holds what differs on the instance: images built for ARM, the agent
+published on the instance's address, and services that start again with the instance. The
+images are built on the deployer's machine and loaded into the instance's Docker daemon over
+SSH, and Compose runs on that machine against the daemon. The settings files stay on that
+machine, and no secret store is involved: each container's own settings, secrets included,
+reach the instance as part of its configuration, which Docker keeps on the instance's encrypted
+disk. That disk holds the database and outlives the instance.
+
+## Storage
+
+- **Postgres** (the `db` service, volume `db-data`) holds the agent's tables, `profiles`,
+  `checks`, `options`, `recommendations`, `check_events` and `deleted_event_times`, beside
+  LangGraph's checkpoint tables. Alembic migrates the agent's tables, and the same `migrate` run
+  brings the checkpoint tables to the installed library's version
+  ([ADR 0004](adr/0004-one-postgres-for-records-and-checkpoints.md)). What each table holds is in
+  [architecture/agent.md](architecture/agent.md#storage).
+- **Market data** is one JSON file, `/data/market.json` in the engine's `engine-data` volume,
+  written to a temporary file and renamed over the old one
+  ([market-data.md](market-data.md#storage)).
+- **The page** keeps only browser conveniences: the sign-in nonce in the tab's `sessionStorage`,
+  and in `localStorage` the card's width and the day the person last tapped the market-data
+  sample.
+
+## Codebase
+
+| Directory | Holds |
+|---|---|
+| `mcp-server/` | The loan engine: `src/loan_engine/` in `domain`, `market` and `service` layers, its tests and Dockerfile. |
+| `backend/` | The agent: `src/loan_agent/` in `domain`, `ports`, `application`, `adapters` and `platform` layers, `alembic/` migrations, its tests and the Dockerfile that also builds the page. |
+| `frontend/` | The page: `src/` with `api/`, `auth/`, `shell/`, `check/` and `profile/`, and its Vitest tests beside the components. |
+| `scripts/` | The operational scripts and `common.sh`, which they share ([Development & deployment](development.md#deployment-scripts-scripts)). |
+| `docs/` | This document, the topic documents, `architecture/` for the agent and the page, and `adr/`. |
+| `.github/workflows/` | The CI workflow that runs every target of `scripts/test.sh`. |

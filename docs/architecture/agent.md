@@ -15,7 +15,7 @@ flowchart LR
   API --> R[Check runner]
   R --> G["Agent graph:<br/>model node and tool node"]
   G --> M[(Chat model)]
-  G -->|check tools| T[Profile, goal, options,<br/>recommendation]
+  G -->|check tools| T["Profile, goal, options,<br/>recommendation"]
   G -->|"MCP, bearer token"| E[Loan engine]
   T --> DB[(Postgres)]
   R --> DB
@@ -200,4 +200,4 @@ One Postgres holds the agent's tables (profiles, checks, options, recommendation
 the times kept from deleted checks) and the LangGraph checkpoint tables. The `migrate` service
 applies both with `alembic upgrade head` before the agent starts. Profiles, checks and events carry
 the Google account's `sub` as their `user_id`; options and recommendations belong to a check.
-`./scripts/sql-helper.sh --counts` lists the tables with their row counts.
+`./scripts/tools/sql-helper.sh --counts` lists the tables with their row counts.

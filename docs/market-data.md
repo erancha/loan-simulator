@@ -1,7 +1,13 @@
 # Market data
 
-The loan engine prices tracks over three published series. `loan_engine.market` fetches them,
-aligns them into one `MarketHistory` and keeps the last good copy on disk.
+This document details the market data behind the loan engine's part of
+[Architecture](architecture.md#the-loan-engine). The engine prices tracks over the published
+series below. `loan_engine.market` fetches them, aligns them into one `MarketHistory` and keeps
+the last good copy on disk.
+
+**Contents:** [Series](#series) · [Request quirks](#request-quirks) · [Parsing](#parsing) ·
+[Monthly alignment](#monthly-alignment) · [Refresh and fallback](#refresh-and-fallback) ·
+[Storage](#storage)
 
 ## Series
 

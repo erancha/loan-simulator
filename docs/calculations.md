@@ -1,5 +1,8 @@
 # Calculations
 
+This document details the formulas and policy numbers behind the loan engine's part of
+[Architecture](architecture.md#the-loan-engine).
+
 All money is `decimal.Decimal`. Internal calculations do not round; values are rounded to
 agorot (0.01, ROUND_HALF_UP) only where they leave the server.
 

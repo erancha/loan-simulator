@@ -1,6 +1,7 @@
 # Testing
 
-What each layer of tests proves, and how to run it.
+What each layer of tests proves, and how to run it; this page details the tests behind
+[Development & deployment](development.md#backend-tests).
 
 ```bash
 ./scripts/test.sh            # every target (engine, backend and frontend)
@@ -36,10 +37,11 @@ alignment, the stored-series fallback when a source fails, and the failure when 
 the bearer token is required, the host allow-list holds, results are rounded to agorot, and
 startup and the daily refresh fail loudly.
 
-**Deployment files** are checked without Docker: `test_env_example.py` requires `.env.example` to
-document every engine setting and no other `ENGINE_` key (the agent's test owns the rest), and
-`init-env.sh` to write settings the engine accepts and to leave no `.env` when a written value
-fails its check; `test_compose.py` requires that the engine's published port binds to `127.0.0.1`
+**Deployment files** are checked without Docker: `test_settings_files.py` requires the settings
+files under `scripts/lib/` to document every engine setting and no other `ENGINE_` key (the
+agent's test owns the rest), and `init-env.sh` to write settings the engine accepts, to keep an
+existing file without `--force`, and to leave no settings file when a written value fails its
+check; `test_compose.py` requires that the engine's published port binds to `127.0.0.1`
 through the `ENGINE_HOST_PORT` and `ENGINE_PORT` variables, that the market data volume is mounted
 and that the engine's container receives only its own keys; and `test_requirements_lock.py`
 requires the lock to match `pyproject.toml` and the image.
@@ -84,8 +86,9 @@ failure events, a turn after a model failure, the turn step limit, restart recov
 validation, and that the migration builds the tables, matches the ORM and downgrades.
 
 **Deployment files** are checked without Docker, as for the engine: each service's
-`test_env_example.py` requires `.env.example` to document its keys and nothing else (together every
-key is owned once) and `init-env.sh` to write settings the services accept;
+`test_settings_files.py` requires the settings files to document its keys and nothing else
+(together every key is owned once), the committed `stack-params.sh` to hold no secret, and
+`init-env.sh` to write settings the services accept;
 `backend/tests/test_compose.py` requires every published port to bind to `127.0.0.1` through its
 variable, the agent to wait for the database, the migration and the engine, and each container to
 receive only the keys it reads.
@@ -155,8 +158,7 @@ entering the app and the fall back to sign-in on a 401. `money.test.ts` and `cli
 the amount formatting from decimal strings and the API client's errors.
 
 **By hand.** jsdom has no layout, so the three columns and the tabs are checked in a browser after
-`./scripts/start.sh`, at laptop and at phone width.
+`./scripts/deploy.sh`, at laptop and at phone width.
 
 **Not covered here.** A Hebrew conversation against a real model needs `LLM_MODEL`, `LLM_API_KEY`
-and `GOOGLE_CLIENT_ID`; it is run by hand after `./scripts/start.sh`. The evals (recorded personas
-judged by a model, run on demand because they cost money) are OPEN, not yet implemented (#2).
+and `GOOGLE_CLIENT_ID`; it is run by hand after `./scripts/deploy.sh`.
