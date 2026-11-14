@@ -132,7 +132,7 @@ it('a purpose choice sends no profile update', async () => {
   expect(onAnswer).toHaveBeenCalledWith({ line: 'מה רוצים לקנות? רכב', update: null })
 })
 
-it('another purpose is typed in its own box', async () => {
+it('a loan with no particular purpose is a choice, with no text box', async () => {
   const user = userEvent.setup()
   const onAnswer = vi.fn().mockResolvedValue(true)
   render(
@@ -145,9 +145,11 @@ it('another purpose is typed in its own box', async () => {
       onClone={vi.fn()}
     />,
   )
-  await user.type(screen.getByRole('textbox', { name: 'משהו אחר' }), 'מחשב')
-  await user.click(screen.getByRole('button', { name: 'אישור' }))
-  expect(onAnswer).toHaveBeenCalledWith({ line: 'מה רוצים לקנות? מחשב', update: null })
+  expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'אישור' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'דילוג' })).not.toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: 'כללי' }))
+  expect(onAnswer).toHaveBeenCalledWith({ line: 'מה רוצים לקנות? כללי', update: null })
 })
 
 it('a price answer is a shekel line without a profile update', async () => {
@@ -203,6 +205,25 @@ it('a free question without choices takes typed text', async () => {
   )
   await user.type(screen.getByRole('textbox', { name: 'מאיזו שנה הרכב?' }), '2019{Enter}')
   expect(onAnswer).toHaveBeenCalledWith({ line: 'מאיזו שנה הרכב? 2019', update: null })
+})
+
+it('a free question with choices has no skip', () => {
+  render(
+    <QuestionBubble
+      entry={entryFor({
+        field: null,
+        text: 'איזו הלוואה לקחת?',
+        choices: ['110,000 ₪', '100,000 ₪'],
+      })}
+      live
+      profile={null}
+      onAnswer={vi.fn()}
+      onSkip={vi.fn()}
+      onClone={vi.fn()}
+    />,
+  )
+  expect(screen.getByRole('button', { name: '110,000 ₪' })).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'דילוג' })).not.toBeInTheDocument()
 })
 
 it('skip sends the skip line', async () => {

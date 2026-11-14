@@ -232,7 +232,7 @@ type GoalField = 'purpose' | 'price'
 export const GOAL_QUESTIONS: Record<GoalField, { label: string; hint: string }> = {
   purpose: {
     label: 'מה רוצים לקנות?',
-    hint: 'למשל רכב או שיפוץ. אפשר גם משהו אחר.',
+    hint: 'להלוואה בלי מטרה מסוימת בוחרים "כללי". מטרה אחרת אפשר לכתוב בתיבה למטה.',
   },
   price: {
     label: 'מה המחיר, בערך?',
@@ -244,8 +244,7 @@ export function isGoalField(field: QuestionField): field is GoalField {
   return field in GOAL_QUESTIONS
 }
 
-export const PURPOSE_CHOICES = ['רכב', 'שיפוץ']
-export const OTHER_PURPOSE = 'משהו אחר'
+export const PURPOSE_CHOICES = ['רכב', 'שיפוץ', 'כללי']
 export const SKIP = 'דילוג'
 export const ANSWER = 'אישור'
 

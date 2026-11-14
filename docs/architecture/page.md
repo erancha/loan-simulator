@@ -98,7 +98,9 @@ flashes the fields that changed for a moment when the panel is open.
 When the model asks a question, `check/QuestionBubble.tsx` renders it as an assistant bubble with
 the lead-in and the field's label. While the question is live it also shows a hint, a control fitted
 to the field (a text box for an amount, tap choices for a purpose), a confirm button for typed
-answers and a skip button. A closed question shows only the text.
+answers and a skip button. A question with choices of its own (the purpose, a free question the
+model gave choices, or the clone offer) has no skip, since the chat box takes any other answer
+and a skip only gets the question asked again. A closed question shows only the text.
 
 `check/CheckPage.tsx` handles the answer in this order. A tapped or typed answer to a profile
 field is saved through the store (`PUT /api/profile`), the checks list is refreshed, and then the

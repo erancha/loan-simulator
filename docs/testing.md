@@ -140,8 +140,8 @@ conversation is announced with its lead-in and label, and that a panel note foll
 was made after, or the opening line in an empty chat.
 
 **Question bubble.** `QuestionBubble.test.tsx` proves each control and the line it sends: a money
-answer saved and sent, the variable income minimum answered or skipped as 0, purpose choices and a
-typed purpose, a price, free questions with and without choices, and the skip line. It also proves
+answer saved and sent, the variable income minimum answered or skipped as 0, purpose choices with
+no text box, a price, free questions with and without choices, and the skip line. It also proves
 that a refused save or a non-number keeps the question open with its reason, and that a closed
 bubble shows only the question.
 

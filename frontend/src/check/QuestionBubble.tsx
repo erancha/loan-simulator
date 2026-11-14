@@ -9,7 +9,6 @@ import {
   STAY_CHOICE,
   answerLine,
   isGoalField,
-  OTHER_PURPOSE,
   profileValueText,
   PURPOSE_CHOICES,
   questionHint,
@@ -62,8 +61,18 @@ function initialDraft(question: Question, profile: ProfileFields | null): string
 
 /** Whether the control has a text box, answered with the confirm button, besides any taps. */
 function takesText(question: Question): boolean {
-  if (question.offer_clone === true) return false
+  if (question.offer_clone === true || question.field === 'purpose') return false
   return question.field !== null || question.choices === null
+}
+
+/**
+ * Whether the bubble shows a skip. A question with choices of its own (the purpose, the clone
+ * offer, or a free question the model gave choices) leaves the person the chat box for any other
+ * answer, and a skip there only makes the model ask again.
+ */
+function offersSkip(question: Question): boolean {
+  if (question.offer_clone === true || question.field === 'purpose') return false
+  return !(question.field === null && question.choices !== null)
 }
 
 function MoneyBox(props: {
@@ -89,9 +98,9 @@ function MoneyBox(props: {
 
 /**
  * A question the model asked, as an assistant bubble: the lead-in, the label and, while live, a
- * control fitted to the field, a confirm button for typed answers and a skip. It builds the answer
- * and hands it to its owner, which saves and sends it. The clone offer has no skip: its two
- * choices clone the check, or send the other choice to this one.
+ * control fitted to the field, a confirm button for typed answers and, where offersSkip allows,
+ * a skip. It builds the answer and hands it to its owner, which saves and sends it. The clone
+ * offer's two choices clone the check, or send the other choice to this one.
  */
 export function QuestionBubble({ entry, live, profile, onAnswer, onSkip, onClone }: Props) {
   const { question } = entry
@@ -131,7 +140,8 @@ export function QuestionBubble({ entry, live, profile, onAnswer, onSkip, onClone
   }
 
   function typedAnswer(field: QuestionField | null): Answer | null {
-    if (field === null || field === 'purpose') {
+    if (field === 'purpose') throw new Error('the purpose question has no text box')
+    if (field === null) {
       const text = draft.trim()
       return text === '' ? null : reply(text)
     }
@@ -191,18 +201,7 @@ export function QuestionBubble({ entry, live, profile, onAnswer, onSkip, onClone
       )
     }
     if (field === 'purpose') {
-      return (
-        <>
-          {choiceButtons(PURPOSE_CHOICES)}
-          <input
-            type="text"
-            aria-label={OTHER_PURPOSE}
-            placeholder={OTHER_PURPOSE}
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-          />
-        </>
-      )
+      return choiceButtons(PURPOSE_CHOICES)
     }
     return <MoneyBox label={label} describedBy={describedBy} value={draft} onChange={setDraft} />
   }
@@ -230,7 +229,7 @@ export function QuestionBubble({ entry, live, profile, onAnswer, onSkip, onClone
                 {ANSWER}
               </button>
             )}
-            {question.offer_clone !== true && (
+            {offersSkip(question) && (
               <button type="button" disabled={busy} onClick={() => void skip()}>
                 {SKIP}
               </button>
