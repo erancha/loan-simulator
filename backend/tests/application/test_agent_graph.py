@@ -354,6 +354,15 @@ def test_system_prompt_names_the_same_loan_sources_as_the_page() -> None:
     assert match[1] in SYSTEM_PROMPT
 
 
+def test_system_prompt_names_the_same_purpose_choices_as_the_page() -> None:
+    copy = (Path(__file__).parents[3] / "frontend/src/check/copy.ts").read_text(encoding="utf-8")
+    match = re.search(r"PURPOSE_CHOICES = \[(.+)\]", copy)
+    assert match is not None
+    choices = re.findall(r"'([^']+)'", match[1])
+    assert choices
+    assert ", ".join(f"'{choice}'" for choice in choices) in SYSTEM_PROMPT
+
+
 def test_every_tool_the_system_prompt_names_is_bound(world: World) -> None:
     def stand_in(name: str) -> BaseTool:
         async def engine_call() -> str:

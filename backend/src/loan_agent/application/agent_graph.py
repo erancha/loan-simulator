@@ -116,7 +116,10 @@ class UpdateProfileArgs(_Args):
 
 
 class SetGoalArgs(_Args):
-    purpose: str = Field(description="What the loan is for, in the person's words")
+    purpose: str = Field(
+        description="What the loan is for, in one or two Hebrew words: one of the page's purpose "
+        "choices when it fits, else the person's own words"
+    )
     price: str = _money("Price of the purchase, ₪")
 
 
