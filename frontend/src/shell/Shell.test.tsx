@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import type { CheckSummary, User } from '../api/types.ts'
@@ -16,6 +16,8 @@ function summary(id: string, created_at: string, over: Partial<CheckSummary> = {
     recommendation: null,
     recommends_examples_only: false,
     profile_stale: false,
+    archived: false,
+    restorable: false,
     ...over,
   }
 }
@@ -42,11 +44,24 @@ function stubApi(
     }
     if (path === '/api/checks' && method === 'POST') return Promise.resolve(create())
     if (method === 'DELETE') return Promise.resolve(remove())
+    if (/\/(archive|restore)$/.test(path) && method === 'POST') {
+      return Promise.resolve(new Response(null, { status: 204 }))
+    }
+    if (path.endsWith('/clone') && method === 'POST') {
+      return Promise.resolve(jsonResponse(201, { id: 'copy' }))
+    }
     return Promise.reject(new Error(`unexpected request ${method} ${path}`))
   })
   vi.stubGlobal('fetch', fetchStub)
   return fetchStub
 }
+
+/** Unfolds the archived group, where the delete and restore icons are. */
+async function openArchive(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByText(/^בדיקות בארכיון/))
+}
+
+const ARCHIVED = { archived: true }
 
 function openedStreams(): string[] {
   return FakeEventSource.instances.map((source) => source.url)
@@ -261,9 +276,10 @@ test('a refresh answered late does not overwrite a newer list', async () => {
 })
 
 test('deleting asks first; a cancel keeps the check and sends nothing', async () => {
-  const fetchStub = stubApi([[summary('a', '2026-01-01T00:00:00Z')]])
+  const fetchStub = stubApi([[summary('a', '2026-01-01T00:00:00Z', ARCHIVED)]])
   const user = userEvent.setup()
   render(<Shell user={dana} onSignOut={vi.fn()} />)
+  await openArchive(user)
 
   await user.click(await screen.findByRole('button', { name: 'מחיקת הבדיקה: בדיקה חדשה' }))
   expect(screen.getByText('למחוק את הבדיקה ואת כל מה שנשמר בה?')).toBeInTheDocument()
@@ -279,10 +295,11 @@ test('deleting asks first; a cancel keeps the check and sends nothing', async ()
 
 test('a deleted open check gives way to the newest one left', async () => {
   const older = summary('older', '2026-01-01T00:00:00Z')
-  const newer = summary('newer', '2026-02-01T00:00:00Z', { goal })
+  const newer = summary('newer', '2026-02-01T00:00:00Z', { goal, ...ARCHIVED })
   const fetchStub = stubApi([[newer, older], [older]])
   const user = userEvent.setup()
   render(<Shell user={dana} onSignOut={vi.fn()} />)
+  await openArchive(user)
 
   await user.click(await screen.findByRole('button', { name: `מחיקת הבדיקה: ${goal.purpose}` }))
   await user.click(screen.getByRole('button', { name: 'מחיקה' }))
@@ -296,9 +313,10 @@ test('a deleted open check gives way to the newest one left', async () => {
 })
 
 test('deleting the last check leaves the empty state and a clean URL', async () => {
-  stubApi([[summary('a', '2026-01-01T00:00:00Z')], []])
+  stubApi([[summary('a', '2026-01-01T00:00:00Z', ARCHIVED)], []])
   const user = userEvent.setup()
   render(<Shell user={dana} onSignOut={vi.fn()} />)
+  await openArchive(user)
 
   await user.click(await screen.findByRole('button', { name: 'מחיקת הבדיקה: בדיקה חדשה' }))
   await user.click(screen.getByRole('button', { name: 'מחיקה' }))
@@ -310,9 +328,10 @@ test('deleting the last check leaves the empty state and a clean URL', async () 
 test('a delete during a reply is refused with its reason and keeps the check', async () => {
   const refused = () =>
     jsonResponse(409, { detail: "check 'a' is still answering", check_id: 'a' })
-  stubApi([[summary('a', '2026-01-01T00:00:00Z')]], undefined, refused)
+  stubApi([[summary('a', '2026-01-01T00:00:00Z', ARCHIVED)]], undefined, refused)
   const user = userEvent.setup()
   render(<Shell user={dana} onSignOut={vi.fn()} />)
+  await openArchive(user)
 
   await user.click(await screen.findByRole('button', { name: 'מחיקת הבדיקה: בדיקה חדשה' }))
   await user.click(screen.getByRole('button', { name: 'מחיקה' }))
@@ -325,9 +344,10 @@ test('a delete during a reply is refused with its reason and keeps the check', a
 
 test('a failed delete is shown with its reason', async () => {
   const failed = () => jsonResponse(500, { detail: 'database down' })
-  stubApi([[summary('a', '2026-01-01T00:00:00Z')]], undefined, failed)
+  stubApi([[summary('a', '2026-01-01T00:00:00Z', ARCHIVED)]], undefined, failed)
   const user = userEvent.setup()
   render(<Shell user={dana} onSignOut={vi.fn()} />)
+  await openArchive(user)
 
   await user.click(await screen.findByRole('button', { name: 'מחיקת הבדיקה: בדיקה חדשה' }))
   await user.click(screen.getByRole('button', { name: 'מחיקה' }))
@@ -335,4 +355,165 @@ test('a failed delete is shown with its reason', async () => {
   expect(await screen.findByRole('alert')).toHaveTextContent(
     'לא הצלחנו למחוק את הבדיקה: database down',
   )
+})
+
+test('the duplicate icon clones a check and opens the copy', async () => {
+  const fetchStub = stubApi([
+    [summary('old', '2026-01-01T00:00:00Z', { goal })],
+    [
+      summary('old', '2026-01-01T00:00:00Z', { goal }),
+      summary('copy', '2026-02-01T00:00:00Z', { goal }),
+    ],
+  ])
+  const user = userEvent.setup()
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+
+  await user.click(await screen.findByRole('button', { name: `שכפול הבדיקה: ${goal.purpose}` }))
+
+  await waitFor(() => expect(window.location.hash).toBe('#check=copy'))
+  const clones = fetchStub.mock.calls.filter(([p]) => p === '/api/checks/old/clone')
+  expect(clones).toHaveLength(1)
+})
+
+test('an archived check is grouped and marked archived only, not stale or ready', async () => {
+  stubApi([
+    [
+      summary('old', '2026-01-01T00:00:00Z', {
+        archived: true,
+        profile_stale: true,
+        recommendation: RECOMMENDATION,
+      }),
+    ],
+  ])
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+
+  const list = await screen.findByRole('navigation', { name: 'הבדיקות שלי' })
+  expect(within(list).getByText('בדיקות בארכיון (1)')).toBeInTheDocument()
+  expect(within(list).getByText('בארכיון')).toHaveClass('chip', 'chip-gray')
+  expect(within(list).queryByText('חושב לפי פרופיל קודם')).not.toBeInTheDocument()
+  expect(within(list).queryByText('המלצה מוכנה')).not.toBeInTheDocument()
+})
+
+test('archived checks are grouped under a collapsed section after the live ones', async () => {
+  stubApi([
+    [
+      summary('live', '2026-03-01T00:00:00Z'),
+      summary('gone-1', '2026-02-01T00:00:00Z', { archived: true }),
+      summary('gone-2', '2026-01-01T00:00:00Z', { archived: true }),
+    ],
+  ])
+  const user = userEvent.setup()
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+
+  const list = await screen.findByRole('navigation', { name: 'הבדיקות שלי' })
+  const group = list.querySelector('details')!
+  expect(group).not.toHaveAttribute('open')
+  expect(within(group).getByText('בדיקות בארכיון (2)')).toBeInTheDocument()
+  expect(within(group).getAllByRole('listitem', { hidden: true })).toHaveLength(2)
+  const live = within(list).getAllByRole('listitem').filter((item) => !group.contains(item))
+  expect(live).toHaveLength(1)
+
+  await user.click(within(group).getByText('בדיקות בארכיון (2)'))
+  expect(group).toHaveAttribute('open')
+})
+
+test('the archived group starts collapsed even when the open check is archived', async () => {
+  window.history.replaceState(null, '', '#check=gone')
+  stubApi([
+    [
+      summary('live', '2026-03-01T00:00:00Z'),
+      summary('gone', '2026-02-01T00:00:00Z', { archived: true }),
+    ],
+  ])
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+
+  const list = await screen.findByRole('navigation', { name: 'הבדיקות שלי' })
+  await waitFor(() => expect(openedStreams()).toEqual(['/api/checks/gone/events']))
+  expect(list.querySelector('details')).not.toHaveAttribute('open')
+})
+
+test('jumping to an archived check opens the archived group and marks the check', async () => {
+  stubApi([
+    [
+      summary('live', '2026-03-01T00:00:00Z'),
+      summary('gone', '2026-02-01T00:00:00Z', { archived: true }),
+    ],
+  ])
+  const user = userEvent.setup()
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  await waitFor(() => expect(openedStreams()).toEqual(['/api/checks/live/events']))
+  act(() => {
+    const follows = { check_id: 'gone', changes: [{ field: 'savings', from: '1', to: '2' }] }
+    FakeEventSource.last().emit('check.follows', JSON.stringify(follows), '1')
+  })
+
+  await user.click(screen.getByRole('button', { name: 'מעבר לבדיקה הקודמת שבארכיון' }))
+
+  await waitFor(() => expect(window.location.hash).toBe('#check=gone'))
+  const group = screen.getByRole('navigation', { name: 'הבדיקות שלי' }).querySelector('details')!
+  expect(group).toHaveAttribute('open')
+  expect(group.querySelector('[aria-current="true"]')).not.toBeNull()
+})
+
+test('a live check has an archive icon and no delete icon; archiving refreshes the list', async () => {
+  const fetchStub = stubApi([
+    [summary('a', '2026-01-01T00:00:00Z')],
+    [summary('a', '2026-01-01T00:00:00Z', { archived: true, restorable: true })],
+  ])
+  const user = userEvent.setup()
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+
+  const archive = await screen.findByRole('button', { name: 'העברה לארכיון: בדיקה חדשה' })
+  expect(screen.queryByRole('button', { name: /^מחיקת הבדיקה/ })).not.toBeInTheDocument()
+  await user.click(archive)
+
+  expect(await screen.findByText('בדיקות בארכיון (1)')).toBeInTheDocument()
+  expect(fetchStub).toHaveBeenCalledWith(
+    '/api/checks/a/archive',
+    expect.objectContaining({ method: 'POST' }),
+  )
+})
+
+test('only a restorable archived check has a restore icon; restoring refreshes the list', async () => {
+  const fetchStub = stubApi([
+    [
+      summary('mine', '2026-02-01T00:00:00Z', { goal, archived: true, restorable: true }),
+      summary('stale', '2026-01-01T00:00:00Z', ARCHIVED),
+    ],
+    [summary('mine', '2026-02-01T00:00:00Z', { goal }), summary('stale', '2026-01-01T00:00:00Z', ARCHIVED)],
+  ])
+  const user = userEvent.setup()
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  await openArchive(user)
+
+  expect(screen.getAllByRole('button', { name: /^שחזור מהארכיון/ })).toHaveLength(1)
+  await user.click(screen.getByRole('button', { name: `שחזור מהארכיון: ${goal.purpose}` }))
+
+  expect(await screen.findByText('בדיקות בארכיון (1)')).toBeInTheDocument()
+  expect(fetchStub).toHaveBeenCalledWith(
+    '/api/checks/mine/restore',
+    expect.objectContaining({ method: 'POST' }),
+  )
+})
+
+test('collapsing the archived group over the open check opens the newest live one', async () => {
+  stubApi([
+    [
+      summary('live-new', '2026-03-01T00:00:00Z'),
+      summary('live-old', '2026-01-01T00:00:00Z'),
+      summary('gone', '2026-02-01T00:00:00Z', ARCHIVED),
+    ],
+  ])
+  const user = userEvent.setup()
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  await openArchive(user)
+  const archivedGroup = () =>
+    screen.getByRole('navigation', { name: 'הבדיקות שלי' }).querySelector('details')!
+  await user.click(within(archivedGroup()).getByRole('button', { name: /^בדיקה חדשה/ }))
+  await waitFor(() => expect(window.location.hash).toBe('#check=gone'))
+
+  await user.click(screen.getByText(/^בדיקות בארכיון/))
+
+  await waitFor(() => expect(window.location.hash).toBe('#check=live-new'))
+  expect(archivedGroup()).not.toHaveAttribute('open')
 })

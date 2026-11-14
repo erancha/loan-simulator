@@ -51,6 +51,8 @@ def test_list_shows_only_the_persons_checks_newest_first(world: World, client: T
             "recommendation": None,
             "recommends_examples_only": False,
             "profile_stale": False,
+            "archived": False,
+            "restorable": False,
         },
         {
             "id": "c-rec",
@@ -65,6 +67,8 @@ def test_list_shows_only_the_persons_checks_newest_first(world: World, client: T
             },
             "recommends_examples_only": False,
             "profile_stale": False,
+            "archived": False,
+            "restorable": False,
         },
     ]
 
@@ -146,6 +150,7 @@ def test_get_shows_the_goal_options_with_figures_and_the_recommendation(
         "created_at": "2026-10-27T09:00:00Z",
     }
     assert body["profile_stale"] is False
+    assert body["archived"] is False
 
 
 def test_a_new_check_has_no_goal_options_or_recommendation(client: TestClient) -> None:
@@ -155,6 +160,7 @@ def test_a_new_check_has_no_goal_options_or_recommendation(client: TestClient) -
     assert body["options"] == []
     assert body["recommendation"] is None
     assert body["profile_stale"] is False
+    assert body["archived"] is False
 
 
 def test_another_persons_check_is_404_like_an_unknown_one(world: World, public_key: Path) -> None:
@@ -389,3 +395,60 @@ def test_ready_needs_the_database(world: World, client: TestClient) -> None:
     response = client.get("/ready")
     assert response.status_code == 503
     assert response.json() == {"status": "not ready"}
+
+
+def test_clone_answers_201_with_a_copy_of_the_check_and_its_conversation(
+    world: World, client: TestClient
+) -> None:
+    seed_recommended_check(world)
+    world.replies(AIMessage("שלום"))
+    assert client.post("/api/checks/c-rec/messages", json={"text": "א"}).status_code == 202
+    world.drain(client)
+
+    response = client.post("/api/checks/c-rec/clone")
+
+    assert response.status_code == 201
+    clone_id = response.json()["id"]
+    original = client.get("/api/checks/c-rec").json()
+    clone = client.get(f"/api/checks/{clone_id}").json()
+    assert {**clone, "id": "c-rec"} == original
+    assert clone_id in world.saver.storage
+    assert client.post("/api/checks/no-such-check/clone").status_code == 404
+
+
+def test_a_message_to_an_archived_check_is_409(world: World, client: TestClient) -> None:
+    seed_recommended_check(world)
+    world.checks.rows["c-rec"] = replace(world.checks.rows["c-rec"], archived_at=NOW)
+
+    response = client.post("/api/checks/c-rec/messages", json={"text": "א"})
+
+    assert response.status_code == 409
+    assert client.get("/api/checks/c-rec").json()["archived"] is True
+
+
+def test_archive_and_restore_answer_204_and_the_list_says_what_can_be_restored(
+    world: World, client: TestClient
+) -> None:
+    seed_recommended_check(world)
+
+    assert client.post("/api/checks/c-rec/archive").status_code == 204
+    (listed,) = client.get("/api/checks").json()
+    assert (listed["archived"], listed["restorable"]) == (True, True)
+    assert client.post("/api/checks/c-rec/archive").status_code == 409
+
+    assert client.post("/api/checks/c-rec/restore").status_code == 204
+    (listed,) = client.get("/api/checks").json()
+    assert (listed["archived"], listed["restorable"]) == (False, False)
+    assert client.post("/api/checks/c-rec/restore").status_code == 409
+
+
+def test_a_check_archived_by_a_profile_edit_is_not_restorable(
+    world: World, client: TestClient
+) -> None:
+    seed_recommended_check(world)
+    world.clock.value = NOW + timedelta(minutes=5)
+    assert client.put("/api/profile", json={"savings": "60000"}).status_code == 200
+
+    (listed,) = client.get("/api/checks").json()
+    assert (listed["archived"], listed["restorable"]) == (True, False)
+    assert client.post("/api/checks/c-rec/restore").status_code == 409

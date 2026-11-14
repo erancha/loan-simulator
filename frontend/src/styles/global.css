@@ -668,6 +668,11 @@ button.primary {
   color: var(--amber);
 }
 
+.chip-gray {
+  background: var(--line);
+  color: var(--mute);
+}
+
 .chip-example {
   padding: 1px 8px;
   background: var(--example);
@@ -968,16 +973,38 @@ button.primary {
   gap: 4px;
 }
 
-.check-delete {
-  padding: 0 6px;
+/* The row's icons stack in one column beside the check, so the check keeps the row's width. */
+.check-actions {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+}
+
+.check-action {
+  padding: 2px 6px;
   border: 0;
   background: none;
   color: var(--mute);
   cursor: pointer;
 }
 
+.check-clone:hover {
+  color: var(--accent);
+}
+
 .check-delete:hover {
   color: var(--red);
+}
+
+/* Archived checks fold under their own heading after the live ones, muted to read as past. */
+.checks-archived > summary {
+  color: var(--mute);
+  cursor: pointer;
+}
+
+.checks-archived .check-item {
+  opacity: 0.75;
 }
 
 .check-confirm {
@@ -1202,4 +1229,9 @@ button.primary {
     padding: 3px 8px;
     font-size: 0.72rem;
   }
+}
+
+/* A note's link to another check stands apart from the text above it. */
+.check-note > button {
+  margin-block-start: 12px;
 }

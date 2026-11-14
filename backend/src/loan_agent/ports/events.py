@@ -23,6 +23,10 @@ OPTION_SAVED = "option.saved"
 RECOMMENDATION_PRESENTED = "recommendation.presented"
 QUESTION_ASKED = "question.asked"
 CHART_SHOWN = "chart.shown"
+CHECK_ARCHIVED = "check.archived"
+CHECK_CONTINUED = "check.continued"
+CHECK_FOLLOWS = "check.follows"
+CHECK_RESTORED = "check.restored"
 
 
 @runtime_checkable

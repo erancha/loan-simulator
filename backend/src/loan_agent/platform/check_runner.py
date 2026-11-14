@@ -4,6 +4,9 @@ Core building blocks:
 - CheckRunner.create: a new, empty check for the signed-in person
 - CheckRunner.send: records the person's message and runs the turn as a background task
 - CheckRunner.delete: removes an idle check, its conversation and all it produced
+- CheckRunner.clone: copies an idle check, its conversation and all it produced into a new check
+- CheckRunner.archive and restore: the person closes an idle check, or reopens one whose
+  figures still match the profile
 - CheckRunner.fail_interrupted: at startup, ends the turns a stopped process left running
 - CheckRunner.drain and aclose: wait for or cancel the turns in flight
 
@@ -19,6 +22,13 @@ so a page that replays the log sees complete messages only. A turn ends with tur
 preceded by turn.failed when it raised or was cut short by a restart; the error itself goes to the
 log, never to the page. A cut-short turn leaves the thread at its last checkpoint, and the next
 turn continues from there.
+
+A turn that ends by archiving its check (a profile change replaced the figures its recommendation
+was computed from) continues in a new check with the same goal: the old check's log names the new
+one in check.continued, the new one's log opens with check.follows, naming the old one and the
+changes that archived it, and the new check runs a turn on the person's same message. The new
+check's turn skips the cap check, but its copy of the message is logged like any other, so the
+person's count holds the message twice.
 """
 
 import asyncio
@@ -31,10 +41,28 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import MessagesState
 
-from loan_agent.application.agent_graph import AgentGraph, check_config, delete_conversation
-from loan_agent.domain.errors import TurnConflictError, TurnLimitError
+from loan_agent.application.agent_graph import (
+    AgentGraph,
+    archived_the_check,
+    check_config,
+    copy_conversation,
+    delete_conversation,
+    last_message,
+)
+from loan_agent.application.profile_saving import manual_archive_data
+from loan_agent.domain.errors import (
+    CheckArchivedError,
+    CheckNotRestorableError,
+    TurnConflictError,
+    TurnLimitError,
+)
 from loan_agent.domain.models import Check, User
 from loan_agent.ports.events import (
+    CHECK_ARCHIVED,
+    CHECK_CONTINUED,
+    CHECK_FOLLOWS,
+    CHECK_RESTORED,
+    GOAL_SET,
     MESSAGE_ASSISTANT,
     MESSAGE_DELTA,
     MESSAGE_USER,
@@ -42,7 +70,7 @@ from loan_agent.ports.events import (
     TURN_STATUS,
     EventSink,
 )
-from loan_agent.ports.repositories import CheckEventStore, CheckRepository
+from loan_agent.ports.repositories import CheckEventStore, CheckRepository, ProfileRepository
 
 log = structlog.get_logger(__name__)
 
@@ -65,6 +93,7 @@ class CheckRunner:
         self,
         graph: AgentGraph,
         checks: CheckRepository,
+        profiles: ProfileRepository,
         events: CheckEventStore,
         sink: EventSink,
         turn_limit: int,
@@ -74,6 +103,7 @@ class CheckRunner:
     ) -> None:
         self._graph = graph
         self._checks = checks
+        self._profiles = profiles
         self._events = events
         self._sink = sink
         self._turn_limit = turn_limit
@@ -93,18 +123,33 @@ class CheckRunner:
         return check
 
     async def send(self, user: User, check_id: str, text: str) -> None:
-        """Raises CheckNotFoundError for an unknown check or another person's, TurnConflictError
-        while the check runs a turn, and TurnLimitError when the person's messages are used up."""
+        """Raises CheckNotFoundError for an unknown check or another person's, CheckArchivedError
+        for an archived one, TurnConflictError while the check runs a turn, and TurnLimitError
+        when the person's messages are used up."""
         async with self._send_lock:
-            await self._checks.get(user.id, check_id)
+            check = await self._checks.get(user.id, check_id)
+            if check.archived_at is not None:
+                raise CheckArchivedError(check_id)
             if check_id in self._turns:
                 raise TurnConflictError(check_id)
             await self._require_message_left(user)
-            await self._sink.emit(check_id, MESSAGE_USER, {"text": text})
-            await self._sink.emit(check_id, TURN_STATUS, RUNNING)
-            turn = asyncio.create_task(self._run(check_config(user.id, check_id), check_id, text))
-            self._turns[check_id] = turn
-            turn.add_done_callback(lambda done: self._forget(check_id, done))
+            await self._start(user.id, check_id, text)
+
+    async def clone(self, user: User, check_id: str) -> Check:
+        """Raises CheckNotFoundError for an unknown check or another person's, and
+        TurnConflictError while the check runs a turn. The clone is open even when its source is
+        archived; it then reads as stale, recommended from an older profile."""
+        async with self._send_lock:
+            source = await self._checks.get(user.id, check_id)
+            if check_id in self._turns:
+                raise TurnConflictError(check_id)
+            clone = Check(
+                str(uuid.uuid4()), user.id, self._clock(), source.goal, source.profile_snapshot_at
+            )
+            left_out = (CHECK_ARCHIVED, CHECK_CONTINUED, CHECK_RESTORED)
+            await self._checks.clone(source.id, clone, left_out)
+            await copy_conversation(self._graph, source.id, clone.id)
+            return clone
 
     async def delete(self, user: User, check_id: str) -> None:
         """Raises CheckNotFoundError for an unknown check or another person's, and
@@ -155,7 +200,58 @@ class CheckRunner:
             freeing = times[count - limit]
             raise TurnLimitError(limit, freeing + self._window)
 
-    async def _run(self, config: RunnableConfig, check_id: str, text: str) -> None:
+    async def archive(self, user: User, check_id: str) -> None:
+        """Raises CheckNotFoundError for an unknown check or another person's, CheckArchivedError
+        for an archived one, and TurnConflictError while the check runs a turn."""
+        async with self._send_lock:
+            check = await self._checks.get(user.id, check_id)
+            if check.archived_at is not None:
+                raise CheckArchivedError(check_id)
+            if check_id in self._turns:
+                raise TurnConflictError(check_id)
+            now = self._clock()
+            await self._checks.archive(check_id, now)
+            await self._sink.emit(check_id, CHECK_ARCHIVED, manual_archive_data(now))
+
+    async def restore(self, user: User, check_id: str) -> None:
+        """Raises CheckNotFoundError for an unknown check or another person's, and
+        CheckNotRestorableError for an open check or one whose figures the profile no longer
+        has."""
+        async with self._send_lock:
+            check = await self._checks.get(user.id, check_id)
+            _, profile_updated_at = await self._profiles.get(user.id)
+            if not check.is_restorable(profile_updated_at):
+                raise CheckNotRestorableError(check_id)
+            await self._checks.restore(check_id)
+            await self._sink.emit(check_id, CHECK_RESTORED, {})
+
+    async def _start(self, user_id: str, check_id: str, text: str) -> None:
+        """Runs a turn on a check with no turn in flight."""
+        await self._sink.emit(check_id, MESSAGE_USER, {"text": text})
+        await self._sink.emit(check_id, TURN_STATUS, RUNNING)
+        turn = asyncio.create_task(self._run(user_id, check_id, text))
+        self._turns[check_id] = turn
+        turn.add_done_callback(lambda done: self._forget(check_id, done))
+
+    async def _continue_in_new_check(self, user_id: str, archived_id: str, text: str) -> None:
+        archived = await self._checks.get(user_id, archived_id)
+        check = Check(str(uuid.uuid4()), user_id, self._clock(), archived.goal, None)
+        await self._checks.add(check)
+        archive = next(
+            event
+            for event in reversed(await self._events.list(archived_id, 0))
+            if event.type == CHECK_ARCHIVED
+        )
+        follows = {"check_id": archived_id, "changes": archive.data["changes"]}
+        await self._sink.emit(check.id, CHECK_FOLLOWS, follows)
+        if check.goal is not None:
+            goal = {"purpose": check.goal.purpose, "price": str(check.goal.price)}
+            await self._sink.emit(check.id, GOAL_SET, goal)
+        await self._sink.emit(archived_id, CHECK_CONTINUED, {"check_id": check.id})
+        await self._start(user_id, check.id, text)
+
+    async def _run(self, user_id: str, check_id: str, text: str) -> None:
+        config = check_config(user_id, check_id)
         try:
             unfinished = await self._close_unfinished_tool_calls(config)
             turn_input = MessagesState(messages=[*unfinished, HumanMessage(text)])
@@ -171,6 +267,8 @@ class CheckRunner:
                     await self._store_replies(check_id, part["data"])
                 else:
                     raise AssertionError(f"unrequested stream part {part['type']!r}")
+            if archived_the_check(await last_message(self._graph, check_id)):
+                await self._continue_in_new_check(user_id, check_id, text)
         except Exception:
             log.exception("turn failed", check_id=check_id)
             await self._report_failure(check_id)

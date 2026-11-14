@@ -1,12 +1,12 @@
 """Profile routes: the person reads their finances with what is still missing, and corrects them.
 
-An edit saves a new profile version, so every check recommended from an earlier version reads as
-stale until the agent recommends again.
+An edit that changes a figure archives every check recommended from the replaced figures.
 """
 
 from fastapi import APIRouter, FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
+from loan_agent.application.profile_saving import save_profile
 from loan_agent.domain.errors import ProfileError
 from loan_agent.platform.api.auth import CurrentUser
 from loan_agent.platform.api.schemas import ProfileUpdate, ProfileView
@@ -23,10 +23,10 @@ async def get_profile(user: CurrentUser, deps: Deps) -> ProfileView:
 
 @router.put("")
 async def update_profile(body: ProfileUpdate, user: CurrentUser, deps: Deps) -> ProfileView:
-    profile, _ = await deps.profiles.get(user.id)
-    updated = profile.merged(body.sent())
-    await deps.profiles.save(user.id, updated)
-    return ProfileView.of(updated)
+    saved = await save_profile(
+        user.id, body.sent(), deps.profiles, deps.checks, deps.sink, deps.clock
+    )
+    return ProfileView.of(saved.profile)
 
 
 def register_error_handlers(app: FastAPI) -> None:

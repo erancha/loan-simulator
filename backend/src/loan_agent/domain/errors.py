@@ -23,6 +23,23 @@ class TurnConflictError(Exception):
         self.check_id = check_id
 
 
+class CheckArchivedError(Exception):
+    """The check was archived when the profile it was recommended from changed; it takes no more
+    messages."""
+
+    def __init__(self, check_id: str) -> None:
+        super().__init__(f"check {check_id!r} is archived")
+        self.check_id = check_id
+
+
+class CheckNotRestorableError(Exception):
+    """The check is open, or was archived with figures the profile no longer has."""
+
+    def __init__(self, check_id: str) -> None:
+        super().__init__(f"check {check_id!r} cannot be restored")
+        self.check_id = check_id
+
+
 class TurnLimitError(Exception):
     """The person used all the messages allowed across their checks within a rolling time window."""
 

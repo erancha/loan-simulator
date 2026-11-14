@@ -24,7 +24,7 @@ import {
 } from './copy.ts'
 import type { Answer } from './QuestionBubble.tsx'
 import { RecommendationCard } from './RecommendationCard.tsx'
-import { isSettled, liveQuestion } from './events.ts'
+import { isArchived, isSettled, liveQuestion } from './events.ts'
 import type { CheckState } from './events.ts'
 import { useCheckEvents } from './useCheckEvents.ts'
 
@@ -67,13 +67,25 @@ interface Props {
   activePane: 'chat' | 'card' | 'side'
   /** The checks list may have changed: a turn this page started ended, or the profile was saved. */
   onChecksChanged: () => void
+  /** Clones this check, sends the line to the copy and opens it. */
+  onClone: (line: string) => Promise<void>
+  onOpenCheck: (id: string) => void
 }
 
 /**
  * One check: the checks list and profile, the conversation, and the recommendation card, all fed
- * by the check's single event stream.
+ * by the check's single event stream. A turn this page started that archived the check opens the
+ * check its conversation went on in; opening an archived check later stays on it.
  */
-export function CheckPage({ checkId, stale, sidebar, activePane, onChecksChanged }: Props) {
+export function CheckPage({
+  checkId,
+  stale,
+  sidebar,
+  activePane,
+  onChecksChanged,
+  onClone,
+  onOpenCheck,
+}: Props) {
   const { state } = useCheckEvents(checkId)
   const profileStore = useProfileStore(state.profileVersion)
   const [notice, setNotice] = useState<string | null>(null)
@@ -93,6 +105,13 @@ export function CheckPage({ checkId, stale, sidebar, activePane, onChecksChanged
     awaitedAfter.current = null
     onChecksChanged()
   }, [accepted, state.turnsEnded, onChecksChanged])
+
+  // Opening the new check refreshes the checks list itself, so the turn's end needs no refresh.
+  useEffect(() => {
+    if (state.continuedIn === null || awaitedAfter.current === null) return
+    awaitedAfter.current = null
+    onOpenCheck(state.continuedIn)
+  }, [accepted, state.continuedIn, onOpenCheck])
 
   /** Resolves true when the server accepted the text; a 409 means a turn is already running. */
   async function send(text: string): Promise<boolean> {
@@ -176,10 +195,14 @@ export function CheckPage({ checkId, stale, sidebar, activePane, onChecksChanged
           onSend={send}
           onAnswer={answer}
           onSkip={send}
+          onClone={onClone}
+          continuedIn={state.continuedIn}
+          onOpenCheck={onOpenCheck}
+          recommended={state.recommendation !== null}
         />
       </section>
       <section className="pane-card">
-        {stale && (
+        {stale && !isArchived(state) && (
           <div className="stale-banner">
             <span>{STALE_BANNER}</span>
             <button

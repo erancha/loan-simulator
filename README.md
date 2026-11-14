@@ -23,7 +23,11 @@ holds the loan engine, the agent and the page.
   payments, and keeps them as a profile the person can correct in a side panel.
 - **Loan check**: each check sizes the loan, the savings cushion to keep and a monthly payment
   ceiling, and compares example tracks, a fixed and a prime one, or the real offers the person
-  collected. A check can be paused to collect offers and resumed days later.
+  collected. A check can be paused to collect offers and resumed days later, or cloned to try a
+  variant beside it. A profile change closes every check recommended from the old figures, with
+  a note listing them; a change made in a check's chat goes on in a new check that recalculates.
+  The person can also archive a check, restore it while its figures match the profile, and
+  delete an archived one.
 - **Worst case**: every option shows today's payment and its worst-case payment: the highest
   payment had rates and inflation moved as in any stretch of past months as long as the loan's
   term, starting in the last ten years, and which stretch that was.

@@ -5,8 +5,10 @@ import asyncio
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
+from decimal import Decimal
 from itertools import pairwise
 from typing import Any
+from unittest.mock import ANY
 
 import pytest
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
@@ -33,8 +35,15 @@ from loan_agent.adapters.memory_bus import InMemoryEventBus
 from loan_agent.application.agent_graph import TURN_STEP_LIMIT, build_agent_graph
 from loan_agent.application.check_tools import ToolDeps
 from loan_agent.application.event_sink import CheckEventSink, check_channel
-from loan_agent.domain.errors import CheckNotFoundError, TurnConflictError, TurnLimitError
-from loan_agent.domain.models import Check, User
+from loan_agent.application.profile_saving import save_profile
+from loan_agent.domain.errors import (
+    CheckArchivedError,
+    CheckNotFoundError,
+    CheckNotRestorableError,
+    TurnConflictError,
+    TurnLimitError,
+)
+from loan_agent.domain.models import Check, Goal, Option, Profile, User
 from loan_agent.platform.check_runner import (
     FAILURE_MESSAGE,
     TOOL_CALL_OUTCOME_UNKNOWN,
@@ -48,6 +57,14 @@ OTHER_PERSON = User("2002", "omer@example.com", "Omer")
 TURN_LIMIT = 2
 WINDOW = timedelta(hours=24)
 REPLY = "שלום, נתחיל בהכנסה החודשית שלך"
+GOAL = Goal("רכב", Decimal(55000))
+COMPLETE_PROFILE = Profile(
+    savings=Decimal(35000),
+    net_fixed_income=Decimal(8000),
+    variable_income=Decimal(0),
+    fixed_expenses=Decimal(6000),
+    existing_loan_payments=Decimal(0),
+)
 
 
 @dataclass
@@ -69,11 +86,13 @@ def world() -> World:
     bus = InMemoryEventBus()
     engine = FakeLoanEngine()
     options = InMemoryOptionRepository()
+    recommendations = InMemoryRecommendationRepository()
+    checks.option_store, checks.recommendation_store = options, recommendations
     deps = ToolDeps(
         profiles=InMemoryProfileRepository(clock),
         checks=checks,
         options=options,
-        recommendations=InMemoryRecommendationRepository(),
+        recommendations=recommendations,
         engine=engine,
         sink=CheckEventSink(store, bus),
         clock=clock,
@@ -97,6 +116,7 @@ def runner(
     return CheckRunner(
         graph,
         world.checks,
+        world.deps.profiles,
         world.store,
         world.deps.sink,
         turn_limit=TURN_LIMIT,
@@ -584,3 +604,168 @@ async def test_aclose_cancels_running_turns(world: World) -> None:
     await checks.drain()
 
     assert [type for type, _ in await stored(world, check.id)] == ["message.user", "turn.status"]
+
+
+def calls_update_profile(**fields: str) -> AIMessage:
+    return AIMessage(
+        content="",
+        tool_calls=[
+            {"name": "update_profile", "args": fields, "id": "call-profile", "type": "tool_call"}
+        ],
+    )
+
+
+async def recommended_check(world: World, checks: CheckRunner) -> Check:
+    """A check with a goal and one saved option, recommended from the person's profile as saved
+    at NOW."""
+    profiles = world.deps.profiles
+    assert isinstance(profiles, InMemoryProfileRepository)
+    profiles.rows[PERSON.id] = (COMPLETE_PROFILE, NOW)
+    check = await checks.create(PERSON)
+    await world.checks.set_goal(check.id, GOAL)
+    await world.checks.snapshot_profile(check.id, NOW)
+    await world.options.add(
+        Option(
+            "option-1",
+            check.id,
+            {"tracks": [PRIME_TRACK]},
+            "offer",
+            None,
+            None,
+            PRIME_SIMULATION.figures,
+            NOW,
+        )
+    )
+    return await world.checks.get(PERSON.id, check.id)
+
+
+async def test_clone_copies_the_check_its_log_and_its_conversation(world: World) -> None:
+    model = ScriptedChatModel(replies=[AIMessage(REPLY), AIMessage("בבדיקה המשוכפלת")])
+    checks = runner(world, model)
+    source = await recommended_check(world, checks)
+    await checks.send(PERSON, source.id, "שלום")
+    await checks.drain()
+    world.clock.value = NOW + timedelta(minutes=1)
+
+    clone = await checks.clone(PERSON, source.id)
+
+    assert clone.id != source.id
+    assert (clone.goal, clone.profile_snapshot_at, clone.archived_at) == (GOAL, NOW, None)
+    assert clone.created_at == NOW + timedelta(minutes=1)
+    assert [o.id for o in await world.options.list(clone.id)] == ["option-1"]
+    assert await stored(world, clone.id) == await stored(world, source.id)
+    await checks.send(PERSON, clone.id, "ממשיכים")
+    await checks.drain()
+    texts = [m.text for m in model.received[1] if isinstance(m, HumanMessage | AIMessage)]
+    assert texts == ["שלום", REPLY, "ממשיכים"]
+
+
+async def test_a_clones_copied_messages_use_none_of_the_persons_cap(world: World) -> None:
+    checks = runner(world, ScriptedChatModel(replies=[AIMessage(REPLY), AIMessage(REPLY)]))
+    source = await checks.create(PERSON)
+    await checks.send(PERSON, source.id, "שלום")
+    await checks.drain()
+
+    clone = await checks.clone(PERSON, source.id)
+
+    await checks.send(PERSON, clone.id, "שלום")
+    await checks.drain()
+
+
+async def test_a_message_to_an_archived_check_is_refused(world: World) -> None:
+    checks = runner(world, ScriptedChatModel(replies=[]))
+    check = await checks.create(PERSON)
+    await world.checks.archive(check.id, NOW)
+
+    with pytest.raises(CheckArchivedError):
+        await checks.send(PERSON, check.id, "שלום")
+
+
+async def test_a_profile_change_in_a_recommended_check_continues_in_a_new_check(
+    world: World,
+) -> None:
+    model = ScriptedChatModel(
+        replies=[calls_update_profile(savings="23000"), AIMessage("ההמלצה החדשה")]
+    )
+    checks = runner(world, model)
+    archived = await recommended_check(world, checks)
+    world.clock.value = NOW + timedelta(minutes=1)
+
+    await checks.send(PERSON, archived.id, "טעיתי, כסף זמין 23,000")
+    await checks.drain()
+
+    assert (await world.checks.get(PERSON.id, archived.id)).archived_at == world.clock.value
+    events = await stored(world, archived.id)
+    assert [type for type, _ in events][-4:] == [
+        "check.archived",
+        "profile.updated",
+        "check.continued",
+        "turn.status",
+    ]
+    continued_id = events[-2][1]["check_id"]
+    continued = await world.checks.get(PERSON.id, continued_id)
+    assert (continued.goal, continued.profile_snapshot_at, continued.archived_at) == (
+        GOAL,
+        None,
+        None,
+    )
+    assert await stored(world, continued_id) == [
+        (
+            "check.follows",
+            {
+                "check_id": archived.id,
+                "changes": [{"field": "savings", "from": "35000", "to": "23000"}],
+            },
+        ),
+        ("goal.set", {"purpose": GOAL.purpose, "price": str(GOAL.price)}),
+        ("message.user", {"text": "טעיתי, כסף זמין 23,000"}),
+        ("turn.status", {"status": "running"}),
+        ("message.assistant", {"message_id": ANY, "text": "ההמלצה החדשה"}),
+        ("turn.status", {"status": "idle"}),
+    ]
+    assert len(model.received) == 2
+
+
+async def test_the_person_archives_a_check_and_restores_it(world: World) -> None:
+    checks = runner(world, ScriptedChatModel(replies=[AIMessage(REPLY)]))
+    check = await recommended_check(world, checks)
+    world.clock.value = NOW + timedelta(minutes=1)
+
+    await checks.archive(PERSON, check.id)
+
+    assert (await world.checks.get(PERSON.id, check.id)).archived_at == world.clock.value
+    assert await stored(world, check.id) == [
+        (
+            "check.archived",
+            {"previous_profile": None, "changes": [], "archived_at": world.clock.value.isoformat()},
+        )
+    ]
+    with pytest.raises(CheckArchivedError):
+        await checks.archive(PERSON, check.id)
+
+    await checks.restore(PERSON, check.id)
+
+    assert (await world.checks.get(PERSON.id, check.id)).archived_at is None
+    assert (await stored(world, check.id))[-1] == ("check.restored", {})
+    await checks.send(PERSON, check.id, "שלום")
+    await checks.drain()
+
+
+async def test_a_check_archived_by_a_profile_change_is_not_restored(world: World) -> None:
+    checks = runner(world, ScriptedChatModel(replies=[]))
+    check = await recommended_check(world, checks)
+    world.clock.value = NOW + timedelta(minutes=1)
+    await save_profile(
+        PERSON.id,
+        {"savings": "23000"},
+        world.deps.profiles,
+        world.checks,
+        world.deps.sink,
+        world.clock,
+    )
+
+    with pytest.raises(CheckNotRestorableError):
+        await checks.restore(PERSON, check.id)
+    open_check = await checks.create(PERSON)
+    with pytest.raises(CheckNotRestorableError):
+        await checks.restore(PERSON, open_check.id)

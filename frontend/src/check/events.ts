@@ -7,7 +7,9 @@
  */
 import type {
   ChartShown,
+  CheckArchived,
   CheckEvent,
+  CheckFollows,
   Goal,
   OptionSaved,
   Question,
@@ -37,7 +39,21 @@ export interface ChartEntry {
   chart: ChartShown
 }
 
-export type ChatEntry = ChatMessage | QuestionEntry | ChartEntry
+/** The note that closes an archived check's conversation. */
+export interface ArchiveEntry {
+  id: string
+  role: 'archived'
+  archive: CheckArchived
+}
+
+/** The note that opens a follow-up check, naming the archived check it replaces. */
+export interface FollowsEntry {
+  id: string
+  role: 'follows'
+  follows: CheckFollows
+}
+
+export type ChatEntry = ChatMessage | QuestionEntry | ChartEntry | ArchiveEntry | FollowsEntry
 
 /** A user message or a reply; a question and a chart are entries of their own kinds. */
 export function isMessage(entry: ChatEntry): entry is ChatMessage {
@@ -67,6 +83,8 @@ export interface CheckState {
   failure: string | null
   /** Highest stored seq applied. */
   lastSeq: number
+  /** The check an archived check's conversation went on in. */
+  continuedIn: string | null
 }
 
 export const initialState: CheckState = {
@@ -80,6 +98,7 @@ export const initialState: CheckState = {
   turnsEnded: 0,
   failure: null,
   lastSeq: 0,
+  continuedIn: null,
 }
 
 function upsertAssistant(
@@ -184,7 +203,29 @@ function apply(state: CheckState, event: CheckEvent): CheckState {
       }
     case 'turn.failed':
       return { ...state, failure: event.data.message }
+    case 'check.archived':
+      return {
+        ...state,
+        messages: [
+          ...state.messages,
+          { id: `x-${event.seq}`, role: 'archived', archive: event.data },
+        ],
+      }
+    case 'check.continued':
+      return { ...state, continuedIn: event.data.check_id }
+    case 'check.restored':
+      return { ...state, messages: state.messages.filter((entry) => entry.role !== 'archived') }
+    case 'check.follows':
+      return {
+        ...state,
+        messages: [...state.messages, { id: `f-${event.seq}`, role: 'follows', follows: event.data }],
+      }
   }
+}
+
+/** An archived check takes no more messages. */
+export function isArchived(state: Pick<CheckState, 'messages'>): boolean {
+  return state.messages.some((entry) => entry.role === 'archived')
 }
 
 // Last, unanswered and idle means no person's message follows the question: the backend stores

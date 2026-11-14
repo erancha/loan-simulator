@@ -59,7 +59,10 @@ variable income, the option figures' JSON encoding, the check tools, and the gua
 (no loan needed, principal below the sized loan, a sized loan beyond the engine's maximum,
 worst-case payment above the ceiling), each with the message the model reads. The ask tool's tests
 prove the emitted question and its fixed result, and its refusals: a profile field already stored,
-named with its value, and the variable income minimum while variable income is 0.
+named with its value, the variable income minimum while variable income is 0, and a clone offer in
+a check with no recommendation. The profile save's tests prove that a changed figure archives the
+checks recommended from the replaced figures, with the whole replaced profile and the change in
+the event, and that a collecting check, a stale one and a save of the same figures archive none.
 
 The agent graph runs against a scripted fake chat model, which proves tool wiring, that every tool
 the system prompt names is bound, ask among them, that it lists the same loan sources as the page,
@@ -81,7 +84,10 @@ delete and a save that changes nothing, which keeps its save time, among them.
 401 answer on every route outside a short public list and the 404 answers, profile and check routes,
 the event stream's replay, Last-Event-ID resume and its dropping of fragments the replay already
 sent complete, the turn cap with its per-person overrides, the conflict answers, deleting a check
-with its conversation, which gives no messages back under the cap, the runner's streaming and
+with its conversation, which gives no messages back under the cap, cloning a check with its log and
+conversation, whose copied messages use none of the cap, the refusal of a message to an archived
+check, archiving by the person and restoring only a check whose figures still match the profile, a
+profile change in a recommended check that goes on in a new check, the runner's streaming and
 failure events, a turn after a model failure, the turn step limit, restart recovery, settings
 validation, and that the migration builds the tables, matches the ORM and downgrades.
 
@@ -141,17 +147,21 @@ bubble shows only the question.
 
 **Check page.** `CheckPage.test.tsx` replays a recorded conversation into all three panes and
 proves sending, the cap notice with the local time on a 429, the silent 409, the stale banner and
-its fixed recompute message, and when the checks list changes: once when a turn this page started
-ends, on a profile save, and not for replayed turns. For questions it proves that a tapped answer
-is saved and then sent as a line, that a capped send after a saved answer keeps the bubble, that a
-skip sends its line without a save and a failed skip keeps the bubble, and that a typed message
-closes the live question. For panel edits it proves that an edit of the asked field answers the
-question, that any other edit shows as a note, that an answer that is not accepted is noted
-instead, and that a note made while a reply streams outlives the reply being dropped.
+its fixed recompute message, the clone offer's two choices, opening the check a conversation went
+on in only after this page's own send, and when the checks list changes: once when a turn this
+page started ends, on a profile save, and not for replayed turns. For questions it proves that a
+tapped answer is saved and then sent as a line, that a capped send after a saved answer keeps the
+bubble, that a skip sends its line without a save and a failed skip keeps the bubble, and that a
+typed message closes the live question. For panel edits it proves that an edit of the asked
+field answers the question, that any other edit shows as a note, that an answer that is not
+accepted is noted instead, and that a note made while a reply streams outlives the reply being
+dropped.
 
 **Shell and sign-in.** `Shell.test.tsx` proves the header and sign-out, the empty state and creating
-a check, the list's markers, selection by hash and the fallback to the newest check, the tab bar,
-and that a late list answer does not overwrite a newer one. Its delete tests prove the confirmation
+a check, the list's markers, the archived checks folded in their own group, cloning from the list,
+the archive icon of a live check and the restore icon of a restorable one, selection by hash and the
+fallback to the newest check, the tab bar, and that a late list answer does not overwrite a newer
+one. Its delete tests, on archived checks, the only ones with a delete icon, prove the confirmation
 and its cancel, that the newest check left opens, that the last one leaves the empty state, and the
 refusal during a reply. `App.test.tsx` proves the Hebrew right-to-left document, the sign-in screen,
 entering the app and the fall back to sign-in on a 401. `money.test.ts` and `client.test.ts` cover

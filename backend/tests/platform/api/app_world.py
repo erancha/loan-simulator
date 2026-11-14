@@ -82,6 +82,8 @@ class World:
     def __post_init__(self) -> None:
         self.profiles = InMemoryProfileRepository(self.clock)
         self.events = InMemoryCheckEventStore(self.checks, self.clock)
+        self.checks.option_store = self.options
+        self.checks.recommendation_store = self.recommendations
 
     def replies(self, *messages: AIMessage) -> None:
         self.model.replies.extend(messages)

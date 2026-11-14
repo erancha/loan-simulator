@@ -1,6 +1,9 @@
 import { expect, test } from 'vitest'
 import {
   assistantMessage,
+  checkArchived,
+  checkContinued,
+  checkFollows,
   chartShown,
   cpiChart,
   delta,
@@ -18,7 +21,7 @@ import {
   withSeq,
 } from '../test/fixtures.ts'
 import type { CheckEvent } from '../api/types.ts'
-import { initialState, liveQuestion, reduce } from './events.ts'
+import { initialState, isArchived, liveQuestion, reduce } from './events.ts'
 
 const play = (events: CheckEvent[]) => events.reduce(reduce, initialState)
 
@@ -178,4 +181,30 @@ test('profile updates are counted and the latest goal is kept', () => {
   ])
   expect(state.profileVersion).toBe(2)
   expect(state.goal).toBe(goal)
+})
+
+test('an archive closes the conversation with its note; a continuation names the new check', () => {
+  const archived = checkArchived(2)
+  const state = play([userMessage(1, 'טעיתי'), archived, checkContinued(3, 'c2')])
+  expect(state.messages.at(-1)).toEqual({ id: 'x-2', role: 'archived', archive: archived.data })
+  expect(isArchived(state)).toBe(true)
+  expect(state.continuedIn).toBe('c2')
+  expect(isArchived(play([userMessage(1, 'שלום')]))).toBe(false)
+})
+
+test('a follow-up check opens with a note naming the check it follows', () => {
+  const follows = checkFollows(1, 'c-old')
+  const state = play([follows, userMessage(2, 'טעיתי')])
+  expect(state.messages[0]).toEqual({ id: 'f-1', role: 'follows', follows: follows.data })
+  expect(isArchived(state)).toBe(false)
+})
+
+test('a restore reopens the conversation and drops the closing note', () => {
+  const state = play([
+    userMessage(1, 'שלום'),
+    checkArchived(2),
+    { type: 'check.restored', data: {}, seq: 3 },
+  ])
+  expect(isArchived(state)).toBe(false)
+  expect(state.messages).toHaveLength(1)
 })

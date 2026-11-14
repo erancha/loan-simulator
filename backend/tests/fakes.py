@@ -12,7 +12,7 @@ Core building blocks:
 """
 
 import json
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Collection, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -149,9 +149,14 @@ class InMemoryProfileRepository:
 
 
 class InMemoryCheckRepository:
+    """clone copies options and the recommendation only when option_store and
+    recommendation_store are set."""
+
     def __init__(self) -> None:
         self.rows: dict[str, Check] = {}
         self.event_store: InMemoryCheckEventStore | None = None
+        self.option_store: InMemoryOptionRepository | None = None
+        self.recommendation_store: InMemoryRecommendationRepository | None = None
 
     async def add(self, check: Check) -> None:
         self.rows[check.id] = check
@@ -178,6 +183,30 @@ class InMemoryCheckRepository:
 
     async def snapshot_profile(self, check_id: str, at: datetime) -> None:
         self.rows[check_id] = replace(self.rows[check_id], profile_snapshot_at=at)
+
+    async def archive(self, check_id: str, at: datetime) -> None:
+        if check_id not in self.rows:
+            raise CheckNotFoundError(check_id)
+        self.rows[check_id] = replace(self.rows[check_id], archived_at=at)
+
+    async def restore(self, check_id: str) -> None:
+        self.rows[check_id] = replace(self.rows[check_id], archived_at=None)
+
+    async def clone(self, source_id: str, clone: Check, left_out: Collection[str]) -> None:
+        self.rows[clone.id] = clone
+        if self.option_store is not None:
+            self.option_store.rows[clone.id] = [
+                replace(option, check_id=clone.id)
+                for option in self.option_store.rows.get(source_id, [])
+            ]
+        if self.recommendation_store is not None:
+            recommendation = self.recommendation_store.rows.get(source_id)
+            if recommendation is not None:
+                self.recommendation_store.rows[clone.id] = replace(
+                    recommendation, check_id=clone.id
+                )
+        assert self.event_store is not None
+        self.event_store.copy(source_id, clone.id, left_out)
 
 
 class InMemoryOptionRepository:
@@ -216,6 +245,13 @@ class InMemoryCheckEventStore:
         checks.event_store = self
         # Key: person and event type. Value: the kept times of a deleted check's events.
         self._kept: dict[tuple[str, str], list[datetime]] = {}
+        # Key: id of a check cloned from another. Value: how many of its first events are copies.
+        self._copied: dict[str, int] = {}
+
+    def copy(self, source_id: str, target_id: str, left_out: Collection[str]) -> None:
+        kept = [event for event in self.rows.get(source_id, []) if event.type not in left_out]
+        self.rows[target_id] = [replace(event, seq=seq) for seq, event in enumerate(kept, 1)]
+        self._copied[target_id] = len(kept)
 
     async def append(self, check_id: str, type: str, data: Mapping[str, object]) -> int:
         if check_id not in self._checks.rows:
@@ -233,19 +269,22 @@ class InMemoryCheckEventStore:
             for check_id, log in self.rows.items()
             if self._checks.rows[check_id].user_id == user_id
             for event in log
-            if event.type == type and event.created_at > since
+            if event.type == type
+            and event.created_at > since
+            and event.seq > self._copied.get(check_id, 0)
         )
         kept = [time for time in self._kept.get((user_id, type), []) if time > since]
         times = sorted(times + kept)
         return len(times), times
 
     def forget(self, check: Check, kept_type: str, kept_since: datetime) -> None:
+        copied = self._copied.pop(check.id, 0)
         self._kept[(check.user_id, kept_type)] = [
             *self._kept.get((check.user_id, kept_type), []),
             *(
                 event.created_at
                 for event in self.rows.pop(check.id, [])
-                if event.type == kept_type and event.created_at > kept_since
+                if event.type == kept_type and event.created_at > kept_since and event.seq > copied
             ),
         ]
 

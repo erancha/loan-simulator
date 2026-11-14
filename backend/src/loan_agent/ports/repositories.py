@@ -8,7 +8,7 @@
 Every method that takes a user id answers only for that person's rows.
 """
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol, runtime_checkable
@@ -67,6 +67,19 @@ class CheckRepository(Protocol):
     async def snapshot_profile(self, check_id: str, at: datetime) -> None:
         """Records the profile version the check's recommendation was computed from. A check is
         stale when the profile was saved after this time."""
+        ...
+
+    async def archive(self, check_id: str, at: datetime) -> None: ...
+
+    async def restore(self, check_id: str) -> None:
+        """Reopens an archived check."""
+        ...
+
+    async def clone(self, source_id: str, clone: Check, left_out: Collection[str]) -> None:
+        """Adds the clone with copies of the source's options, recommendation and events, all in
+        one transaction. Option ids stay as they are, since the conversation names them. Events
+        of the left_out types are not copied; the copies keep their times and data, are numbered
+        from 1, and never count in count_since."""
         ...
 
 

@@ -23,6 +23,7 @@ it('a money answer is saved and sent as a labelled line', async () => {
       profile={null}
       onAnswer={onAnswer}
       onSkip={vi.fn()}
+      onClone={vi.fn()}
     />,
   )
   await user.type(screen.getByRole('textbox', { name: 'הכנסה קבועה' }), '8,000')
@@ -41,6 +42,7 @@ it('a money box starts from the stored amount', () => {
       profile={profileView.profile}
       onAnswer={vi.fn()}
       onSkip={vi.fn()}
+      onClone={vi.fn()}
     />,
   )
   expect(screen.getByRole('textbox', { name: 'כסף זמין' })).toHaveValue('15,000')
@@ -56,6 +58,7 @@ it('normalises the typed amount; empty does not answer', async () => {
       profile={null}
       onAnswer={onAnswer}
       onSkip={vi.fn()}
+      onClone={vi.fn()}
     />,
   )
   await user.click(screen.getByRole('button', { name: 'אישור' }))
@@ -80,6 +83,7 @@ it('the minimum of the variable income is an ordinary money answer', async () =>
       profile={null}
       onAnswer={onAnswer}
       onSkip={vi.fn()}
+      onClone={vi.fn()}
     />,
   )
   expect(screen.getByText('ובחודש חלש, כמה מההכנסה המשתנה בכל זאת נכנס?')).toBeInTheDocument()
@@ -101,6 +105,7 @@ it('a skip saves a minimum of 0', async () => {
       profile={null}
       onAnswer={onAnswer}
       onSkip={vi.fn()}
+      onClone={vi.fn()}
     />,
   )
   await user.click(screen.getByRole('button', { name: 'דילוג' }))
@@ -120,6 +125,7 @@ it('a purpose choice sends no profile update', async () => {
       profile={null}
       onAnswer={onAnswer}
       onSkip={vi.fn()}
+      onClone={vi.fn()}
     />,
   )
   await user.click(screen.getByRole('button', { name: 'רכב' }))
@@ -136,6 +142,7 @@ it('another purpose is typed in its own box', async () => {
       profile={null}
       onAnswer={onAnswer}
       onSkip={vi.fn()}
+      onClone={vi.fn()}
     />,
   )
   await user.type(screen.getByRole('textbox', { name: 'משהו אחר' }), 'מחשב')
@@ -153,6 +160,7 @@ it('a price answer is a shekel line without a profile update', async () => {
       profile={profileView.profile}
       onAnswer={onAnswer}
       onSkip={vi.fn()}
+      onClone={vi.fn()}
     />,
   )
   await user.type(screen.getByRole('textbox', { name: 'מה המחיר, בערך?' }), '55000')
@@ -170,6 +178,7 @@ it('a free question with choices renders them as buttons', async () => {
       profile={null}
       onAnswer={onAnswer}
       onSkip={vi.fn()}
+      onClone={vi.fn()}
     />,
   )
   expect(screen.getByText('חדש או משומש?')).toBeInTheDocument()
@@ -189,6 +198,7 @@ it('a free question without choices takes typed text', async () => {
       profile={null}
       onAnswer={onAnswer}
       onSkip={vi.fn()}
+      onClone={vi.fn()}
     />,
   )
   await user.type(screen.getByRole('textbox', { name: 'מאיזו שנה הרכב?' }), '2019{Enter}')
@@ -206,6 +216,7 @@ it('skip sends the skip line', async () => {
       profile={null}
       onAnswer={onAnswer}
       onSkip={onSkip}
+      onClone={vi.fn()}
     />,
   )
   await user.click(screen.getByRole('button', { name: 'דילוג' }))
@@ -225,6 +236,7 @@ it('a refused save stays on the question with its reason', async () => {
       profile={null}
       onAnswer={onAnswer}
       onSkip={vi.fn()}
+      onClone={vi.fn()}
     />,
   )
   await user.type(screen.getByRole('textbox', { name: 'כסף זמין' }), '100')
@@ -246,6 +258,7 @@ it('text that is not a number is refused before anything is sent', async () => {
       profile={null}
       onAnswer={onAnswer}
       onSkip={vi.fn()}
+      onClone={vi.fn()}
     />,
   )
   await user.type(screen.getByRole('textbox', { name: 'כסף זמין' }), 'הרבה')
@@ -265,6 +278,7 @@ it('an unsaved answer keeps the question open without a message', async () => {
       profile={null}
       onAnswer={onAnswer}
       onSkip={vi.fn()}
+      onClone={vi.fn()}
     />,
   )
   await user.type(screen.getByRole('textbox', { name: 'כסף זמין' }), '100')
@@ -283,6 +297,7 @@ it('a closed bubble shows the question without controls', () => {
       profile={null}
       onAnswer={vi.fn()}
       onSkip={vi.fn()}
+      onClone={vi.fn()}
     />,
   )
   expect(container.firstElementChild).toHaveClass('bubble', 'bubble-assistant', 'bubble-question')
@@ -300,6 +315,7 @@ it('a live bubble shows the lead-in, the label and its hint', () => {
       profile={null}
       onAnswer={vi.fn()}
       onSkip={vi.fn()}
+      onClone={vi.fn()}
     />,
   )
   expect(screen.getByText('עוד דבר אחד.')).toBeInTheDocument()
@@ -320,6 +336,7 @@ it('a skipped loans, savings or variable income question saves 0 and says so', a
       profile={null}
       onAnswer={onAnswer}
       onSkip={onSkip}
+      onClone={vi.fn()}
     />,
   )
   await user.click(screen.getByRole('button', { name: 'דילוג' }))

@@ -31,13 +31,14 @@ from fakes import (
 from loan_agent.application.agent_graph import (
     RECOMMENDATION_HEADING,
     SYSTEM_PROMPT,
+    AskQuestion,
     SaveOptionArgs,
     TrackArgs,
     build_agent_graph,
     check_config,
 )
-from loan_agent.application.check_tools import ASKED_RESULT, ToolDeps
-from loan_agent.domain.models import Check, Goal, OptionSource, Profile
+from loan_agent.application.check_tools import ASKED_RESULT, CHECK_ARCHIVED_RESULT, ToolDeps
+from loan_agent.domain.models import Check, Goal, OptionSource, Profile, Recommendation
 from loan_agent.platform.checkpointer import checkpoint_serde
 from loan_agent.ports.events import QUESTION_ASKED
 
@@ -362,7 +363,11 @@ def test_every_tool_the_system_prompt_names_is_bound(world: World) -> None:
     run(world, model, [stand_in(name) for name in sorted(ENGINE_TOOL_NAMES)])
 
     identifiers = set(re.findall(r"\b[a-z]+(?:_[a-z]+)+\b", SYSTEM_PROMPT))
-    tool_fields = {*SaveOptionArgs.model_fields, *TrackArgs.model_fields}
+    tool_fields = {
+        *SaveOptionArgs.model_fields,
+        *TrackArgs.model_fields,
+        *AskQuestion.model_fields,
+    }
     named_tools = identifiers - set(get_args(OptionSource)) - tool_fields
     assert "present_recommendation" in named_tools
     assert named_tools <= {tool.name for tool in model.tools}
@@ -394,7 +399,12 @@ async def test_ask_ends_the_turn_after_the_tool_node(world: World) -> None:
     assert state["messages"][-1].content == ASKED_RESULT
     assert [e.type for e in world.sink.events] == [QUESTION_ASKED]
     assert world.sink.events[0].data == {
-        "question": {"field": "net_fixed_income", "text": None, "choices": None},
+        "question": {
+            "field": "net_fixed_income",
+            "text": None,
+            "choices": None,
+            "offer_clone": False,
+        },
         "lead_in": None,
     }
 
@@ -495,6 +505,51 @@ async def test_ask_refuses_an_empty_question_and_a_single_choice(world: World) -
     assert "text" in str(empty.content) and "choices" in str(single.content)
     assert not world.sink.events
     assert len(model.received) == 3
+
+
+async def test_ask_offers_a_clone_only_after_a_recommendation(world: World) -> None:
+    offer = ("ask", {"question": {"offer_clone": True}})
+    model = ScriptedChatModel(replies=[calls(offer), AIMessage("אין עוד המלצה")])
+    graph = run(world, model)
+    state = await graph.ainvoke(said("ומה עם 1,000 בחודש?"), check_config(PERSON, CHECK))
+    assert tool_messages(state["messages"])[0].status == "error"
+    assert not world.sink.events
+
+    await world.recommendations.save(
+        Recommendation(CHECK, "o1", None, "כי", Decimal(1), Decimal(1), Decimal(1), Decimal(1), NOW)
+    )
+    model.replies.append(calls(offer))
+    await graph.ainvoke(said("ומה עם 1,000 בחודש?"), check_config(PERSON, CHECK))
+    assert [e.data for e in world.sink.events] == [
+        {
+            "question": {"field": None, "text": None, "choices": None, "offer_clone": True},
+            "lead_in": None,
+        }
+    ]
+
+
+async def test_ask_schema_keeps_a_clone_offer_free_of_field_text_and_choices(world: World) -> None:
+    model = ScriptedChatModel(
+        replies=[
+            calls(("ask", {"question": {"offer_clone": True, "text": "לשכפל?"}})),
+            AIMessage("אתקן"),
+        ]
+    )
+    graph = run(world, model)
+    state = await graph.ainvoke(said("שלום"), check_config(PERSON, CHECK))
+    assert tool_messages(state["messages"])[0].status == "error"
+
+
+async def test_a_profile_change_that_archives_the_check_ends_the_turn(world: World) -> None:
+    await world.profiles.save(PERSON, Profile(savings=Decimal(35000)))
+    await world.checks.snapshot_profile(CHECK, NOW)
+    model = ScriptedChatModel(
+        replies=[calls(("update_profile", {"savings": "23000"})), AIMessage("never reached")]
+    )
+    graph = run(world, model)
+    state = await graph.ainvoke(said("טעיתי"), check_config(PERSON, CHECK))
+    assert len(model.received) == 1
+    assert state["messages"][-1].content == CHECK_ARCHIVED_RESULT
 
 
 async def test_state_block_says_the_minimum_is_not_needed_without_variable_income(
@@ -598,3 +653,40 @@ async def test_a_recommendation_from_an_earlier_turn_does_not_back_this_ones_tex
 
 def test_the_recommendation_heading_is_the_one_the_system_prompt_asks_for() -> None:
     assert f"**{RECOMMENDATION_HEADING}**" in SYSTEM_PROMPT
+
+
+async def test_a_reply_with_an_english_word_is_rewritten_once(world: World) -> None:
+    model = ScriptedChatModel(
+        replies=[
+            AIMessage("מטרה: מכונית, price: 50,000 ₪"),
+            AIMessage("מטרה: מכונית, מחיר 50,000 ₪"),
+        ]
+    )
+    graph = run(world, model)
+
+    state = await graph.ainvoke(said("שלום"), check_config(PERSON, CHECK))
+
+    assert len(model.received) == 2
+    assert "English" in model.received[1][-1].content
+    assert state["messages"][-1].content == "מטרה: מכונית, מחיר 50,000 ₪"
+
+
+async def test_an_english_word_is_rewritten_only_once(world: World) -> None:
+    model = ScriptedChatModel(
+        replies=[AIMessage("קיבלתי הצעה מ-Max"), AIMessage("קיבלתי הצעה מ-Max")]
+    )
+    graph = run(world, model)
+
+    state = await graph.ainvoke(said("הצעה מ-Max"), check_config(PERSON, CHECK))
+
+    assert len(model.received) == 2
+    assert state["messages"][-1].content == "קיבלתי הצעה מ-Max"
+
+
+async def test_a_hebrew_reply_with_numbers_and_shekels_stands(world: World) -> None:
+    model = ScriptedChatModel(replies=[AIMessage("פריים + 1.5% ל-30 חודשים: 1,322 ₪")])
+    graph = run(world, model)
+
+    await graph.ainvoke(said("שלום"), check_config(PERSON, CHECK))
+
+    assert len(model.received) == 1

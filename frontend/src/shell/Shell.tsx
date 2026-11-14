@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
-import { createCheck, deleteCheck, listChecks } from '../api/checks.ts'
+import {
+  archiveCheck,
+  cloneCheck,
+  createCheck,
+  deleteCheck,
+  listChecks,
+  restoreCheck,
+  sendMessage,
+} from '../api/checks.ts'
 import { ApiException, errorText } from '../api/client.ts'
 import type { CheckSummary, User } from '../api/types.ts'
 import { CheckPage } from '../check/CheckPage.tsx'
@@ -8,12 +16,16 @@ import { ChecksList } from './ChecksList.tsx'
 import { APP_TITLE } from '../copy.ts'
 import { useLatest } from '../latest.ts'
 import {
+  ARCHIVE_WHILE_ANSWERING,
   DELETE_WHILE_ANSWERING,
   NEW_CHECK,
   NO_CHECKS,
+  archiveFailed,
+  cloneFailed,
   createFailed,
   deleteFailed,
   loadFailed,
+  restoreFailed,
   signOutFailed,
 } from './copy.ts'
 import { TabBar } from './TabBar.tsx'
@@ -47,6 +59,8 @@ export function Shell({ user, onSignOut }: Props) {
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const [wantedId, setWantedId] = useState(hashedId)
   const [pane, setPane] = useState<Pane>('chat')
+  // Kept here because the checks list is rebuilt with the check page on every switch of checks.
+  const [archivedOpen, setArchivedOpen] = useState(false)
 
   const latest = useLatest()
   const refresh = useCallback(() => {
@@ -77,7 +91,10 @@ export function Shell({ user, onSignOut }: Props) {
     }
   }, [selectedId])
 
+  // Going to an archived check unfolds the archived group, so the check shows marked in the list;
+  // a check opened by the page's load leaves the group folded.
   function select(id: string, opening: Pane) {
+    if (checks?.find((listed) => listed.id === id)?.archived === true) setArchivedOpen(true)
     setWantedId(id)
     setCreateError(null)
     setPane(opening)
@@ -91,6 +108,18 @@ export function Shell({ user, onSignOut }: Props) {
     select(id, check.recommendation === null ? 'chat' : 'card')
   }
 
+  // Folding the archived group would hide the open check when it is archived, so the newest
+  // live check opens in its place; with no live check, the archived one stays open.
+  function toggleArchived(unfolded: boolean) {
+    if (checks === null || selected === null) {
+      throw new Error('the archived group renders only with checks, one of them open')
+    }
+    setArchivedOpen(unfolded)
+    if (unfolded || !selected.archived) return
+    const newestLive = checks.find((check) => !check.archived)
+    if (newestLive !== undefined) open(newestLive.id)
+  }
+
   async function create() {
     try {
       const { id } = await createCheck()
@@ -98,6 +127,47 @@ export function Shell({ user, onSignOut }: Props) {
       select(id, 'chat')
     } catch (error) {
       setCreateError(createFailed(errorText(error)))
+    }
+  }
+
+  async function openCheck(id: string) {
+    await refresh()
+    select(id, 'chat')
+  }
+
+  /** Clones a check and opens the copy, first sending it the line when one is given. */
+  async function duplicate(id: string, line: string | null) {
+    setCreateError(null)
+    try {
+      const { id: cloneId } = await cloneCheck(id)
+      if (line !== null) await sendMessage(cloneId, line)
+      await openCheck(cloneId)
+    } catch (error) {
+      setCreateError(cloneFailed(errorText(error)))
+    }
+  }
+
+  async function archive(id: string) {
+    setCreateError(null)
+    try {
+      await archiveCheck(id)
+      await refresh()
+    } catch (error) {
+      setCreateError(
+        error instanceof ApiException && error.status === 409
+          ? ARCHIVE_WHILE_ANSWERING
+          : archiveFailed(errorText(error)),
+      )
+    }
+  }
+
+  async function restore(id: string) {
+    setCreateError(null)
+    try {
+      await restoreCheck(id)
+      await refresh()
+    } catch (error) {
+      setCreateError(restoreFailed(errorText(error)))
     }
   }
 
@@ -132,6 +202,11 @@ export function Shell({ user, onSignOut }: Props) {
         selectedId={selectedId}
         onSelect={open}
         onCreate={() => void create()}
+        archivedOpen={archivedOpen}
+        onArchivedToggle={toggleArchived}
+        onClone={(id) => void duplicate(id, null)}
+        onArchive={(id) => void archive(id)}
+        onRestore={(id) => void restore(id)}
         onDelete={(id) => void remove(id)}
       />
     )
@@ -165,6 +240,8 @@ export function Shell({ user, onSignOut }: Props) {
             sidebar={list}
             activePane={pane}
             onChecksChanged={refresh}
+            onClone={(line) => duplicate(selected.id, line)}
+            onOpenCheck={(id) => void openCheck(id)}
           />
         </main>
       )}

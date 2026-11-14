@@ -197,6 +197,7 @@ def create_app(
             runner = CheckRunner(
                 graph,
                 opened.checks,
+                opened.profiles,
                 opened.events,
                 sink,
                 turn_limit=settings.agent_turn_limit,
@@ -213,6 +214,7 @@ def create_app(
                 options=opened.options,
                 recommendations=opened.recommendations,
                 events=opened.events,
+                sink=sink,
                 bus=bus,
                 verifier=verifier,
                 google_client_id=settings.google_client_id,

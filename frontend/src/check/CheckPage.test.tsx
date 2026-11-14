@@ -5,6 +5,8 @@ import type { CheckEvent, ProfileView } from '../api/types.ts'
 import { FakeEventSource } from '../test/fakeEventSource.ts'
 import {
   assistantMessage,
+  checkArchived,
+  checkContinued,
   delta,
   goalSet,
   optionFixed36,
@@ -63,7 +65,12 @@ function emit(...events: CheckEvent[]) {
   })
 }
 
-function renderPage(stale = false, onChecksChanged = vi.fn()) {
+function renderPage(
+  stale = false,
+  onChecksChanged = vi.fn(),
+  onClone = vi.fn(() => Promise.resolve()),
+  onOpenCheck = vi.fn(),
+) {
   render(
     <CheckPage
       checkId="c1"
@@ -71,9 +78,11 @@ function renderPage(stale = false, onChecksChanged = vi.fn()) {
       sidebar={<nav>הבדיקות שלי</nav>}
       activePane="chat"
       onChecksChanged={onChecksChanged}
+      onClone={onClone}
+      onOpenCheck={onOpenCheck}
     />,
   )
-  return { onChecksChanged }
+  return { onChecksChanged, onClone, onOpenCheck }
 }
 
 beforeEach(() => {
@@ -452,4 +461,45 @@ test('a typed message closes the live question', async () => {
 
   expect(within(bubble).queryByRole('button')).not.toBeInTheDocument()
   expect(bubble).toHaveTextContent('כסף זמין')
+})
+
+const CLONE_OFFER = { field: null, text: null, choices: null, offer_clone: true } as const
+
+test('a clone offer clones with its choice and answers this check with the other', async () => {
+  const fetchStub = stubApi()
+  const { onClone } = renderPage()
+  emit(userMessage(1, 'ומה עם 1,000 בחודש?'), questionAsked(2, CLONE_OFFER))
+
+  expect(screen.getByText(/לשכפל את הבדיקה/, { selector: '.question-label' })).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'דילוג' })).not.toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: 'לשכפל ולבדוק בנפרד' }))
+  expect(onClone).toHaveBeenCalledWith('לשכפל ולבדוק בנפרד')
+  expect(sentTexts(fetchStub)).toEqual([])
+
+  await userEvent.click(screen.getByRole('button', { name: 'לעדכן את הבדיקה הזאת' }))
+  expect(sentTexts(fetchStub)).toEqual(['לעדכן את הבדיקה הזאת'])
+})
+
+test('a continuation opens the new check only after this page sent', async () => {
+  stubApi()
+  const { onOpenCheck } = renderPage()
+  emit(userMessage(1, 'א'), checkArchived(2), checkContinued(3, 'c0'))
+  expect(onOpenCheck).not.toHaveBeenCalled()
+
+  await userEvent.click(screen.getByRole('button', { name: 'מעבר לבדיקה המעודכנת' }))
+  expect(onOpenCheck).toHaveBeenCalledWith('c0')
+})
+
+test('a live continuation after a send opens the new check', async () => {
+  stubApi()
+  const { onOpenCheck } = renderPage()
+  await userEvent.type(screen.getByRole('textbox'), 'טעיתי{Enter}')
+  emit(
+    userMessage(1, 'טעיתי'),
+    turnStatus(2, 'running'),
+    checkArchived(3),
+    checkContinued(4, 'c2'),
+  )
+
+  await waitFor(() => expect(onOpenCheck).toHaveBeenCalledWith('c2'))
 })

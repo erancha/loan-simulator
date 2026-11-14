@@ -20,7 +20,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from loan_agent.platform.check_runner import CheckRunner
 from loan_agent.ports.auth import TokenVerifier
 from loan_agent.ports.engine import LoanEngine
-from loan_agent.ports.events import EventBus
+from loan_agent.ports.events import EventBus, EventSink
 from loan_agent.ports.repositories import (
     CheckEventStore,
     CheckRepository,
@@ -54,6 +54,7 @@ class AppDeps:
     options: OptionRepository
     recommendations: RecommendationRepository
     events: CheckEventStore
+    sink: EventSink
     bus: EventBus
     """Carries the events the sink publishes to the open event streams."""
     verifier: TokenVerifier

@@ -1,10 +1,13 @@
-"""Check routes: create, list, read and delete a person's checks, and send a message that starts
-a turn.
+"""Check routes: create, list, read, clone and delete a person's checks, and send a message that
+starts a turn.
 
 Core building blocks:
-- router: POST/GET /api/checks, GET/DELETE /api/checks/{id}, POST /api/checks/{id}/messages
-- register_error_handlers: another person's check answers 404 like an unknown one; a message or a
-  delete while a turn runs answers 409; a message over the cap answers 429 with Retry-After
+- router: POST/GET /api/checks, GET/DELETE /api/checks/{id}, POST /api/checks/{id}/clone,
+  /archive and /restore, POST /api/checks/{id}/messages
+- register_error_handlers: another person's check answers 404 like an unknown one; a message, a
+  clone, an archive or a delete while a turn runs answers 409, as do a message to an archived
+  check, a second archive, and a restore of a check that is open or no longer matches the
+  profile; a message over the cap answers 429 with Retry-After
 """
 
 import math
@@ -13,7 +16,13 @@ from datetime import datetime
 from fastapi import APIRouter, FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
-from loan_agent.domain.errors import CheckNotFoundError, TurnConflictError, TurnLimitError
+from loan_agent.domain.errors import (
+    CheckArchivedError,
+    CheckNotFoundError,
+    CheckNotRestorableError,
+    TurnConflictError,
+    TurnLimitError,
+)
 from loan_agent.domain.models import Check
 from loan_agent.domain.models import Recommendation as DomainRecommendation
 from loan_agent.platform.api.auth import CurrentUser
@@ -53,7 +62,7 @@ async def _summary(
         check,
         recommendation,
         await _recommends_examples_only(deps, recommendation),
-        check.is_stale(profile_updated_at),
+        profile_updated_at,
     )
 
 
@@ -84,7 +93,24 @@ async def get_check(check_id: str, user: CurrentUser, deps: Deps) -> CheckView:
         options=[OptionView.of(option) for option in await deps.options.list(check.id)],
         recommendation=None if recommendation is None else Recommendation.of(recommendation),
         profile_stale=check.is_stale(profile_updated_at),
+        archived=check.archived_at is not None,
     )
+
+
+@router.post("/{check_id}/clone", status_code=status.HTTP_201_CREATED)
+async def clone_check(check_id: str, user: CurrentUser, runner: Runner) -> CreatedCheck:
+    clone = await runner.clone(user, check_id)
+    return CreatedCheck(id=clone.id)
+
+
+@router.post("/{check_id}/archive", status_code=status.HTTP_204_NO_CONTENT)
+async def archive_check(check_id: str, user: CurrentUser, runner: Runner) -> None:
+    await runner.archive(user, check_id)
+
+
+@router.post("/{check_id}/restore", status_code=status.HTTP_204_NO_CONTENT)
+async def restore_check(check_id: str, user: CurrentUser, runner: Runner) -> None:
+    await runner.restore(user, check_id)
 
 
 @router.delete("/{check_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -104,7 +130,7 @@ def register_error_handlers(app: FastAPI) -> None:
         return JSONResponse({"detail": "no such check"}, status_code=status.HTTP_404_NOT_FOUND)
 
     async def conflict(request: Request, error: Exception) -> JSONResponse:
-        assert isinstance(error, TurnConflictError)
+        assert isinstance(error, TurnConflictError | CheckArchivedError | CheckNotRestorableError)
         return JSONResponse(
             {"detail": str(error), "check_id": error.check_id},
             status_code=status.HTTP_409_CONFLICT,
@@ -121,4 +147,6 @@ def register_error_handlers(app: FastAPI) -> None:
 
     app.add_exception_handler(CheckNotFoundError, not_found)
     app.add_exception_handler(TurnConflictError, conflict)
+    app.add_exception_handler(CheckArchivedError, conflict)
+    app.add_exception_handler(CheckNotRestorableError, conflict)
     app.add_exception_handler(TurnLimitError, over_limit)

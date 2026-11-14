@@ -2,8 +2,8 @@
 
 Core building blocks:
 - PostgresProfileRepository: one profile row per person, stamped with the repository's clock
-- PostgresCheckRepository: check rows, always read through the owning person; deleting one takes
-  everything it produced in one transaction
+- PostgresCheckRepository: check rows, always read through the owning person; deleting or
+  cloning one takes everything it produced in one transaction
 - PostgresOptionRepository, PostgresRecommendationRepository: what a check produced; a check
   keeps one recommendation
 - PostgresCheckEventStore: per-check event log; each append locks the check's row, so sequence
@@ -13,13 +13,13 @@ Core building blocks:
 Each call runs in its own session; a write commits before the call returns.
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import fields
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, cast
 
-from sqlalchemy import delete, func, select, union_all, update
+from sqlalchemy import delete, false, func, literal, select, union_all, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -111,15 +111,7 @@ class PostgresCheckRepository:
 
     async def add(self, check: Check) -> None:
         async with self._sessions.begin() as session:
-            session.add(
-                CheckRow(
-                    id=check.id,
-                    user_id=check.user_id,
-                    goal=None if check.goal is None else _goal_data(check.goal),
-                    profile_snapshot_at=check.profile_snapshot_at,
-                    created_at=check.created_at,
-                )
-            )
+            session.add(_check_row(check))
 
     async def get(self, user_id: str, check_id: str) -> Check:
         async with self._sessions() as session:
@@ -150,6 +142,7 @@ class PostgresCheckRepository:
                         CheckEventRow.check_id == check_id,
                         CheckEventRow.type == kept_type,
                         CheckEventRow.created_at > kept_since,
+                        CheckEventRow.copied == false(),
                     ),
                 )
             )
@@ -166,6 +159,71 @@ class PostgresCheckRepository:
     async def snapshot_profile(self, check_id: str, at: datetime) -> None:
         await self._update(check_id, profile_snapshot_at=at)
 
+    async def archive(self, check_id: str, at: datetime) -> None:
+        await self._update(check_id, archived_at=at)
+
+    async def restore(self, check_id: str) -> None:
+        await self._update(check_id, archived_at=None)
+
+    async def clone(self, source_id: str, clone: Check, left_out: Collection[str]) -> None:
+        kept = (
+            select(
+                CheckEventRow,
+                func.row_number().over(order_by=CheckEventRow.seq).label("copy_seq"),
+            )
+            .where(CheckEventRow.check_id == source_id, CheckEventRow.type.not_in(left_out))
+            .subquery()
+        )
+        async with self._sessions.begin() as session:
+            session.add(_check_row(clone))
+            await session.flush()
+            await session.execute(
+                insert(OptionRow).from_select(
+                    [
+                        "check_id",
+                        "id",
+                        "loan",
+                        "source",
+                        "lender",
+                        "offer_date",
+                        "figures",
+                        "created_at",
+                    ],
+                    select(
+                        literal(clone.id),
+                        OptionRow.id,
+                        OptionRow.loan,
+                        OptionRow.source,
+                        OptionRow.lender,
+                        OptionRow.offer_date,
+                        OptionRow.figures,
+                        OptionRow.created_at,
+                    ).where(OptionRow.check_id == source_id),
+                )
+            )
+            await session.execute(
+                insert(RecommendationRow).from_select(
+                    ["check_id", "data", "created_at"],
+                    select(
+                        literal(clone.id), RecommendationRow.data, RecommendationRow.created_at
+                    ).where(RecommendationRow.check_id == source_id),
+                )
+            )
+            await session.execute(
+                insert(CheckEventRow).from_select(
+                    ["check_id", "seq", "type", "data", "user_id", "created_at", "copied"],
+                    select(
+                        literal(clone.id),
+                        kept.c.copy_seq,
+                        kept.c.type,
+                        kept.c.data,
+                        kept.c.user_id,
+                        kept.c.created_at,
+                        literal(True),
+                    ),
+                )
+            )
+
     async def _update(self, check_id: str, **values: object) -> None:
         async with self._sessions.begin() as session:
             result = await session.execute(
@@ -175,6 +233,17 @@ class PostgresCheckRepository:
             raise CheckNotFoundError(check_id)
 
 
+def _check_row(check: Check) -> CheckRow:
+    return CheckRow(
+        id=check.id,
+        user_id=check.user_id,
+        goal=None if check.goal is None else _goal_data(check.goal),
+        profile_snapshot_at=check.profile_snapshot_at,
+        created_at=check.created_at,
+        archived_at=check.archived_at,
+    )
+
+
 def _check(row: CheckRow) -> Check:
     return Check(
         id=row.id,
@@ -182,6 +251,7 @@ def _check(row: CheckRow) -> Check:
         created_at=_utc(row.created_at),
         goal=None if row.goal is None else _goal(row.goal),
         profile_snapshot_at=_optional_utc(row.profile_snapshot_at),
+        archived_at=_optional_utc(row.archived_at),
     )
 
 
@@ -315,12 +385,17 @@ class PostgresCheckEventStore:
         async with self._sessions() as session:
             times = await session.scalars(
                 union_all(
-                    *(
-                        select(row.created_at).where(
-                            row.user_id == user_id, row.type == type, row.created_at > since
-                        )
-                        for row in (CheckEventRow, DeletedEventTimeRow)
-                    )
+                    select(CheckEventRow.created_at).where(
+                        CheckEventRow.user_id == user_id,
+                        CheckEventRow.type == type,
+                        CheckEventRow.created_at > since,
+                        CheckEventRow.copied == false(),
+                    ),
+                    select(DeletedEventTimeRow.created_at).where(
+                        DeletedEventTimeRow.user_id == user_id,
+                        DeletedEventTimeRow.type == type,
+                        DeletedEventTimeRow.created_at > since,
+                    ),
                 ).order_by("created_at")
             )
             created = [_utc(t) for t in times]

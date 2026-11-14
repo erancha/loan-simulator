@@ -6,11 +6,18 @@ import {
   INPUT_LABEL, INPUT_PLACEHOLDER,
   questionText,
   MARKET_SAMPLE,
+  OFFER_SAMPLE,
+  PLACEHOLDER,
+  PLACEHOLDER_CANCEL,
+  PLACEHOLDER_CONFIRM,
+  PLACEHOLDER_QUESTION,
   SAMPLE_MESSAGES,
   SEND_BUTTON,
   THINKING,
 } from './copy.ts'
-import { isMessage } from './events.ts'
+import { ArchiveNote } from './ArchiveNote.tsx'
+import { FollowsNote } from './FollowsNote.tsx'
+import { isArchived, isMessage } from './events.ts'
 import type { ChatEntry, CheckState } from './events.ts'
 import { marketSampleTappedToday, rememberMarketSampleTapped } from './dailySample.ts'
 import { withBold } from './emphasis.tsx'
@@ -43,6 +50,13 @@ interface Props {
   onSend: (text: string) => Promise<boolean>
   onAnswer: (answer: Answer) => Promise<boolean>
   onSkip: (line: string) => Promise<boolean>
+  /** Clones the check and sends the line to the copy. */
+  onClone: (line: string) => Promise<void>
+  /** The check an archived check's conversation went on in. */
+  continuedIn: string | null
+  onOpenCheck: (id: string) => void
+  /** The check has a recommendation, so the next step is bringing real offers. */
+  recommended: boolean
 }
 
 function PanelNoteLines({ notes, after }: { notes: PanelNote[]; after: string | null }) {
@@ -57,7 +71,7 @@ function PanelNoteLines({ notes, after }: { notes: PanelNote[]; after: string | 
 
 /**
  * The conversation of a check: its bubbles and question bubbles, what each turn saved, the
- * profile edits made beside it, and the message input.
+ * profile edits made beside it, and the message input, which an archived check does not have.
  */
 export function Chat({
   messages: entries,
@@ -70,6 +84,10 @@ export function Chat({
   onSend,
   onAnswer,
   onSkip,
+  onClone,
+  continuedIn,
+  onOpenCheck,
+  recommended,
 }: Props) {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
@@ -87,11 +105,17 @@ export function Chat({
     announcement = lastEntry.leadIn === null ? text : `${lastEntry.leadIn} ${text}`
   }
   const locked = running || sending
+  const archived = isArchived({ messages: entries })
   const [marketTapped, setMarketTapped] = useState(marketSampleTappedToday)
   // The opening samples help start a conversation, so they go once the model asks its first
-  // question; market data is worth asking at any point, so that sample stays until tapped.
-  const opening = !entries.some((entry) => entry.role === 'question')
-  const samples = [...(opening ? SAMPLE_MESSAGES : []), ...(marketTapped ? [] : [MARKET_SAMPLE])]
+  // question; once there is a recommendation, the offer sample shows how to bring a real offer.
+  // Market data is worth asking at any point, so that sample stays until tapped.
+  const opening = !recommended && !entries.some((entry) => entry.role === 'question')
+  const samples = [
+    ...(opening ? SAMPLE_MESSAGES : []),
+    ...(recommended ? [OFFER_SAMPLE] : []),
+    ...(marketTapped ? [] : [MARKET_SAMPLE]),
+  ]
   // A check with no message yet leads the eye to where to start: the input's edge, then the
   // samples' (the border-sweep classes in global.css).
   const fresh = entries.length === 0
@@ -110,8 +134,14 @@ export function Chat({
     lastTop.current = element.scrollTop
   }
 
+  // A new entry is what the reader is waiting for, so it brings the end back into view even
+  // after they scrolled up; text streaming into an entry leaves a reader who scrolled up in place.
+  useEffect(() => {
+    following.current = true
+    pinToEnd()
+  }, [entries.length])
+
   useEffect(pinToEnd, [
-    entries.length,
     lastLength,
     panelNotes.length,
     liveQuestionId,
@@ -139,9 +169,18 @@ export function Chat({
     lastTop.current = element.scrollTop
   }
 
-  async function submit() {
+  // A sample's ?? marks a figure the person was to fill in, so a message still holding one asks
+  // before it goes.
+  const [confirmingPlaceholder, setConfirmingPlaceholder] = useState(false)
+
+  async function submit(confirmed = false) {
     const text = draft.trim()
     if (text === '' || locked) return
+    if (!confirmed && text.includes(PLACEHOLDER)) {
+      setConfirmingPlaceholder(true)
+      return
+    }
+    setConfirmingPlaceholder(false)
     setSending(true)
     try {
       if (await onSend(text)) setDraft('')
@@ -178,9 +217,18 @@ export function Chat({
                   profile={profile}
                   onAnswer={onAnswer}
                   onSkip={onSkip}
+                  onClone={onClone}
                 />
               ) : entry.role === 'chart' ? (
                 <MarketChart chart={entry.chart} />
+              ) : entry.role === 'archived' ? (
+                <ArchiveNote
+                  archive={entry.archive}
+                  continuedIn={continuedIn}
+                  onOpenCheck={onOpenCheck}
+                />
+              ) : entry.role === 'follows' ? (
+                <FollowsNote follows={entry.follows} onOpenCheck={onOpenCheck} />
               ) : (
                 <p className={`bubble bubble-${entry.role}`}>
                   {entry.role === 'assistant' ? withBold(entry.text) : entry.text}
@@ -205,7 +253,7 @@ export function Chat({
           {failure}
         </p>
       )}
-      {samples.length > 0 && (
+      {!archived && samples.length > 0 && (
         <div className="chat-samples">
           {samples.map((sample) => (
             <button
@@ -229,24 +277,47 @@ export function Chat({
           ))}
         </div>
       )}
-      <form className="chat-input" onSubmit={onSubmit}>
-        {/* A textarea draws no ::before, so the sweep runs on this wrapper of the same shape. */}
-        <div className={fresh ? 'chat-input-box border-sweep' : 'chat-input-box'}>
-          <textarea
-          ref={input}
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={onKeyDown}
-          aria-label={INPUT_LABEL}
-          placeholder={running ? INPUT_PLACEHOLDER.running : INPUT_PLACEHOLDER.idle}
-          disabled={locked}
-          rows={2}
-          />
+      {!archived && (
+        <form className="chat-input" onSubmit={onSubmit}>
+          {/* A textarea draws no ::before, so the sweep runs on this wrapper of the same shape. */}
+          <div className={fresh ? 'chat-input-box border-sweep' : 'chat-input-box'}>
+            <textarea
+            ref={input}
+            value={draft}
+            onChange={(event) => {
+              setDraft(event.target.value)
+              setConfirmingPlaceholder(false)
+            }}
+            onKeyDown={onKeyDown}
+            aria-label={INPUT_LABEL}
+            placeholder={running ? INPUT_PLACEHOLDER.running : INPUT_PLACEHOLDER.idle}
+            disabled={locked}
+            rows={2}
+            />
+          </div>
+          <button type="submit" disabled={locked || draft.trim() === ''}>
+            {SEND_BUTTON}
+          </button>
+        </form>
+      )}
+      {confirmingPlaceholder && (
+        <div className="check-confirm">
+          <p>{PLACEHOLDER_QUESTION}</p>
+          <button type="button" className="primary" onClick={() => void submit(true)}>
+            {PLACEHOLDER_CONFIRM}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setConfirmingPlaceholder(false)
+              if (input.current === null) throw new Error('the input renders with the prompt')
+              input.current.focus()
+            }}
+          >
+            {PLACEHOLDER_CANCEL}
+          </button>
         </div>
-        <button type="submit" disabled={locked || draft.trim() === ''}>
-          {SEND_BUTTON}
-        </button>
-      </form>
+      )}
       {notice !== null && <p className="chat-notice" role="status">{notice}</p>}
     </div>
   )

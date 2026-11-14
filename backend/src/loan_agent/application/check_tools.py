@@ -4,9 +4,10 @@ recommendation within the engine's bounds.
 
 - ToolDeps: the ports, the clock and the id generator the tools act through
 - CheckTools: update_profile, set_goal, save_option and present_recommendation, each returning a
-  compact key: value summary for the model and emitting an event for the page; ask, emitting the
-  question for the page and returning ASKED_RESULT, after which the turn ends; show_chart,
-  emitting a market series from the engine for the page to draw
+  compact key: value summary for the model and emitting an event for the page; update_profile
+  returns CHECK_ARCHIVED_RESULT instead when its save archived this check, after which the turn
+  ends; ask, emitting the question for the page and returning ASKED_RESULT, after which the turn
+  ends; show_chart, emitting a market series from the engine for the page to draw
 - ToolError: a refusal whose message tells the model what is wrong and what to do next
 """
 
@@ -16,6 +17,7 @@ from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Literal, cast, get_args
 
+from loan_agent.application.profile_saving import save_profile
 from loan_agent.domain.errors import GoalError, ProfileError
 from loan_agent.domain.models import Goal, Option, OptionSource, Profile, Recommendation
 from loan_agent.ports.engine import Bounds, EngineError, LoanEngine, MarketPoint, Sizing
@@ -43,6 +45,12 @@ _CHART_SERIES: tuple[str, ...] = get_args(ChartSeries)
 ASKED_RESULT = (
     "The question is on the person's screen and this turn ends here; their answer arrives as the "
     "next message."
+)
+
+CHECK_ARCHIVED_RESULT = (
+    "Saved. The change replaced figures this check's recommendation was computed from, so this "
+    "check is archived and this turn ends here; the conversation continues in a new check with "
+    "the same goal, which recalculates."
 )
 
 # The page's card changes only through a recommendation, so a saved offer it does not reach would
@@ -76,14 +84,18 @@ class CheckTools:
         self._deps = deps
 
     async def update_profile(self, **fields: object) -> str:
-        profile, _ = await self._deps.profiles.get(self._user_id)
+        deps = self._deps
         try:
-            profile = profile.merged(fields)
+            saved = await save_profile(
+                self._user_id, fields, deps.profiles, deps.checks, deps.sink, deps.clock
+            )
         except ProfileError as error:
             raise ToolError(f"{error}; correct it and call update_profile again") from None
-        await self._deps.profiles.save(self._user_id, profile)
+        profile = saved.profile
         data = {"profile": _json_ready(asdict(profile)), "missing": list(profile.missing())}
-        await self._deps.sink.emit(self._check_id, PROFILE_UPDATED, data)
+        await deps.sink.emit(self._check_id, PROFILE_UPDATED, data)
+        if self._check_id in saved.archived:
+            return CHECK_ARCHIVED_RESULT
         return summary(profile_figures(profile))
 
     async def set_goal(self, purpose: str, price: object) -> str:
@@ -189,6 +201,14 @@ class CheckTools:
             )
 
     async def ask(self, question: Mapping[str, object], lead_in: str | None) -> str:
+        if (
+            question["offer_clone"]
+            and await self._deps.recommendations.latest(self._check_id) is None
+        ):
+            raise ToolError(
+                "offer_clone is for a change to a recommendation this check has; there is none "
+                "yet, so do what the person asked in this check"
+            )
         field = question["field"]
         profile, _ = await self._deps.profiles.get(self._user_id)
         known = asdict(profile)

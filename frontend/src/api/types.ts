@@ -127,6 +127,10 @@ export interface CheckSummary {
   /** Every option the recommendation names is an example nobody can take. */
   recommends_examples_only: boolean
   profile_stale: boolean
+  /** Closed by a profile save that replaced the recommendation's figures, or by the person. */
+  archived: boolean
+  /** Archived by the person, with figures the profile still has. */
+  restorable: boolean
 }
 
 export interface CheckView
@@ -163,10 +167,38 @@ export type QuestionField =
   | 'fixed_expenses'
   | 'existing_loan_payments'
 
-/** Either a profile or goal field the page asks for, or free text with optional choices. */
+/**
+ * A profile or goal field the page asks for, free text with optional choices, or the offer to
+ * clone the check, which the page words itself. A stored question of the first two kinds may
+ * carry no `offer_clone`: the log keeps each question as the app version that asked it wrote it.
+ */
 export type Question =
-  | { field: QuestionField; text: null; choices: null }
-  | { field: null; text: string; choices: string[] | null }
+  | { field: QuestionField; text: null; choices: null; offer_clone?: false }
+  | { field: null; text: string; choices: string[] | null; offer_clone?: false }
+  | { field: null; text: null; choices: null; offer_clone: true }
+
+/** A profile figure a save changed. */
+export interface ProfileChange {
+  field: keyof ProfileFields
+  from: string | null
+  to: string | null
+}
+
+/**
+ * Ends an archived check's log: the whole profile it was recommended from and what changed, or
+ * no profile and no change when the person archived the check themselves.
+ */
+export interface CheckArchived {
+  previous_profile: ProfileFields | null
+  changes: ProfileChange[]
+  archived_at: string
+}
+
+/** Opens a follow-up check's log: the archived check it replaces and the changes that did it. */
+export interface CheckFollows {
+  check_id: string
+  changes: ProfileChange[]
+}
 
 export type TurnStatus = 'running' | 'idle'
 
@@ -182,6 +214,10 @@ export const CHECK_EVENT_TYPES = [
   'turn.failed',
   'question.asked',
   'chart.shown',
+  'check.archived',
+  'check.continued',
+  'check.follows',
+  'check.restored',
 ] as const
 
 type EventTypeName = (typeof CHECK_EVENT_TYPES)[number]
@@ -213,6 +249,10 @@ export type CheckEvent =
   | Sequenced<'turn.failed', { message: string }>
   | Sequenced<'question.asked', { question: Question; lead_in: string | null }>
   | Sequenced<'chart.shown', ChartShown>
+  | Sequenced<'check.archived', CheckArchived>
+  | Sequenced<'check.continued', { check_id: string }>
+  | Sequenced<'check.follows', CheckFollows>
+  | Sequenced<'check.restored', Record<string, never>>
 
 type SameEventTypes = [CheckEvent['type']] extends [EventTypeName]
   ? [EventTypeName] extends [CheckEvent['type']]

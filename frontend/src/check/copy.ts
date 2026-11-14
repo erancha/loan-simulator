@@ -1,5 +1,5 @@
 /** Every Hebrew label and sentence on a check's page: the conversation and the card. */
-import type { ChartShown, Question, QuestionField, Track } from '../api/types.ts'
+import type { ChartShown, ProfileChange, Question, QuestionField, Track } from '../api/types.ts'
 import { OFFER_SOURCES } from '../copy.ts'
 import { formatDate, formatMonth, formatShekels } from '../money.ts'
 import { MONEY_FIELDS } from '../profile/copy.ts'
@@ -164,6 +164,22 @@ export const MARKET_SAMPLE = {
     'הצג את הנתונים בשני גרפים.',
 }
 
+/** The real-offer sample, offered once a check has a recommendation; ?? marks each figure the
+ * person fills in from their own offer. */
+export const OFFER_SAMPLE = {
+  label: 'הצעה מגוף מלווה',
+  text:
+    'קיבלתי הצעה מ-?? (בנק, קרן השתלמות, חברת אשראי או גוף אחר). שני מסלולים אפשריים:' +
+    ' (1) פריים + ??%  (2) ריבית קבועה ??% צמודה למדד.\n' +
+    'לתקופה של עד ?? חודשים, בתשלומים חודשיים שווים.',
+}
+
+/** Marks a figure in a sample that the person fills in. */
+export const PLACEHOLDER = '??'
+export const PLACEHOLDER_QUESTION = 'האם לשלוח בקשה עם סימני שאלה?'
+export const PLACEHOLDER_CONFIRM = 'לשלוח בכל זאת'
+export const PLACEHOLDER_CANCEL = 'ביטול'
+
 export const NEXT_STEP_TITLE = 'מה הלאה'
 export const NEXT_STEP = `להביא הצעות אמיתיות מ${OFFER_SOURCES}, ולכתוב אותן כאן בשיחה להשוואה.`
 export const OFFER_DETAILS =
@@ -284,17 +300,25 @@ const PROFILE_QUESTIONS: Record<MoneyKey, string> = {
     'האם יש הלוואות קיימות עם יותר מ-3 חודשים לסיום, ואם כן - מה ההחזר החודשי?',
 }
 
-/** The question a bubble shows: a profile amount's question, a goal label, or the model's own
- * sentence. */
+/** The offer to clone a check before changing its recommendation; the prompt quotes the choices. */
+export const CLONE_QUESTION =
+  'לשכפל את הבדיקה ולבצע סימולציה נפרדת? כך אפשר יהיה להשוות בין הבדיקות.'
+export const CLONE_CHOICE = 'לשכפל ולבדוק בנפרד'
+export const STAY_CHOICE = 'לעדכן את הבדיקה הזאת'
+
+/** The question a bubble shows: a profile amount's question, a goal label, the clone offer, or
+ * the model's own sentence. */
 export function questionText(question: Question): string {
+  if (question.offer_clone === true) return CLONE_QUESTION
   const { field } = question
   if (field === null) return question.text
   if (isGoalField(field)) return fieldLabel(field)
   return PROFILE_QUESTIONS[field]
 }
 
-/** A field's label from the profile or goal copy, or the model's own sentence. */
+/** A field's label from the profile or goal copy, the clone offer, or the model's own sentence. */
 export function questionLabel(question: Question): string {
+  if (question.offer_clone === true) return CLONE_QUESTION
   return question.field === null ? question.text : fieldLabel(question.field)
 }
 
@@ -322,3 +346,62 @@ export const CHART_VALUE: Record<ChartShown['series'], string> = { prime: 'פר�
 
 /** The accessible name of the border that widens the card pane. */
 export const RESIZE_CARD = 'שינוי רוחב חלונית ההמלצה'
+
+export const ARCHIVED_TITLE = 'הבדיקה נסגרה והועברה לארכיון.'
+export const ARCHIVED_PROFILE_TITLE = 'הפרופיל שעליו התבססה הבדיקה'
+export const NOT_TOLD = 'לא נמסר'
+/** Opens the check that replaced an archived one, computed from the changed profile. */
+export const CONTINUED_LINK = 'מעבר לבדיקה המעודכנת'
+
+/** A profile amount in the closing note; an amount never told shows as such. */
+export function archivedFigure(value: string | null): string {
+  return value === null ? NOT_TOLD : formatShekels(value)
+}
+
+/** A profile field's full name, as the closing note lists it. */
+export function profileFieldName(field: MoneyKey): string {
+  const copy = MONEY_FIELDS.find(({ key }) => key === field)
+  if (copy === undefined) throw new Error(`no profile copy for ${field}`)
+  return copy.title ?? copy.label
+}
+
+/** Each changed figure, from its old value to its new one. */
+function changesText(changes: ProfileChange[]): string {
+  return changes
+    .map(
+      ({ field, from, to }) =>
+        `${profileFieldName(field)}: מ-${archivedFigure(from)} ל-${archivedFigure(to)}`,
+    )
+    .join('; ')
+}
+
+/** The day of a moment, in the person's time zone. */
+function dayText(at: Date): string {
+  const day = [at.getFullYear(), at.getMonth() + 1, at.getDate()]
+    .map((part) => String(part).padStart(2, '0'))
+    .join('-')
+  return formatDate(day)
+}
+
+/** Why a profile change closed the check: the day and each changed figure. */
+export function archivedReason(at: Date, changes: ProfileChange[]): string {
+  const list = changesText(changes)
+  return `ב-${dayText(at)} השתנה הפרופיל (${list}), ולכן ההמלצה כאן כבר לא מתאימה.`
+}
+
+/** The closing line of a check the person archived themselves. */
+export function manualArchiveLine(at: Date): string {
+  return `ב-${dayText(at)} הבדיקה הועברה לארכיון ידנית.`
+}
+
+export const FOLLOWS_TITLE = 'בדיקת המשך'
+/** Opens the archived check a follow-up check replaces. */
+export const ORIGIN_LINK = 'מעבר לבדיקה הקודמת שבארכיון'
+
+/** Why a follow-up check exists: the changed figures that archived the check it replaces. */
+export function followsReason(changes: ProfileChange[]): string {
+  return (
+    `הבדיקה הזאת מחליפה בדיקה קודמת שנסגרה כי הפרופיל השתנה (${changesText(changes)}).` +
+    ' כל החישובים כאן לפי הפרופיל המעודכן.'
+  )
+}

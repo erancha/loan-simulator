@@ -277,3 +277,37 @@ export const recommendationPrime: EventOf<'recommendation.presented'> = {
 /** The card's decision sentence for `recommendationPrime`. */
 export const REFERENCE_DECISION =
   'הלוואה של 29,000 ₪ ל-36 חודשים, כ-904 ₪ בחודש, ו-9,000 ₪ נשארים בצד לביטחון.'
+
+/** The profile an archived check of the tests was recommended from. */
+export const archivedProfile: ProfileView['profile'] = {
+  savings: '35000',
+  net_fixed_income: '8000',
+  variable_income: '5000',
+  variable_income_minimum: '2000',
+  fixed_expenses: '6000',
+  existing_loan_payments: '0',
+}
+
+export function checkArchived(seq: number): EventOf<'check.archived'> {
+  return {
+    type: 'check.archived',
+    data: {
+      previous_profile: archivedProfile,
+      changes: [{ field: 'savings', from: '35000', to: '23000' }],
+      archived_at: '2026-11-14T09:30:00+00:00',
+    },
+    seq,
+  }
+}
+
+export function checkContinued(seq: number, check_id: string): EventOf<'check.continued'> {
+  return { type: 'check.continued', data: { check_id }, seq }
+}
+
+export function checkFollows(seq: number, check_id: string): EventOf<'check.follows'> {
+  return {
+    type: 'check.follows',
+    data: { check_id, changes: [{ field: 'savings', from: '35000', to: '23000' }] },
+    seq,
+  }
+}

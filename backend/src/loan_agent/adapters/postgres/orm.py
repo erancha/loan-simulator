@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, Text, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, Text, false, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -35,13 +35,17 @@ class CheckRow(Base):
     goal: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     profile_snapshot_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class OptionRow(Base):
+    """An option's id is unique within its check: a cloned check keeps its source's option ids,
+    which its conversation names."""
+
     __tablename__ = "options"
 
+    check_id: Mapped[str] = mapped_column(ForeignKey("checks.id"), primary_key=True, index=True)
     id: Mapped[str] = mapped_column(Text, primary_key=True)
-    check_id: Mapped[str] = mapped_column(ForeignKey("checks.id"), index=True)
     loan: Mapped[dict[str, Any]] = mapped_column(JSONB)
     source: Mapped[str] = mapped_column(Text)
     lender: Mapped[str | None] = mapped_column(Text)
@@ -69,6 +73,8 @@ class CheckEventRow(Base):
     user_id: Mapped[str] = mapped_column(Text)
     """The check's owner, repeated so the per-person message count needs no join."""
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    copied: Mapped[bool] = mapped_column(Boolean, server_default=false())
+    """Copied from the check a clone was made of; the person's message count leaves it out."""
 
 
 class DeletedEventTimeRow(Base):

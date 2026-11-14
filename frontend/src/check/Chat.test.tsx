@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, expect, test, vi } from 'vitest'
 import { Chat } from './Chat.tsx'
 import type { PanelNote } from './Chat.tsx'
-import { cpiChart } from '../test/fixtures.ts'
+import { checkArchived, checkFollows, cpiChart } from '../test/fixtures.ts'
 import type { ChatEntry, ChatMessage, CheckState, QuestionEntry } from './events.ts'
 
 const exchange: ChatMessage[] = [
@@ -18,6 +18,10 @@ const noQuestion = {
   panelNotes: [],
   onAnswer: vi.fn(),
   onSkip: vi.fn(),
+  onClone: vi.fn(),
+  continuedIn: null,
+  onOpenCheck: vi.fn(),
+  recommended: false,
 }
 
 interface Options {
@@ -28,6 +32,7 @@ interface Options {
   failure?: string | null
   notice?: string | null
   onSend?: (text: string) => Promise<boolean>
+  recommended?: boolean
 }
 
 function renderChat({
@@ -38,6 +43,7 @@ function renderChat({
   failure = null,
   notice = null,
   onSend = vi.fn(() => Promise.resolve(true)),
+  recommended = false,
 }: Options = {}) {
   const { unmount } = render(
     <Chat
@@ -49,6 +55,7 @@ function renderChat({
       failure={failure}
       notice={notice}
       onSend={onSend}
+      recommended={recommended}
     />,
   )
   return { onSend, unmount }
@@ -176,7 +183,7 @@ test('the input is labelled; only completed replies are announced', () => {
   expect(announced[0]).toHaveTextContent('בשמחה, כמה הוא עולה?')
 })
 
-test('the log follows new messages and streamed text until the reader scrolls up', () => {
+test('each new message scrolls to the end; streamed text follows until the reader scrolls up', () => {
   const props = {
     ...noQuestion,
     turn: 'idle' as const,
@@ -204,11 +211,23 @@ test('the log follows new messages and streamed text until the reader scrolls up
   rerender(<Chat {...props} messages={evenMore} />)
   expect(log.scrollTop).toBe(1400)
 
+  // Scrolled up, the reader keeps their place while a reply's text streams in.
   log.scrollTop = 100
   fireEvent.scroll(log)
   size(1600)
-  rerender(<Chat {...props} messages={[...evenMore, message('u-4')]} />)
+  const reply = (text: string) => ({ id: 'a2', role: 'assistant' as const, text, complete: false })
+  const streaming = [...evenMore, reply('א')]
+  rerender(<Chat {...props} messages={streaming} />)
+  log.scrollTop = 100
+  fireEvent.scroll(log)
+  size(1800)
+  rerender(<Chat {...props} messages={[...evenMore, reply('אבג')]} />)
   expect(log.scrollTop).toBe(100)
+
+  // A new message brings the end of the log back into view.
+  size(2000)
+  rerender(<Chat {...props} messages={[...evenMore, reply('אבג'), message('u-4')]} />)
+  expect(log.scrollTop).toBe(2000)
 })
 
 test('a note, a failure or a notice under the last message is brought into view', () => {
@@ -385,4 +404,121 @@ test('the samples are gone once the model has asked a question', () => {
   }
   renderChat({ messages: [...exchange, question], liveQuestionId: 'q-2' })
   expect(screen.queryByRole('button', { name: 'מכונית' })).not.toBeInTheDocument()
+})
+
+test('an archived check ends with its closing note, the whole profile and no input', async () => {
+  const onOpenCheck = vi.fn()
+  render(
+    <Chat
+      {...noQuestion}
+      messages={[...exchange, { id: 'x-3', role: 'archived', archive: checkArchived(3).data }]}
+      turn="idle"
+      failure={null}
+      notice={null}
+      onSend={vi.fn()}
+      continuedIn="c2"
+      onOpenCheck={onOpenCheck}
+    />,
+  )
+
+  const note = screen.getByRole('note')
+  expect(note).toHaveTextContent('הבדיקה נסגרה והועברה לארכיון.')
+  expect(note).toHaveTextContent('14.11.2026')
+  expect(note).toHaveTextContent('כסף זמין: מ-35,000 ₪ ל-23,000 ₪')
+  for (const line of [
+    'כסף זמין: 35,000 ₪',
+    'הכנסה קבועה: 8,000 ₪',
+    'הכנסה משתנה: 5,000 ₪',
+    'מינימלית: 2,000 ₪',
+    'הוצאות קבועות: 6,000 ₪',
+    'החזרי הלוואות קיימות: 0 ₪',
+  ]) {
+    expect(within(note).getByText(line)).toBeInTheDocument()
+  }
+  expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+  await userEvent.click(within(note).getByRole('button', { name: 'מעבר לבדיקה המעודכנת' }))
+  expect(onOpenCheck).toHaveBeenCalledWith('c2')
+})
+
+test('once a check has a recommendation, a real-offer sample fills in a template to complete', async () => {
+  renderChat({ recommended: true })
+  expect(screen.queryByRole('button', { name: 'מכונית' })).not.toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: 'הצעה מגוף מלווה' }))
+
+  const lines = (screen.getByRole('textbox') as HTMLTextAreaElement).value.split('\n')
+  expect(lines).toEqual([
+    'קיבלתי הצעה מ-?? (בנק, קרן השתלמות, חברת אשראי או גוף אחר). שני מסלולים אפשריים:' +
+      ' (1) פריים + ??%  (2) ריבית קבועה ??% צמודה למדד.',
+    'לתקופה של עד ?? חודשים, בתשלומים חודשיים שווים. ',
+  ])
+  expect(screen.getByRole('button', { name: 'הצעה מגוף מלווה' })).toBeInTheDocument()
+})
+
+test('no real-offer sample before a recommendation', () => {
+  renderChat()
+  expect(screen.queryByRole('button', { name: 'הצעה מגוף מלווה' })).not.toBeInTheDocument()
+})
+
+test('a message with ?? left in it is sent only after the person confirms', async () => {
+  const { onSend } = renderChat()
+  const input = screen.getByRole('textbox')
+  await userEvent.type(input, 'פריים + ??%{Enter}')
+
+  expect(onSend).not.toHaveBeenCalled()
+  expect(screen.getByText('האם לשלוח בקשה עם סימני שאלה?')).toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: 'ביטול' }))
+  expect(screen.queryByText('האם לשלוח בקשה עם סימני שאלה?')).not.toBeInTheDocument()
+  expect(input).toHaveValue('פריים + ??%')
+  expect(input).toHaveFocus()
+
+  await userEvent.click(screen.getByRole('button', { name: 'שליחה' }))
+  await userEvent.click(screen.getByRole('button', { name: 'לשלוח בכל זאת' }))
+  expect(onSend).toHaveBeenCalledWith('פריים + ??%')
+})
+
+test('a single question mark sends without asking', async () => {
+  const { onSend } = renderChat()
+  await userEvent.type(screen.getByRole('textbox'), 'כמה זה עולה?{Enter}')
+  expect(onSend).toHaveBeenCalledWith('כמה זה עולה?')
+})
+
+test('a follow-up check opens with why it exists and a way back to the archived check', async () => {
+  const onOpenCheck = vi.fn()
+  render(
+    <Chat
+      {...noQuestion}
+      messages={[{ id: 'f-1', role: 'follows', follows: checkFollows(1, 'c-old').data }]}
+      turn="idle"
+      failure={null}
+      notice={null}
+      onSend={vi.fn()}
+      onOpenCheck={onOpenCheck}
+    />,
+  )
+
+  const note = screen.getByRole('note')
+  expect(note).toHaveTextContent('בדיקת המשך')
+  expect(note).toHaveTextContent('כסף זמין: מ-35,000 ₪ ל-23,000 ₪')
+  expect(screen.getByRole('textbox')).toBeInTheDocument()
+  await userEvent.click(within(note).getByRole('button', { name: 'מעבר לבדיקה הקודמת שבארכיון' }))
+  expect(onOpenCheck).toHaveBeenCalledWith('c-old')
+})
+
+test('a check the person archived says so, without a profile list', () => {
+  const manual = { previous_profile: null, changes: [], archived_at: '2026-11-14T09:30:00+00:00' }
+  render(
+    <Chat
+      {...noQuestion}
+      messages={[{ id: 'x-1', role: 'archived', archive: manual }]}
+      turn="idle"
+      failure={null}
+      notice={null}
+      onSend={vi.fn()}
+    />,
+  )
+
+  const note = screen.getByRole('note')
+  expect(note).toHaveTextContent('ב-14.11.2026 הבדיקה הועברה לארכיון ידנית.')
+  expect(note).not.toHaveTextContent('הפרופיל שעליו התבססה הבדיקה')
+  expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
 })

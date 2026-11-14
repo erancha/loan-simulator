@@ -1,7 +1,7 @@
 """The Postgres repositories keep each person's rows apart and restore values exactly."""
 
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
@@ -296,3 +296,58 @@ async def test_profile_saved_after_snapshot_marks_check_stale(repos: Repos) -> N
     await repos.profiles.save("stale-person", Profile(savings=Decimal(2)))
     _, later = await repos.profiles.get("stale-person")
     assert check.is_stale(later)
+
+
+async def test_archive_stamps_the_check_and_restore_clears_it(repos: Repos) -> None:
+    await repos.checks.add(make_check("c-arch"))
+
+    await repos.checks.archive("c-arch", T0 + timedelta(hours=1))
+
+    assert (await repos.checks.get(PERSON, "c-arch")).archived_at == T0 + timedelta(hours=1)
+    with pytest.raises(CheckNotFoundError):
+        await repos.checks.archive("c-missing", T0)
+
+    await repos.checks.restore("c-arch")
+
+    assert (await repos.checks.get(PERSON, "c-arch")).archived_at is None
+
+
+async def test_clone_copies_options_recommendation_and_events_but_the_left_out_types(
+    repos: Repos,
+) -> None:
+    await repos.checks.add(make_check("c-src", "cloner"))
+    await repos.checks.set_goal("c-src", Goal("car", Decimal("150000.00")))
+    option = Option("o-1", "c-src", {}, "offer", "Bank X", date(2026, 10, 2), make_figures(), T0)
+    await repos.options.add(option)
+    recommendation = Recommendation(
+        "c-src",
+        "o-1",
+        None,
+        "why",
+        Decimal("90000.00"),
+        Decimal("2000.00"),
+        Decimal("5000.00"),
+        Decimal("7000.55"),
+        T0,
+    )
+    await repos.recommendations.save(recommendation)
+    before = datetime.now(UTC)
+    await repos.events.append("c-src", "message.user", {"text": "a"})
+    await repos.events.append("c-src", "check.archived", {})
+    await repos.events.append("c-src", "message.assistant", {"text": "b"})
+    source = await repos.checks.get("cloner", "c-src")
+    clone = Check("c-copy", "cloner", T0 + timedelta(hours=1), source.goal, T0)
+
+    await repos.checks.clone("c-src", clone, ("check.archived",))
+
+    assert await repos.checks.get("cloner", "c-copy") == clone
+    assert await repos.options.list("c-copy") == [replace(option, check_id="c-copy")]
+    assert await repos.recommendations.latest("c-copy") == replace(
+        recommendation, check_id="c-copy"
+    )
+    copied = await repos.events.list("c-copy", 0)
+    assert [(e.seq, e.type, dict(e.data)) for e in copied] == [
+        (1, "message.user", {"text": "a"}),
+        (2, "message.assistant", {"text": "b"}),
+    ]
+    assert (await repos.events.count_since("cloner", "message.user", before))[0] == 1

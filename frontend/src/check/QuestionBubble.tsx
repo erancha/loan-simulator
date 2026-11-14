@@ -5,6 +5,8 @@ import { FieldHint } from '../profile/FieldHint.tsx'
 import { rejectionText } from '../profile/rejection.ts'
 import {
   ANSWER,
+  CLONE_CHOICE,
+  STAY_CHOICE,
   answerLine,
   isGoalField,
   OTHER_PURPOSE,
@@ -45,6 +47,8 @@ interface Props {
   /** Resolves false when nothing was sent; rejects with an ApiException on a refused save. */
   onAnswer: (answer: Answer) => Promise<boolean>
   onSkip: (line: string) => Promise<boolean>
+  /** Clones the check and sends the line to the copy. */
+  onClone: (line: string) => Promise<void>
 }
 
 /** The text box's starting value: a profile amount the person already gave, grouped. */
@@ -58,6 +62,7 @@ function initialDraft(question: Question, profile: ProfileFields | null): string
 
 /** Whether the control has a text box, answered with the confirm button, besides any taps. */
 function takesText(question: Question): boolean {
+  if (question.offer_clone === true) return false
   return question.field !== null || question.choices === null
 }
 
@@ -85,9 +90,10 @@ function MoneyBox(props: {
 /**
  * A question the model asked, as an assistant bubble: the lead-in, the label and, while live, a
  * control fitted to the field, a confirm button for typed answers and a skip. It builds the answer
- * and hands it to its owner, which saves and sends it.
+ * and hands it to its owner, which saves and sends it. The clone offer has no skip: its two
+ * choices clone the check, or send the other choice to this one.
  */
-export function QuestionBubble({ entry, live, profile, onAnswer, onSkip }: Props) {
+export function QuestionBubble({ entry, live, profile, onAnswer, onSkip, onClone }: Props) {
   const { question } = entry
   const label = questionLabel(question)
   const hint = questionHint(question)
@@ -121,12 +127,7 @@ export function QuestionBubble({ entry, live, profile, onAnswer, onSkip }: Props
     if (field !== null && ZERO_SKIP_FIELDS.has(field)) {
       return answer(() => ({ line: skipAsZeroLine(label), update: { [field]: '0' } }))
     }
-    setBusy(true)
-    try {
-      await onSkip(skipLine(label))
-    } finally {
-      setBusy(false)
-    }
+    await settle(() => onSkip(skipLine(label)))
   }
 
   function typedAnswer(field: QuestionField | null): Answer | null {
@@ -152,7 +153,30 @@ export function QuestionBubble({ entry, live, profile, onAnswer, onSkip }: Props
     ))
   }
 
+  async function settle(send: () => Promise<unknown>) {
+    setBusy(true)
+    try {
+      await send()
+    } finally {
+      setBusy(false)
+    }
+  }
+
   function control() {
+    if (question.offer_clone === true) {
+      const clone = () => void settle(() => onClone(CLONE_CHOICE))
+      const stay = () => void settle(() => onSkip(STAY_CHOICE))
+      return (
+        <>
+          <button type="button" disabled={busy} onClick={clone}>
+            {CLONE_CHOICE}
+          </button>
+          <button type="button" disabled={busy} onClick={stay}>
+            {STAY_CHOICE}
+          </button>
+        </>
+      )
+    }
     const { field } = question
     if (field === null) {
       return question.choices === null ? (
@@ -206,9 +230,11 @@ export function QuestionBubble({ entry, live, profile, onAnswer, onSkip }: Props
                 {ANSWER}
               </button>
             )}
-            <button type="button" disabled={busy} onClick={() => void skip()}>
-              {SKIP}
-            </button>
+            {question.offer_clone !== true && (
+              <button type="button" disabled={busy} onClick={() => void skip()}>
+                {SKIP}
+              </button>
+            )}
           </div>
         </form>
       )}

@@ -135,16 +135,28 @@ class Goal:
 
 @dataclass(frozen=True)
 class Check:
+    """archived_at is set once a profile save replaces the figures the check's recommendation was
+    computed from, or when the person archives the check; an archived check is read-only."""
+
     id: str
     user_id: str
     created_at: datetime
     goal: Goal | None
     profile_snapshot_at: datetime | None
+    archived_at: datetime | None = None
 
     def __post_init__(self) -> None:
         _require_utc("created_at", self.created_at)
-        if self.profile_snapshot_at is not None:
-            _require_utc("profile_snapshot_at", self.profile_snapshot_at)
+        for name in ("profile_snapshot_at", "archived_at"):
+            value = getattr(self, name)
+            if value is not None:
+                _require_utc(name, value)
+
+    def is_restorable(self, profile_updated_at: datetime | None) -> bool:
+        """Whether the archived check may be reopened: its recommendation, if it has one, still
+        matches the profile. A profile change archives a check by leaving it stale, so only a
+        check the person archived themselves passes."""
+        return self.archived_at is not None and not self.is_stale(profile_updated_at)
 
     def is_stale(self, profile_updated_at: datetime | None) -> bool:
         """Whether the profile was saved after the version the recommendation was computed from.

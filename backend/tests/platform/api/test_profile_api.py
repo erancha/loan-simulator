@@ -1,5 +1,6 @@
 """The person's profile over HTTP: read with what is missing, partially updated with money as
-decimal strings, refused naming the field at fault, and an edit marks recommended checks stale."""
+decimal strings, refused naming the field at fault, and an edit archives the checks
+recommended from the replaced figures."""
 
 from datetime import timedelta
 from decimal import Decimal
@@ -76,15 +77,17 @@ def test_an_invalid_field_is_422_naming_it(
     assert DANA.id not in world.profiles.rows
 
 
-def test_a_profile_edit_makes_a_recommended_check_stale(world: World, client: TestClient) -> None:
+def test_a_profile_edit_archives_a_recommended_check(world: World, client: TestClient) -> None:
     seed_recommended_check(world)
-    assert client.get("/api/checks/c-rec").json()["profile_stale"] is False
+    assert client.get("/api/checks/c-rec").json()["archived"] is False
 
     world.clock.value = NOW + timedelta(minutes=5)
     assert client.put("/api/profile", json={"savings": "60000"}).status_code == 200
 
-    assert client.get("/api/checks/c-rec").json()["profile_stale"] is True
-    assert [check["profile_stale"] for check in client.get("/api/checks").json()] == [True]
+    assert client.get("/api/checks/c-rec").json()["archived"] is True
+    assert [check["archived"] for check in client.get("/api/checks").json()] == [True]
+    (event,) = world.events.rows["c-rec"]
+    assert event.type == "check.archived"
 
 
 def test_saving_the_same_figures_keeps_a_recommended_check_fresh(
@@ -96,4 +99,4 @@ def test_saving_the_same_figures_keeps_a_recommended_check_fresh(
     world.clock.value = NOW + timedelta(minutes=5)
     assert client.put("/api/profile", json={"savings": saved}).status_code == 200
 
-    assert client.get("/api/checks/c-rec").json()["profile_stale"] is False
+    assert client.get("/api/checks/c-rec").json()["archived"] is False

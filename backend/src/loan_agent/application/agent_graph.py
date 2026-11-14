@@ -5,7 +5,9 @@ each check's conversation is one checkpoint thread.
 - build_agent_graph: the model node and the tool node over the thread's messages, as an AgentGraph
 - check_config: the run configuration naming the person and the check, with the turn's step
   limit
-- delete_conversation: removes a check's saved conversation from the graph's checkpointer
+- delete_conversation, copy_conversation: remove a check's saved conversation, or start
+  another check's with its messages
+- last_message, archived_the_check: whether a check's last turn ended by archiving it
 - SYSTEM_PROMPT: the Hebrew instructions sent ahead of the messages on every model call, followed
   by the turn_state block of the person's stored figures
 - The check tools' argument schemas, with money as decimal strings like the engine's own schema
@@ -29,7 +31,13 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import InjectedState, ToolNode, tools_condition
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from loan_agent.application.check_tools import ChartSeries, CheckTools, ToolDeps, ToolError
+from loan_agent.application.check_tools import (
+    CHECK_ARCHIVED_RESULT,
+    ChartSeries,
+    CheckTools,
+    ToolDeps,
+    ToolError,
+)
 from loan_agent.application.turn_state import turn_state
 from loan_agent.domain.models import OptionSource
 
@@ -51,6 +59,15 @@ _REDO_THE_RECOMMENDATION = (
     "present_recommendation did not succeed in this turn, so nothing was calculated or saved. Make "
     "the calls the recommendation needs, ending with present_recommendation, and write the reply "
     "from their results. If no recommendation is possible, write the reply without that section."
+)
+
+# The person reads Hebrew only, while the tools' results the model reads are in English, and a
+# word of them can slip into a reply.
+_ENGLISH_WORD = re.compile(r"[A-Za-z]{2,}")
+_REWRITE_IN_HEBREW = (
+    "Your reply was discarded and the person did not see it: it has English words, and the "
+    "person reads Hebrew only. Write the same reply again entirely in Hebrew, with the exact "
+    "wording the instructions give; keep only a name the person wrote in English as they wrote it."
 )
 
 _USER_ID = "user_id"
@@ -180,6 +197,12 @@ class AskQuestion(_Args):
         description="The profile or goal field asked for; the page shows its own control. "
         "Omit when asking a free question with text",
     )
+    offer_clone: bool = Field(
+        default=False,
+        description="True to ask whether to clone the check before changing its "
+        "recommendation; the page shows its own question and choices, so give no field, text "
+        "or choices",
+    )
     text: str | None = Field(
         default=None,
         min_length=1,
@@ -193,6 +216,10 @@ class AskQuestion(_Args):
 
     @model_validator(mode="after")
     def _one_of_field_and_text(self) -> Self:
+        if self.offer_clone:
+            if (self.field, self.text, self.choices) != (None, None, None):
+                raise ValueError("a clone offer takes no field, text or choices")
+            return self
         if (self.field is None) == (self.text is None):
             raise ValueError("give exactly one of field and text")
         if self.choices is not None and self.text is None:
@@ -234,6 +261,21 @@ def check_config(user_id: str, check_id: str) -> RunnableConfig:
 async def delete_conversation(graph: AgentGraph, check_id: str) -> None:
     assert isinstance(graph.checkpointer, BaseCheckpointSaver)
     await graph.checkpointer.adelete_thread(check_id)
+
+
+async def copy_conversation(graph: AgentGraph, source_id: str, target_id: str) -> None:
+    """Starts the target's thread with one checkpoint holding the source's messages; the next
+    turn on the target runs from them as if they had been said there."""
+    source = await graph.aget_state({"configurable": {_CHECK_ID: source_id}})
+    if source.values:
+        target: RunnableConfig = {"configurable": {_CHECK_ID: target_id}}
+        await graph.aupdate_state(target, source.values, as_node="model")
+
+
+async def last_message(graph: AgentGraph, check_id: str) -> BaseMessage | None:
+    """The last message of the check's conversation; None before its first turn."""
+    state = await graph.aget_state({"configurable": {_CHECK_ID: check_id}})
+    return state.values["messages"][-1] if state.values else None
 
 
 def _tools_for(config: RunnableConfig, deps: ToolDeps) -> CheckTools:
@@ -370,20 +412,35 @@ def _recommends_without_the_tool(reply: AIMessage, messages: Sequence[BaseMessag
     raise AssertionError("a turn starts with the person's message")
 
 
+def _correction_for(reply: AIMessage, messages: Sequence[BaseMessage]) -> str | None:
+    """What the model must redo before its reply reaches the conversation: a recommendation
+    written without its tool, or English words. A reply is redone once, whatever the second one
+    says, so a turn never loops on a correction."""
+    if _recommends_without_the_tool(reply, messages):
+        return _REDO_THE_RECOMMENDATION
+    if _ENGLISH_WORD.search(reply.text):
+        return _REWRITE_IN_HEBREW
+    return None
+
+
 def _after_tools(state: MessagesState) -> Literal["model", "__end__"]:
-    """Ends the turn once ask put a question on the person's screen; a refused ask, like any other
-    tool result, goes back to the model."""
+    """Ends the turn once ask put a question on the person's screen, or once a profile change
+    archived the check; a refused ask, like any other tool result, goes back to the model."""
     asked = _ask_call_ids(state)
     for message in reversed(state["messages"]):
         if isinstance(message, AIMessage):
             break
-        if (
-            isinstance(message, ToolMessage)
-            and message.tool_call_id in asked
-            and message.status != "error"
+        if isinstance(message, ToolMessage) and (
+            (message.tool_call_id in asked and message.status != "error")
+            or archived_the_check(message)
         ):
             return "__end__"
     return "model"
+
+
+def archived_the_check(message: BaseMessage | None) -> bool:
+    """Whether the message is the result of a profile change that archived its check."""
+    return isinstance(message, ToolMessage) and message.content == CHECK_ARCHIVED_RESULT
 
 
 def _tool_error_text(error: ToolError | ToolException) -> str:
@@ -407,9 +464,9 @@ def build_agent_graph(
         prefix = [SystemMessage(SYSTEM_PROMPT), SystemMessage(block)]
         conversation = [*prefix, *state["messages"]]
         reply = await bound.ainvoke(conversation, config)
-        if _recommends_without_the_tool(reply, state["messages"]):
-            correction = HumanMessage(_REDO_THE_RECOMMENDATION)
-            reply = await bound.ainvoke([*conversation, reply, correction], config)
+        correction = _correction_for(reply, state["messages"])
+        if correction is not None:
+            reply = await bound.ainvoke([*conversation, reply, HumanMessage(correction)], config)
         return {"messages": [reply]}
 
     builder = StateGraph(MessagesState)

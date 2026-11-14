@@ -161,6 +161,8 @@ export function createDemoBackend(recording: Recording, pace: Pace, showEntry: S
       recommends_examples_only:
         recommendation !== undefined && examplesOnly(recommendation.data),
       profile_stale: false,
+      archived: false,
+      restorable: false,
     }
   }
 

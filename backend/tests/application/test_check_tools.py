@@ -403,7 +403,7 @@ async def test_balloon_option_judged_on_recurring_payment(world: World) -> None:
 
 
 async def test_ask_emits_the_question_and_ends_with_the_fixed_result(world: World) -> None:
-    question = {"field": "savings", "text": None, "choices": None}
+    question = {"field": "savings", "text": None, "choices": None, "offer_clone": False}
     result = await world.tools.ask(question, "כדי לדעת כמה להשאיר בצד")
     assert result == ASKED_RESULT
     (event,) = [e for e in world.sink.events if e.type == QUESTION_ASKED]
@@ -413,7 +413,9 @@ async def test_ask_emits_the_question_and_ends_with_the_fixed_result(world: Worl
 async def test_ask_refuses_a_stored_profile_field_naming_its_value(world: World) -> None:
     await world.profiles.save(PERSON, Profile().merged({"savings": "12000"}))
     with pytest.raises(ToolError, match="savings.*12000"):
-        await world.tools.ask({"field": "savings", "text": None, "choices": None}, None)
+        await world.tools.ask(
+            {"field": "savings", "text": None, "choices": None, "offer_clone": False}, None
+        )
     assert not [e for e in world.sink.events if e.type == QUESTION_ASKED]
 
 
@@ -421,14 +423,23 @@ async def test_ask_refuses_the_minimum_when_variable_income_is_zero(world: World
     await world.profiles.save(PERSON, Profile().merged({"variable_income": "0"}))
     with pytest.raises(ToolError, match="not needed"):
         await world.tools.ask(
-            {"field": "variable_income_minimum", "text": None, "choices": None}, None
+            {
+                "field": "variable_income_minimum",
+                "text": None,
+                "choices": None,
+                "offer_clone": False,
+            },
+            None,
         )
 
 
 async def test_ask_allows_a_goal_field_and_a_free_question(world: World) -> None:
-    await world.tools.ask({"field": "price", "text": None, "choices": None}, None)
     await world.tools.ask(
-        {"field": None, "text": "חדש או משומש?", "choices": ["חדש", "משומש"]}, None
+        {"field": "price", "text": None, "choices": None, "offer_clone": False}, None
+    )
+    await world.tools.ask(
+        {"field": None, "text": "חדש או משומש?", "choices": ["חדש", "משומש"], "offer_clone": False},
+        None,
     )
     assert len([e for e in world.sink.events if e.type == QUESTION_ASKED]) == 2
 

@@ -41,6 +41,11 @@ class CheckSummary(BaseModel):
     recommends_examples_only: bool
     """Every option the recommendation names is an example nobody can take."""
     profile_stale: bool
+    archived: bool
+    """Closed by a profile save that replaced the figures the recommendation was computed from,
+    or by the person; the check is read-only."""
+    restorable: bool
+    """Archived by the person, with figures the profile still has."""
 
     @classmethod
     def of(
@@ -48,7 +53,7 @@ class CheckSummary(BaseModel):
         check: Check,
         recommendation: DomainRecommendation | None,
         recommends_examples_only: bool,
-        profile_stale: bool,
+        profile_updated_at: datetime | None,
     ) -> Self:
         return cls(
             id=check.id,
@@ -58,7 +63,9 @@ class CheckSummary(BaseModel):
             if recommendation is None
             else RecommendationSummary.of(recommendation),
             recommends_examples_only=recommends_examples_only,
-            profile_stale=profile_stale,
+            profile_stale=check.is_stale(profile_updated_at),
+            archived=check.archived_at is not None,
+            restorable=check.is_restorable(profile_updated_at),
         )
 
 
@@ -94,6 +101,7 @@ class CheckView(BaseModel):
     recommendation: Recommendation | None
     profile_stale: bool
     """The profile was saved after the version the recommendation was computed from."""
+    archived: bool
 
 
 class Message(BaseModel):
