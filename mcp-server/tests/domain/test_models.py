@@ -74,15 +74,15 @@ def test_term_and_principal_limits() -> None:
             make_track(term_months=months)
     for months in (6, 96):
         assert make_track(term_months=months).term_months == months
-    for amount in (9999, 100001):
+    for amount in (9999, 10000001):
         with pytest.raises(ValidationError, match="principal"):
             Loan(tracks=[make_track(principal=Decimal(amount))])
-    for amount in (10000, 100000):
+    for amount in (10000, 10000000):
         assert Loan(tracks=[make_track(principal=Decimal(amount))]).principal == amount
     with pytest.raises(ValidationError, match="principal"):
         make_track(principal=Decimal(0))
     with pytest.raises(ValidationError, match="principal"):
-        make_track(principal=Decimal(100001))
+        make_track(principal=Decimal(10000001))
 
 
 def test_fees_and_profile_amounts_are_non_negative() -> None:
@@ -128,7 +128,7 @@ def test_omitted_rate_fields_default_to_none() -> None:
 
 
 def test_multi_track_loan_principal_limits_apply_to_the_sum() -> None:
-    for amounts in ((4000, 5000), (60000, 50000)):
+    for amounts in ((4000, 5000), (6000000, 4000001)):
         tracks = [make_track(principal=Decimal(amount)) for amount in amounts]
         with pytest.raises(ValidationError, match="principal"):
             Loan(tracks=tracks)
