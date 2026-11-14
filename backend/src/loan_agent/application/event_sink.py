@@ -20,10 +20,12 @@ class CheckEventSink:
 
     async def emit(self, check_id: str, type: str, data: Mapping[str, object]) -> int:
         """Persists before publishing, so a subscriber never sees an event the log does not hold;
-        the published event carries its seq so a page that replayed the log can skip it."""
-        seq = await self._store.append(check_id, type, data)
-        await self._bus.publish(check_channel(check_id), _wire(type, data) | {"seq": seq})
-        return seq
+        the published event carries its seq, so a page that replayed the log can skip it, and
+        the time the log stamped it with."""
+        stored = await self._store.append(check_id, type, data)
+        timed = {"seq": stored.seq, "at": stored.created_at}
+        await self._bus.publish(check_channel(check_id), _wire(type, data) | timed)
+        return stored.seq
 
     async def publish_live(self, check_id: str, type: str, data: Mapping[str, object]) -> None:
         await self._bus.publish(check_channel(check_id), _wire(type, data))

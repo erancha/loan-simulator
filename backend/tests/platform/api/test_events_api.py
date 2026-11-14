@@ -83,7 +83,7 @@ def frames(lines: Iterator[str]) -> Iterator[dict[str, Any]]:
 
 
 def is_idle(frame: Mapping[str, Any]) -> bool:
-    return frame["type"] == "turn.status" and frame["data"] == {"status": "idle"}
+    return frame["type"] == "turn.status" and frame["data"]["status"] == "idle"
 
 
 def until(
@@ -104,9 +104,12 @@ def wait_until_idle(world: World, check_id: str) -> None:
         time.sleep(0.01)
 
 
-def test_a_stored_frame_carries_its_seq_and_one_line_of_json() -> None:
-    frame = stored_frame(3, "message.assistant", {"text": "שלום\nworld"})
-    assert frame == 'id: 3\nevent: message.assistant\ndata: {"text": "שלום\\nworld"}\n\n'
+def test_a_stored_frame_carries_its_seq_and_one_line_of_json_with_its_time() -> None:
+    frame = stored_frame(3, "message.assistant", {"text": "שלום\nworld"}, NOW)
+    assert frame == (
+        "id: 3\nevent: message.assistant\n"
+        'data: {"text": "שלום\\nworld", "at": "2026-10-27T09:00:00+00:00"}\n\n'
+    )
 
 
 def test_a_live_frame_has_no_id() -> None:
@@ -142,7 +145,8 @@ def test_the_stream_replays_after_last_event_id_then_streams_live(
     deltas = [frame for frame in live if frame["type"] == "message.delta"]
     stored = [frame for frame in live if frame["type"] != "message.delta"]
     assert len(deltas) > 1
-    assert not [frame for frame in deltas if "id" in frame]
+    assert not [frame for frame in deltas if "id" in frame or "at" in frame["data"]]
+    assert {frame["data"]["at"] for frame in stored} == {NOW.isoformat()}
     assert deltas[-1]["data"]["text"] == SECOND_REPLY
     assert [(frame["id"], frame["type"]) for frame in stored] == [
         (5, "message.user"),
@@ -197,9 +201,9 @@ async def test_events_racing_the_replay_arrive_once_each() -> None:
     await stream.aclose()
 
     assert sent == [
-        stored_frame(1, "persisted", {}),
-        stored_frame(2, "before.snapshot", {}),
-        stored_frame(3, "after.snapshot", {}),
+        stored_frame(1, "persisted", {}, NOW),
+        stored_frame(2, "before.snapshot", {}, NOW),
+        stored_frame(3, "after.snapshot", {}, NOW),
         live_frame("message.delta", {"message_id": "m1", "text": "x"}),
     ]
 
@@ -238,7 +242,7 @@ async def test_fragments_of_a_message_the_replay_sent_complete_are_dropped() -> 
     await stream.aclose()
 
     assert sent == [
-        stored_frame(1, "message.assistant", {"message_id": "m1", "text": "שלום"}),
+        stored_frame(1, "message.assistant", {"message_id": "m1", "text": "שלום"}, NOW),
         live_frame("message.delta", {"message_id": "m2", "text": "ו"}),
     ]
 
@@ -254,7 +258,7 @@ async def test_the_stream_ends_soon_after_shutdown_is_signalled() -> None:
         0,
         shutdown,
     )
-    assert await anext(stream) == stored_frame(1, "before.snapshot", {})
+    assert await anext(stream) == stored_frame(1, "before.snapshot", {}, NOW)
 
     pending = asyncio.ensure_future(anext(stream))
     await asyncio.sleep(0.05)

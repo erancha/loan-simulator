@@ -1,4 +1,7 @@
-/** Formats and parses shekel amounts and dates from the API's decimal strings, never via numbers. */
+/**
+ * Formats and parses shekel amounts from the API's decimal strings, never via numbers, and
+ * formats its ISO dates and times.
+ */
 
 const DECIMAL = /^\d+(\.\d+)?$/
 
@@ -89,4 +92,21 @@ export function formatDate(iso: string): string {
   assertIsoDate(iso)
   const [year, month, day] = iso.split('-')
   return `${day}.${month}.${year}`
+}
+
+const twoDigits = (part: number) => String(part).padStart(2, '0')
+
+/** A moment's day in the browser's time zone, as "02.11.2026". */
+export function formatDay(at: Date): string {
+  return formatDate(
+    [String(at.getFullYear()), twoDigits(at.getMonth() + 1), twoDigits(at.getDate())].join('-'),
+  )
+}
+
+/** An ISO time as the browser's local day and time, "02.11.2026 09:05:07". */
+export function formatTimestamp(iso: string): string {
+  const at = new Date(iso)
+  if (Number.isNaN(at.getTime())) throw new RangeError(`not a time: ${JSON.stringify(iso)}`)
+  const time = [at.getHours(), at.getMinutes(), at.getSeconds()].map(twoDigits).join(':')
+  return `${formatDay(at)} ${time}`
 }

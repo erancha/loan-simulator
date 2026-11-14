@@ -20,6 +20,7 @@ import { FollowsNote } from './FollowsNote.tsx'
 import { isArchived, isMessage } from './events.ts'
 import type { ChatEntry, CheckState } from './events.ts'
 import { marketSampleTappedToday, rememberMarketSampleTapped } from './dailySample.ts'
+import { formatTimestamp } from '../money.ts'
 import { withBold } from './emphasis.tsx'
 import { MarketChart } from './MarketChart.tsx'
 import { QuestionBubble } from './QuestionBubble.tsx'
@@ -59,6 +60,16 @@ interface Props {
   recommended: boolean
 }
 
+/** When an entry was said, under its bubble on the bubble's side. */
+function EntryTime({ at, side }: { at: string | undefined; side: 'user' | 'assistant' }) {
+  if (at === undefined) return null
+  return (
+    <time className={`bubble-time bubble-time-${side}`} dateTime={at}>
+      {formatTimestamp(at)}
+    </time>
+  )
+}
+
 function PanelNoteLines({ notes, after }: { notes: PanelNote[]; after: string | null }) {
   return notes
     .filter((note) => note.afterEntryId === after)
@@ -70,8 +81,9 @@ function PanelNoteLines({ notes, after }: { notes: PanelNote[]; after: string | 
 }
 
 /**
- * The conversation of a check: its bubbles and question bubbles, what each turn saved, the
- * profile edits made beside it, and the message input, which an archived check does not have.
+ * The conversation of a check: its bubbles and question bubbles, each with the time it was
+ * said, what each turn saved, the profile edits made beside it, and the message input, which an
+ * archived check does not have.
  */
 export function Chat({
   messages: entries,
@@ -235,6 +247,8 @@ export function Chat({
                   {!entry.complete && <span className="caret" aria-hidden="true" />}
                 </p>
               )}
+              {entry.role === 'question' && <EntryTime at={entry.at} side="assistant" />}
+              {isMessage(entry) && <EntryTime at={entry.at} side={entry.role} />}
               <PanelNoteLines notes={panelNotes} after={entry.id} />
             </li>
           ))}

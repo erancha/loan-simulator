@@ -88,3 +88,17 @@ test('an error with the source closed signals sign-out', () => {
   expect(signedOut).toHaveBeenCalledTimes(1)
   window.removeEventListener(SIGNED_OUT_EVENT, signedOut)
 })
+
+test("a stored frame's time is lifted out of its data onto the entry", () => {
+  const { result } = renderHook(() => useCheckEvents('c1'))
+  const at = '2026-11-14T09:30:05+00:00'
+  act(() => {
+    const source = FakeEventSource.last()
+    source.emit('message.user', JSON.stringify({ text: 'שלום', at }), '1')
+    source.emit('goal.set', JSON.stringify({ purpose: 'רכב', price: '50000', at }), '2')
+  })
+  expect(result.current.state.messages).toEqual([
+    { id: 'u-1', role: 'user', text: 'שלום', complete: true, at },
+  ])
+  expect(result.current.state.goal).toEqual({ purpose: 'רכב', price: '50000' })
+})

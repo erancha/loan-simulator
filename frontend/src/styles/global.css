@@ -474,6 +474,23 @@ fieldset.field.changed {
   color: var(--mute);
 }
 
+/* An entry's time sits under its bubble, on the bubble's side, small enough not to compete; its
+   digits and separators read left to right inside the right-to-left page. */
+.bubble-time {
+  margin-block-start: 2px;
+  color: var(--mute);
+  font-size: 0.75rem;
+  direction: ltr;
+}
+
+.bubble-time-user {
+  align-self: flex-start;
+}
+
+.bubble-time-assistant {
+  align-self: flex-end;
+}
+
 .panel-note-line {
   align-self: flex-end;
   margin: 4px 0 0;

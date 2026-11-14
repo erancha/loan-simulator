@@ -253,12 +253,12 @@ class InMemoryCheckEventStore:
         self.rows[target_id] = [replace(event, seq=seq) for seq, event in enumerate(kept, 1)]
         self._copied[target_id] = len(kept)
 
-    async def append(self, check_id: str, type: str, data: Mapping[str, object]) -> int:
+    async def append(self, check_id: str, type: str, data: Mapping[str, object]) -> StoredEvent:
         if check_id not in self._checks.rows:
             raise CheckNotFoundError(check_id)
         log = self.rows.setdefault(check_id, [])
         log.append(StoredEvent(len(log) + 1, type, data, self._clock()))
-        return len(log)
+        return log[-1]
 
     async def list(self, check_id: str, after_seq: int) -> list[StoredEvent]:
         return [event for event in self.rows.get(check_id, []) if event.seq > after_seq]

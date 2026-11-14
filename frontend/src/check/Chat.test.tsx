@@ -522,3 +522,21 @@ test('a check the person archived says so, without a profile list', () => {
   expect(note).not.toHaveTextContent('הפרופיל שעליו התבססה הבדיקה')
   expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
 })
+
+test('a message and a question show when they were said; one without a time shows none', () => {
+  const at = new Date(2026, 10, 14, 9, 30, 5).toISOString()
+  const question: QuestionEntry = {
+    id: 'q-3',
+    role: 'question',
+    question: { field: 'savings', text: null, choices: null },
+    leadIn: null,
+    answered: false,
+    at,
+  }
+  renderChat({ messages: [{ ...exchange[0], at }, exchange[1], question] })
+
+  const times = document.querySelectorAll('time.bubble-time')
+  expect(times).toHaveLength(2)
+  expect(times[0]).toHaveTextContent('14.11.2026 09:30:05')
+  expect(times[0]).toHaveAttribute('datetime', at)
+})

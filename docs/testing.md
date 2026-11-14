@@ -82,14 +82,14 @@ delete and a save that changes nothing, which keeps its save time, among them.
 
 **Platform** tests drive the HTTP API through the real app with fake infrastructure: sign-in and the
 401 answer on every route outside a short public list and the 404 answers, profile and check routes,
-the event stream's replay, Last-Event-ID resume and its dropping of fragments the replay already
-sent complete, the turn cap with its per-person overrides, the conflict answers, deleting a check
-with its conversation, which gives no messages back under the cap, cloning a check with its log and
-conversation, whose copied messages use none of the cap, the refusal of a message to an archived
-check, archiving by the person and restoring only a check whose figures still match the profile, a
-profile change in a recommended check that goes on in a new check, the runner's streaming and
-failure events, a turn after a model failure, the turn step limit, restart recovery, settings
-validation, and that the migration builds the tables, matches the ORM and downgrades.
+the event stream's replay, each stored frame's time, Last-Event-ID resume and its dropping of
+fragments the replay already sent complete, the turn cap with its per-person overrides, the conflict
+answers, deleting a check with its conversation, which gives no messages back under the cap, cloning
+a check with its log and conversation, whose copied messages use none of the cap, the refusal of a
+message to an archived check, archiving by the person and restoring only a check whose figures still
+match the profile, a profile change in a recommended check that goes on in a new check, the runner's
+streaming and failure events, a turn after a model failure, the turn step limit, restart recovery,
+settings validation, and that the migration builds the tables, matches the ORM and downgrades.
 
 **Deployment files** are checked without Docker, as for the engine: each service's
 `test_settings_files.py` requires the settings files to document its keys and nothing else

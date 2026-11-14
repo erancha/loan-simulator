@@ -7,15 +7,17 @@ sequence up to its last. A reconnecting browser sends Last-Event-ID and gets onl
 Queued message.delta events of a message the replay already sent complete are dropped, so the
 stream never sends a partial text after its complete message.
 
-Stored events are framed with their sequence number as the frame's id. Live-only events (the
-reply's message.delta events) are framed without one, so the browser's Last-Event-ID always
-names a stored event and a reconnect resumes from the log. Only the check's owner may subscribe;
-the session cookie identifies them, since the browser's event-stream object sends no headers.
+Stored events are framed with their sequence number as the frame's id and their time in the
+frame's JSON. Live-only events (the reply's message.delta events) are framed without an id, so
+the browser's Last-Event-ID always names a stored event and a reconnect resumes from the log.
+Only the check's owner may subscribe; the session cookie identifies them, since the browser's
+event-stream object sends no headers.
 """
 
 import asyncio
 import json
 from collections.abc import AsyncIterator, Mapping
+from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Header, Request
@@ -33,8 +35,11 @@ KEEPALIVE_FRAME = ": keepalive\n\n"
 router = APIRouter()
 
 
-def stored_frame(seq: int, event_type: str, data: Mapping[str, object]) -> str:
-    return f"id: {seq}\n{live_frame(event_type, data)}"
+def stored_frame(seq: int, event_type: str, data: Mapping[str, object], at: datetime) -> str:
+    """The event's time rides in the frame's JSON as at, beside the event's own data, so the page
+    can date what it shows; no event's data has a key of that name."""
+    assert "at" not in data, f"{event_type} data already has an at key"
+    return f"id: {seq}\n{live_frame(event_type, {**data, 'at': at.isoformat()})}"
 
 
 def live_frame(event_type: str, data: Mapping[str, object]) -> str:
@@ -55,7 +60,7 @@ async def check_frames(
         replayed_through = after_seq
         replayed_messages: set[object] = set()
         for event in await store.list(check_id, after_seq):
-            yield stored_frame(event.seq, event.type, event.data)
+            yield stored_frame(event.seq, event.type, event.data, event.created_at)
             replayed_through = event.seq
             if event.type == MESSAGE_ASSISTANT:
                 replayed_messages.add(event.data["message_id"])
@@ -83,7 +88,7 @@ async def check_frames(
                     if not stale:
                         yield live_frame(live["type"], live["data"])
                 elif live["seq"] > replayed_through:
-                    yield stored_frame(live["seq"], live["type"], live["data"])
+                    yield stored_frame(live["seq"], live["type"], live["data"], live["at"])
         finally:
             stopping.cancel()
             if receiving is not None:

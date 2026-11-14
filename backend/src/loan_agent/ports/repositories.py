@@ -107,8 +107,9 @@ class RecommendationRepository(Protocol):
 
 @runtime_checkable
 class CheckEventStore(Protocol):
-    async def append(self, check_id: str, type: str, data: Mapping[str, object]) -> int:
-        """Returns the event's sequence number within the check."""
+    async def append(self, check_id: str, type: str, data: Mapping[str, object]) -> StoredEvent:
+        """Returns the event as stored, with its sequence number within the check and its
+        time."""
         ...
 
     async def list(self, check_id: str, after_seq: int) -> list[StoredEvent]: ...

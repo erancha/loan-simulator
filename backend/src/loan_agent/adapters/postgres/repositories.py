@@ -353,7 +353,7 @@ class PostgresCheckEventStore:
     def __init__(self, sessions: Sessions) -> None:
         self._sessions = sessions
 
-    async def append(self, check_id: str, type: str, data: Mapping[str, object]) -> int:
+    async def append(self, check_id: str, type: str, data: Mapping[str, object]) -> StoredEvent:
         async with self._sessions.begin() as session:
             owner = await session.scalar(
                 select(CheckRow.user_id).where(CheckRow.id == check_id).with_for_update()
@@ -366,11 +366,14 @@ class PostgresCheckEventStore:
                 )
             )
             assert last is not None, "coalesce(max(seq), 0) always yields a row"
-            seq = last + 1
-            session.add(
-                CheckEventRow(check_id=check_id, seq=seq, type=type, data=dict(data), user_id=owner)
+            row = CheckEventRow(
+                check_id=check_id, seq=last + 1, type=type, data=dict(data), user_id=owner
             )
-        return seq
+            session.add(row)
+            # The database stamps the time, so the row is read back before the session closes.
+            await session.flush()
+            await session.refresh(row)
+            return StoredEvent(row.seq, row.type, row.data, _utc(row.created_at))
 
     async def list(self, check_id: str, after_seq: int) -> list[StoredEvent]:
         async with self._sessions() as session:

@@ -226,6 +226,8 @@ interface Sequenced<Type extends EventTypeName, Data> {
   type: Type
   data: Data
   seq: number | null
+  /** When the server stored the event, an ISO time; the demo's recording holds none. */
+  at?: string
 }
 
 /** `message.delta` is the only event without a sequence number; its text is cumulative. */

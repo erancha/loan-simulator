@@ -1,7 +1,7 @@
 /** Every Hebrew label and sentence on a check's page: the conversation and the card. */
 import type { ChartShown, ProfileChange, Question, QuestionField, Track } from '../api/types.ts'
 import { OFFER_SOURCES } from '../copy.ts'
-import { formatDate, formatMonth, formatShekels } from '../money.ts'
+import { formatDate, formatDay, formatMonth, formatShekels } from '../money.ts'
 import { MONEY_FIELDS } from '../profile/copy.ts'
 import type { MoneyKey } from '../profile/copy.ts'
 
@@ -375,23 +375,15 @@ function changesText(changes: ProfileChange[]): string {
     .join('; ')
 }
 
-/** The day of a moment, in the person's time zone. */
-function dayText(at: Date): string {
-  const day = [at.getFullYear(), at.getMonth() + 1, at.getDate()]
-    .map((part) => String(part).padStart(2, '0'))
-    .join('-')
-  return formatDate(day)
-}
-
 /** Why a profile change closed the check: the day and each changed figure. */
 export function archivedReason(at: Date, changes: ProfileChange[]): string {
   const list = changesText(changes)
-  return `ב-${dayText(at)} השתנה הפרופיל (${list}), ולכן ההמלצה כאן כבר לא מתאימה.`
+  return `ב-${formatDay(at)} השתנה הפרופיל (${list}), ולכן ההמלצה כאן כבר לא מתאימה.`
 }
 
 /** The closing line of a check the person archived themselves. */
 export function manualArchiveLine(at: Date): string {
-  return `ב-${dayText(at)} הבדיקה הועברה לארכיון ידנית.`
+  return `ב-${formatDay(at)} הבדיקה הועברה לארכיון ידנית.`
 }
 
 export const FOLLOWS_TITLE = 'בדיקת המשך'

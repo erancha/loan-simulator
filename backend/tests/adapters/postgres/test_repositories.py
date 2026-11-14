@@ -169,10 +169,12 @@ async def test_recommendation_replaced_per_check(repos: Repos) -> None:
 async def test_event_seq_is_per_check_and_gapless(repos: Repos) -> None:
     await repos.checks.add(make_check("c-ev-a"))
     await repos.checks.add(make_check("c-ev-b"))
-    assert await repos.events.append("c-ev-a", "message.user", {"text": "a"}) == 1
-    assert await repos.events.append("c-ev-b", "message.user", {"text": "b"}) == 1
-    assert await repos.events.append("c-ev-a", "message.assistant", {"text": "c"}) == 2
+    assert (await repos.events.append("c-ev-a", "message.user", {"text": "a"})).seq == 1
+    assert (await repos.events.append("c-ev-b", "message.user", {"text": "b"})).seq == 1
+    appended = await repos.events.append("c-ev-a", "message.assistant", {"text": "c"})
+    assert appended.seq == 2
     events = await repos.events.list("c-ev-a", 0)
+    assert appended == events[-1]
     assert [(e.seq, e.type, dict(e.data)) for e in events] == [
         (1, "message.user", {"text": "a"}),
         (2, "message.assistant", {"text": "c"}),

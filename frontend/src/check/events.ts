@@ -21,6 +21,8 @@ export interface ChatMessage {
   role: 'user' | 'assistant'
   text: string
   complete: boolean
+  /** When the message was stored, an ISO time; a reply still streaming has none yet. */
+  at?: string
 }
 
 /** A question the model asked; the page renders it as an input until the user answers. */
@@ -30,6 +32,8 @@ export interface QuestionEntry {
   question: Question
   leadIn: string | null
   answered: boolean
+  /** When the question was stored, an ISO time. */
+  at?: string
 }
 
 /** A market chart the model showed; it sits in the conversation where it was shown. */
@@ -106,8 +110,9 @@ function upsertAssistant(
   id: string,
   text: string,
   complete: boolean,
+  at?: string,
 ): ChatEntry[] {
-  const message: ChatMessage = { id, role: 'assistant', text, complete }
+  const message: ChatMessage = { id, role: 'assistant', text, complete, at }
   return messages.some((m) => m.id === id)
     ? messages.map((m) => (m.id === id ? message : m))
     : [...messages, message]
@@ -123,7 +128,10 @@ function apply(state: CheckState, event: CheckEvent): CheckState {
       )
       return {
         ...state,
-        messages: [...messages, { id, role: 'user', text: event.data.text, complete: true }],
+        messages: [
+          ...messages,
+          { id, role: 'user', text: event.data.text, complete: true, at: event.at },
+        ],
         failure: null,
       }
     }
@@ -141,7 +149,13 @@ function apply(state: CheckState, event: CheckEvent): CheckState {
     case 'message.assistant':
       return {
         ...state,
-        messages: upsertAssistant(state.messages, event.data.message_id, event.data.text, true),
+        messages: upsertAssistant(
+          state.messages,
+          event.data.message_id,
+          event.data.text,
+          true,
+          event.at,
+        ),
       }
     case 'profile.updated':
       return {
@@ -198,6 +212,7 @@ function apply(state: CheckState, event: CheckEvent): CheckState {
             question: event.data.question,
             leadIn: event.data.lead_in,
             answered: false,
+            at: event.at,
           },
         ],
       }
@@ -218,7 +233,10 @@ function apply(state: CheckState, event: CheckEvent): CheckState {
     case 'check.follows':
       return {
         ...state,
-        messages: [...state.messages, { id: `f-${event.seq}`, role: 'follows', follows: event.data }],
+        messages: [
+          ...state.messages,
+          { id: `f-${event.seq}`, role: 'follows', follows: event.data },
+        ],
       }
   }
 }

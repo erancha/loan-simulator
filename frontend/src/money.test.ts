@@ -6,6 +6,7 @@ import {
   formatMonth,
   formatShekelRange,
   formatShekels,
+  formatTimestamp,
   formatYearRange,
   isZero,
   normaliseMoneyInput,
@@ -78,4 +79,10 @@ test('isZero recognises every spelling of zero and nothing else', () => {
   for (const zero of ['0', '000', '0.00', '0.0']) expect(isZero(zero)).toBe(true)
   for (const other of ['1', '0.01', '10', '100.00']) expect(isZero(other)).toBe(false)
   expect(() => isZero('-0')).toThrow(RangeError)
+})
+
+test('formatTimestamp gives the local day and time', () => {
+  const at = new Date(2026, 10, 4, 9, 5, 7)
+  expect(formatTimestamp(at.toISOString())).toBe('04.11.2026 09:05:07')
+  expect(() => formatTimestamp('not a time')).toThrow(RangeError)
 })

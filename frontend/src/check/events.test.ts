@@ -208,3 +208,19 @@ test('a restore reopens the conversation and drops the closing note', () => {
   expect(isArchived(state)).toBe(false)
   expect(state.messages).toHaveLength(1)
 })
+
+test('messages and questions keep the time of their stored event; a streaming reply has none', () => {
+  const at = '2026-11-14T09:30:05+00:00'
+  const state = play([
+    { ...userMessage(1, 'שלום'), at },
+    { ...assistantMessage(2, 'a1', 'היי'), at },
+    { ...questionAsked(3, { field: 'savings', text: null, choices: null }), at },
+    delta('a2', 'ע'),
+  ])
+  expect(state.messages.map((entry) => ('at' in entry ? entry.at : 'none'))).toEqual([
+    at,
+    at,
+    at,
+    undefined,
+  ])
+})
