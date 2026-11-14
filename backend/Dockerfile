@@ -5,6 +5,11 @@ WORKDIR /frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
 COPY frontend/ ./
+# The build the landing page names, from scripts/lib/build-info.sh through docker-compose.yml; the
+# context leaves out .git, so the page cannot read it here. Kept below the dependency layer, since
+# the values change with every commit.
+ARG APP_VERSION
+ARG APP_COMMIT_DATE
 RUN npm run build
 
 FROM python:3.14-slim

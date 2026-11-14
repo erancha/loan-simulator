@@ -1,8 +1,10 @@
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vitest/config'
+import { buildInfoDefines } from './buildInfo.ts'
 
 export default defineConfig({
   plugins: [react()],
+  define: buildInfoDefines(),
   test: {
     environment: 'jsdom',
     pool: 'threads',

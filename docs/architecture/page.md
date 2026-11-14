@@ -15,10 +15,24 @@ and the other parts are in [the architecture map](../architecture.md), the sign-
 
 A signed-out visitor sees the product name and the "התחברות עם Google" button
 (`frontend/src/auth/`), which sends the browser to Google and receives the ID token back in the URL
-fragment ([sign-in.md](../sign-in.md)). A signed-in person sees a header whose account menu
-(`shell/AccountMenu.tsx`) names the account and holds sign-out, and one open check. The open check
-is kept in the URL hash as `#check=<id>`; a hash that names no check of theirs opens the newest one
-and is rewritten to match.
+fragment ([sign-in.md](../sign-in.md)). Under the name a line gives the build: its
+version, which is the release tag the checkout descends from (`vMAJOR.MINOR`) and the commits since
+it, and its last commit's date. `scripts/lib/build-info.sh` reads both from git and the image
+build receives them as build arguments, since its context has no `.git`. Under the card, one
+line of links opens the demo, whose tooltip says it is a recorded check best seen on a computer; a
+WhatsApp invite carrying the page's own address; and the GitHub source.
+
+A signed-in person sees a header whose account menu (`shell/AccountMenu.tsx`) names the account and
+holds sign-out, and one open check. The open check is kept in the URL hash as `#check=<id>`; a hash
+that names no check of theirs opens the newest one and is rewritten to match.
+
+The demo, `/demo.html`, is the same app over a recorded check (`frontend/src/demo/`). Before the
+app renders, it replaces `fetch` and `EventSource` with a backend that replays one check's stored
+events on a timer. It types each reply out as deltas, since the server stores replies whole. Before
+each message the person typed, it shows the typed value in its box for a second: an answer in its
+question's box, any other message in the chat's composer. It answers the profile and the checks
+list from the events played so far. `sql-helper.sh --demo-check <id>` writes the recording from
+the stack's database.
 
 From 900px wide the open check is three columns: the side column (the checks list, whose
 entry for each check names its goal, then the shared profile panel), the conversation, and the

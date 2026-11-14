@@ -30,6 +30,25 @@ export const LANDING_DETAILS = [
   'כל המספרים מחושבים לפי נוסחאות קבועות, לא מנוחשים.',
 ]
 
+/** The line under the title that names the running build, so a report can name it too. */
+export const versionLine = (version: string, commitDate: string) =>
+  `גירסה ${version}, ${commitDate}`
+
+export const DEMO_LINK = 'הדגמה'
+/** The demo link's tooltip: the desktop shows the chat and the card side by side. */
+export const DEMO_HINT = 'שיחה מוקלטת, מהשאלה הראשונה ועד ההמלצה; מומלץ לראות במסך מחשב'
+/** The banner over the replayed check on demo.html. */
+export const DEMO_BANNER = 'הדגמה מוקלטת'
+export const DEMO_RESTART = 'מההתחלה'
+export const INVITE_LINK = 'הזמנת חברים ב-WhatsApp'
+/** The invite message, before the page's own address, which closes it on a line of its own. */
+export const INVITE_MESSAGE = [
+  'היי! קיבלתי המלצה על סימולטור הלוואות חינמי: מספרים מה רוצים לקנות ומה המצב הכספי, והוא מחשב' +
+    ' כמה ללוות, לכמה זמן וכמה אפשר להחזיר בחודש, לפי נתוני בנק ישראל.',
+  'אחר כך הוא משווה בין הצעות אמיתיות וממליץ. נכנסים בחינם עם חשבון Google:',
+]
+export const SOURCE_LINK = 'קוד המקור ב-GitHub'
+
 export const SIGN_IN = 'התחברות עם Google'
 export const SIGN_IN_REFUSED = 'הכניסה עם Google לא הושלמה. אפשר לנסות שוב.'
 

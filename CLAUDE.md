@@ -21,7 +21,13 @@ than the license contact (`PUBLISHED_SETTINGS` of `lib/settings-guard.sh`).
   settings files by their path from the working directory.
 - `mcp-server/Dockerfile` and `backend/Dockerfile` build from the repo root context, because
   they copy from `mcp-server/` and `backend/` paths. `backend/Dockerfile` also builds
-  `frontend/` in a Node stage and sets `AGENT_FRONTEND_DIST` to the copy in the image.
+  `frontend/` in a Node stage and sets `AGENT_FRONTEND_DIST` to the copy in the image. Its
+  context leaves out `.git`, so `compose()` passes the version and commit date the landing
+  page shows as build arguments, from `scripts/lib/build-info.sh`. The version is the release tag
+  (`vMAJOR.MINOR`) plus the commits since it, so a checkout needs the tags.
+- The demo page is `frontend/demo.html` with `src/demo/`, not `docs/demo/` as global section 7
+  says: it is the real app over a recorded check, so it builds and ships with the page.
+  `sql-helper.sh --demo-check <id>` writes its recording.
 - The layer rules are enforced by `lint-imports` from each `pyproject.toml`: `loan_engine` is
   `service → market → domain`, with `domain` importing no framework but pydantic; `loan_agent`
   is `platform → application → ports → domain`, with `adapters` implementing the ports, and

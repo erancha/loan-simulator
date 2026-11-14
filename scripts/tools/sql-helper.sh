@@ -21,6 +21,10 @@
 #                                                    account ID, so their next sign-in is a first
 #                                                    visit; asks to type the database's name
 #   ./scripts/tools/sql-helper.sh --reset-all        the same for everyone
+#   ./scripts/tools/sql-helper.sh --demo-check <id>  write the stored events of the check with that
+#                                                    id (the #check= part of the page's URL) to
+#                                                    frontend/src/demo/recording.json, the
+#                                                    recording demo.html replays
 #   -h, --help                                       show this help
 #
 # Examples:
@@ -42,6 +46,8 @@ source "$SCRIPT_DIR/common.sh"
 ALL_TABLES_SQL="$SCRIPT_DIR/tools/sql/all-tables.sql"
 PEOPLE_SQL="$SCRIPT_DIR/tools/sql/people.sql"
 RESET_SQL="$SCRIPT_DIR/tools/sql/reset-people.sql"
+DEMO_CHECK_SQL="$SCRIPT_DIR/tools/sql/demo-check.sql"
+DEMO_RECORDING="$ROOT/frontend/src/demo/recording.json"
 ROWS_LIMIT=20
 
 TARGET=local
@@ -75,6 +81,13 @@ case "${1:-}" in
     RESET_PERSON='*'
     set -- ;;
 esac
+
+DEMO_CHECK=""
+if [[ "${1:-}" == --demo-check ]]; then
+  [[ -n "${2:-}" && $# -eq 2 ]] || { print_help >&2; exit 2; }
+  DEMO_CHECK="$2"
+  set --
+fi
 
 case "${1:-}" in
   -h|--help) print_help; exit 0 ;;
@@ -135,6 +148,13 @@ elif [[ -n "$RESET_PERSON" ]]; then
   [[ "$answer" == "$POSTGRES_DB" ]] || { echo "Nothing deleted." >&2; exit 1; }
   compose exec -T db "${PSQL[@]}" -q -v "person=$RESET_PERSON" < "$RESET_SQL"
   echo "Deleted; the next sign-in of $whom starts as a first visit."
+elif [[ -n "$DEMO_CHECK" ]]; then
+  recording="$(compose exec -T db "${PSQL[@]}" -At -v "check=$DEMO_CHECK" < "$DEMO_CHECK_SQL")"
+  [[ -n "$recording" ]] ||
+    { echo "No events of check $DEMO_CHECK ($TARGET); copy its id from #check= in the URL" >&2
+      exit 1; }
+  python3 -m json.tool --indent 2 --no-ensure-ascii <<< "$recording" > "$DEMO_RECORDING"
+  echo "Wrote ${DEMO_RECORDING#"$ROOT"/}; check it holds no real figures before committing."
 elif [[ -n "$SQL_FILE" ]]; then
   compose exec -T db "${PSQL[@]}" "$@" < "$SQL_FILE"
 elif [[ $# -eq 0 ]]; then

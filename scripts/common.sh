@@ -62,9 +62,12 @@ require_docker() {
 }
 
 # Compose reads the ${...} values and the keys each service lists in its environment from this
-# shell, so the settings are loaded first.
+# shell, so the settings are loaded first, with the build the agent image's page names.
 compose() {
   load_settings
+  local build_info line
+  build_info="$("$ROOT/scripts/lib/build-info.sh")"
+  while IFS= read -r line; do export "$line"; done <<< "$build_info"
   local file
   local -a files=()
   for file in "${COMPOSE_FILES[@]}"; do files+=(-f "$file"); done

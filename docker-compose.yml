@@ -10,6 +10,11 @@ name: loan-simulator
 x-agent-build: &agent-build
   context: .
   dockerfile: backend/Dockerfile
+  # The version and commit date the landing page shows; the compose function of
+  # scripts/common.sh exports both.
+  args:
+    APP_VERSION: ${APP_VERSION:?set by scripts/common.sh}
+    APP_COMMIT_DATE: ${APP_COMMIT_DATE:?set by scripts/common.sh}
 
 x-agent-image: &agent-image loan-agent:local
 

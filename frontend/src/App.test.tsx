@@ -199,6 +199,36 @@ test('a failed sign-out says so and keeps the person in the app', async () => {
   expect(screen.getByRole('button', { name: 'תפריט חשבון' })).toBeInTheDocument()
 })
 
+test('signed out names the build under the title', async () => {
+  stubApi(signedOut)
+  render(<App />)
+  await screen.findByRole('button', { name: SIGN_IN })
+
+  expect(screen.getByText(/^גירסה \d+\.\d+\.\d+, \d{2}\/\d{2}\/\d{4}$/)).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'סימולטור הלוואות' })).toBeInTheDocument()
+})
+
+test('signed out links to the demo, the WhatsApp invite and the source', async () => {
+  stubApi(signedOut)
+  render(<App />)
+  await screen.findByRole('button', { name: SIGN_IN })
+
+  expect(screen.getByRole('link', { name: 'הדגמה' })).toHaveAttribute('href', '/demo.html')
+  expect(screen.getByRole('link', { name: 'הדגמה' })).toHaveAttribute(
+    'title',
+    'שיחה מוקלטת, מהשאלה הראשונה ועד ההמלצה; מומלץ לראות במסך מחשב',
+  )
+  const invite = new URL(
+    screen.getByRole('link', { name: 'הזמנת חברים ב-WhatsApp' }).getAttribute('href') as string,
+  )
+  expect(`${invite.origin}${invite.pathname}`).toBe('https://wa.me/')
+  expect(invite.searchParams.get('text')).toContain(window.location.origin)
+  expect(screen.getByRole('link', { name: 'קוד המקור ב-GitHub' })).toHaveAttribute(
+    'href',
+    'https://github.com/erancha/loan-simulator',
+  )
+})
+
 test('the more toggle adds the details under the pitch', async () => {
   stubApi(signedOut)
   render(<App />)
