@@ -432,6 +432,19 @@ test('the archived group starts collapsed even when the open check is archived',
   expect(list.querySelector('details')).not.toHaveAttribute('open')
 })
 
+test('the archived group starts unfolded when every check is archived', async () => {
+  stubApi([
+    [
+      summary('gone-1', '2026-02-01T00:00:00Z', { archived: true }),
+      summary('gone-2', '2026-01-01T00:00:00Z', { archived: true }),
+    ],
+  ])
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+
+  const list = await screen.findByRole('navigation', { name: 'הבדיקות שלי' })
+  expect(list.querySelector('details')).toHaveAttribute('open')
+})
+
 test('jumping to an archived check opens the archived group and marks the check', async () => {
   stubApi([
     [

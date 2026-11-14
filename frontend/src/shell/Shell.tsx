@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   archiveCheck,
   cloneCheck,
@@ -61,6 +61,7 @@ export function Shell({ user, onSignOut }: Props) {
   const [pane, setPane] = useState<Pane>('chat')
   // Kept here because the checks list is rebuilt with the check page on every switch of checks.
   const [archivedOpen, setArchivedOpen] = useState(false)
+  const listedOnce = useRef(false)
 
   const latest = useLatest()
   const refresh = useCallback(() => {
@@ -68,6 +69,12 @@ export function Shell({ user, onSignOut }: Props) {
     return listChecks().then(
       (fetched) => {
         if (!latest.accept(request)) return
+        // On the page's load the archived group starts folded, unless it holds every check: a
+        // folded group would then show the person an empty list.
+        if (!listedOnce.current) {
+          listedOnce.current = true
+          if (fetched.length > 0 && fetched.every((check) => check.archived)) setArchivedOpen(true)
+        }
         setChecks(newestFirst(fetched))
         setLoadError(null)
       },

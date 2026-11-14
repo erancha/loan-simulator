@@ -38,11 +38,11 @@ interface Props {
 /**
  * The person's checks, newest first, with the one open marked and the button for a new one. The
  * archived checks follow the live ones in their own group, folded until the person opens it or
- * jumps to one of them, so they neither mix with the live checks nor fill the sidebar. Every
- * check has a duplicate icon. A live check also has an archive icon; an archived one has a
- * restore icon while its figures still match the profile, and a delete icon. Only an archived
- * check can be deleted, so a delete is always a second step. It cannot be undone, so its icon
- * first asks beside the check, with focus on the cancel button.
+ * jumps to one of them, or unfolded on load when every check is archived, so they neither mix with
+ * the live checks nor fill the sidebar. Every check has a duplicate icon. A live check also has an
+ * archive icon; an archived one has a restore icon while its figures still match the profile, and
+ * a delete icon. Only an archived check can be deleted, so a delete is always a second step. It
+ * cannot be undone, so its icon first asks beside the check, with focus on the cancel button.
  */
 export function ChecksList({
   checks,

@@ -158,14 +158,15 @@ accepted is noted instead, and that a note made while a reply streams outlives t
 dropped.
 
 **Shell and sign-in.** `Shell.test.tsx` proves the header and sign-out, the empty state and creating
-a check, the list's markers, the archived checks folded in their own group, cloning from the list,
-the archive icon of a live check and the restore icon of a restorable one, selection by hash and the
-fallback to the newest check, the tab bar, and that a late list answer does not overwrite a newer
-one. Its delete tests, on archived checks, the only ones with a delete icon, prove the confirmation
-and its cancel, that the newest check left opens, that the last one leaves the empty state, and the
-refusal during a reply. `App.test.tsx` proves the Hebrew right-to-left document, the sign-in screen,
-entering the app and the fall back to sign-in on a 401. `money.test.ts` and `client.test.ts` cover
-the amount formatting from decimal strings and the API client's errors.
+a check, the list's markers, the archived checks folded in their own group (unfolded on load when
+every check is archived), cloning from the list, the archive icon of a live check and the restore
+icon of a restorable one, selection by hash and the fallback to the newest check, the tab bar, and
+that a late list answer does not overwrite a newer one. Its delete tests, on archived checks, the
+only ones with a delete icon, prove the confirmation and its cancel, that the newest check left
+opens, that the last one leaves the empty state, and the refusal during a reply. `App.test.tsx`
+proves the Hebrew right-to-left document, the sign-in screen, entering the app and the fall back
+to sign-in on a 401. `money.test.ts` and `client.test.ts` cover the amount formatting from decimal
+strings and the API client's errors.
 
 **By hand.** jsdom has no layout, so the three columns and the tabs are checked in a browser after
 `./scripts/deploy.sh`, at laptop and at phone width.
