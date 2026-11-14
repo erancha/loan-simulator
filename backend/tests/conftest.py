@@ -20,7 +20,7 @@ configure_logging("WARNING")
 
 @pytest.fixture(autouse=True)
 def no_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Settings read only the test's environment, never a developer's .env."""
+    """Settings read only the test's environment, never a developer's settings files."""
     monkeypatch.setitem(Settings.model_config, "env_file", None)
 
 

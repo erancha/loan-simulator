@@ -1,10 +1,11 @@
 """Checks how docker-compose.yml wires the agent, its database and the migration.
 
-Every published port binds to the loopback interface through its .env variable (the rationale is
-in the compose file's header). The agent starts only on a migrated database and an engine that
-accepts connections, and learns the in-network addresses of both from compose rather than from
-the host-form values in .env. The agent and the migration receive only the .env keys they read;
-the engine's keys are checked by mcp-server/tests/test_compose.py.
+Every published port binds to the loopback interface through its variable of
+scripts/lib/stack-params.sh (the rationale is in the compose file's header). The agent starts
+only on a migrated database and an engine that accepts connections, and learns the in-network
+addresses of both from compose rather than from the host-form values of the settings files. The
+agent and the migration receive only the keys they read; the engine's keys are checked by
+mcp-server/tests/test_compose.py.
 """
 
 import re
@@ -19,8 +20,8 @@ COMPOSE = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8
 SERVICES = COMPOSE["services"]
 # Read by the image's command rather than by Settings: the port it serves on.
 AGENT_IMAGE_KEYS = {"AGENT_PORT"}
-# Set by the agent image's Dockerfile ENV to its own copy of the page; a host path in .env would
-# replace it.
+# Set by the agent image's Dockerfile ENV to its own copy of the page; a host path in
+# stack-params.sh would replace it.
 IMAGE_SET_KEYS = {"AGENT_FRONTEND_DIST"}
 
 
@@ -36,10 +37,10 @@ def test_every_published_port_binds_to_loopback_through_variables() -> None:
 
 def test_the_agent_and_database_publish_on_their_own_variables() -> None:
     assert SERVICES["agent"]["ports"] == [
-        "127.0.0.1:${AGENT_HOST_PORT:?set in .env}:${AGENT_PORT:?set in .env}"
+        "127.0.0.1:${AGENT_HOST_PORT:?set in stack-params.sh}:${AGENT_PORT:?set in stack-params.sh}"
     ]
     assert SERVICES["db"]["ports"] == [
-        "127.0.0.1:${DB_HOST_PORT:?set in .env}:${DB_PORT:?set in .env}"
+        "127.0.0.1:${DB_HOST_PORT:?set in stack-params.sh}:${DB_PORT:?set in stack-params.sh}"
     ]
 
 
@@ -72,7 +73,7 @@ def test_the_engine_is_healthy_once_it_accepts_connections() -> None:
     assert "socket" in check and "${ENGINE_PORT" in check
 
 
-def test_the_database_user_and_name_come_from_env_in_every_use() -> None:
+def test_the_database_user_and_name_come_from_the_settings_in_every_use() -> None:
     values = yaml.dump({**COMPOSE, "name": None, "x-agent-image": None})
     assert "loan" not in values.replace("loan-agent", "")
 
@@ -81,7 +82,7 @@ def test_the_agent_reports_health_on_its_probe() -> None:
     assert "/health" in str(SERVICES["agent"]["healthcheck"]["test"])
 
 
-def test_the_network_addresses_override_the_host_forms_in_env() -> None:
+def test_the_network_addresses_override_the_host_forms_of_the_settings() -> None:
     for name in ("agent", "migrate"):
         environment = SERVICES[name]["environment"]
         assert "@db:${DB_PORT" in environment["DATABASE_URL"], name

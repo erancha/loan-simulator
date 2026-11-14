@@ -73,7 +73,7 @@ async def sign_in(
     body: CredentialRequest, request: Request, response: Response, deps: Deps
 ) -> UserResponse:
     verified = deps.verifier.verify(body.credential)
-    set_session_cookie(response, request, body.credential, verified)
+    set_session_cookie(response, request, body.credential, verified, https_only=deps.https_only)
     return UserResponse.of(verified.user)
 
 
@@ -90,10 +90,16 @@ async def sign_out(response: Response) -> Response:
 
 
 def set_session_cookie(
-    response: Response, request: Request, token: str, verified: VerifiedToken
+    response: Response,
+    request: Request,
+    token: str,
+    verified: VerifiedToken,
+    *,
+    https_only: bool,
 ) -> None:
     """The cookie lives exactly as long as the token: once it expires, the next request is 401 and
-    the page asks the person to sign in again."""
+    the page asks the person to sign in again. It is Secure when the request is https, or when
+    the deployment says people reach the agent only over HTTPS that ends before it."""
     remaining = int((verified.expires_at - datetime.now(UTC)).total_seconds())
     response.set_cookie(
         COOKIE,
@@ -102,7 +108,7 @@ def set_session_cookie(
         path="/",
         httponly=True,
         samesite="strict",
-        secure=request.url.scheme == "https",
+        secure=https_only or request.url.scheme == "https",
     )
 
 

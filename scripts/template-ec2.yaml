@@ -1,0 +1,154 @@
+# The loan simulator on one EC2 instance: the instance that runs the Compose stack, its fixed
+# address, the security group that admits only CloudFront and the deployer's SSH, and the
+# CloudFront distribution that gives the stack an HTTPS address. scripts/deploy.sh --ec2 deploys
+# it and passes every parameter; scripts/lib/ec2.sh holds the lookups.
+#
+# The instance is replaced, with a new empty disk, when ImageId or SubnetId changes, so deploy.sh
+# passes them only when it creates the stack. A change of InstanceType or UserData stops and
+# starts the same instance and keeps its disk and address; UserData runs on the first boot only.
+AWSTemplateFormatVersion: '2010-09-09'
+Description: The loan simulator's Compose stack on one EC2 instance behind CloudFront
+
+Parameters:
+  ImageId:
+    Type: AWS::EC2::Image::Id
+    Description: Amazon Linux 2023 image for the instance's architecture
+  InstanceType:
+    Type: String
+    Default: t4g.small
+    Description: An ARM instance type; the images are built for linux/arm64
+  DiskSizeGb:
+    Type: Number
+    Default: 10
+    Description: Size of the instance's one disk, which holds the images and the Docker volumes
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: A public subnet whose availability zone offers InstanceType
+  AgentPort:
+    Type: Number
+    Description: The port the agent is published on (AGENT_HOST_PORT), CloudFront's origin port
+  SshCidr:
+    Type: String
+    Description: The one address range that may reach port 22, the deployer's own
+  CloudFrontPrefixListId:
+    Type: String
+    Description: Id of the region's com.amazonaws.global.cloudfront.origin-facing prefix list
+
+Conditions:
+  IsUsEast1: !Equals [!Ref 'AWS::Region', us-east-1]
+
+Resources:
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Agent port from CloudFront only; SSH from the deployer only
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - Description: CloudFront edge servers to the agent port
+          IpProtocol: tcp
+          FromPort: !Ref AgentPort
+          ToPort: !Ref AgentPort
+          SourcePrefixListId: !Ref CloudFrontPrefixListId
+        - Description: SSH with an EC2 Instance Connect key, from the deployer address only
+          IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SshCidr
+
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref ImageId
+      InstanceType: !Ref InstanceType
+      SubnetId: !Ref SubnetId
+      SecurityGroupIds: [!Ref SecurityGroup]
+      BlockDeviceMappings:
+        # The disk outlives the instance, since it holds the database: a terminated instance
+        # leaves its volume in the account.
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: !Ref DiskSizeGb
+            VolumeType: gp3
+            Encrypted: true
+            DeleteOnTermination: false
+      # Only the Docker engine: Compose runs on the deployer's machine against this daemon.
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          set -euo pipefail
+          dnf install -y docker
+          systemctl enable --now docker
+          usermod -aG docker ec2-user
+      Tags:
+        - Key: Name
+          Value: !Ref 'AWS::StackName'
+
+  # A fixed address, so CloudFront's origin survives a stop and start of the instance.
+  ElasticIp:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Ref 'AWS::StackName'
+
+  ElasticIpAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !GetAtt ElasticIp.AllocationId
+      InstanceId: !Ref Instance
+
+  # TLS ends at CloudFront; the hop to the instance is plain HTTP on the agent's port.
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Ref 'AWS::StackName'
+        HttpVersion: http2
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: agent
+            # The public DNS name of the Elastic IP; CloudFront takes no bare IP address.
+            DomainName: !Join
+              - ''
+              - - ec2-
+                - !Join ['-', !Split ['.', !GetAtt ElasticIp.PublicIp]]
+                - !If
+                  - IsUsEast1
+                  - .compute-1.amazonaws.com
+                  - !Sub '.${AWS::Region}.compute.amazonaws.com'
+            CustomOriginConfig:
+              OriginProtocolPolicy: http-only
+              HTTPPort: !Ref AgentPort
+        # The page's index, the API, the event stream and the health routes always come from the
+        # agent, with every viewer header, cookie and query string: sign-in rides on a cookie and
+        # the event stream on the Last-Event-ID header.
+        DefaultCacheBehavior:
+          TargetOriginId: agent
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+          # The managed policies CachingDisabled and AllViewer.
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+          OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3
+        CacheBehaviors:
+          # The build's script and stylesheet carry a content hash in their names, so the edge
+          # may keep them: the managed policy CachingOptimized.
+          - PathPattern: /assets/*
+            TargetOriginId: agent
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD]
+            Compress: true
+            CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+
+Outputs:
+  InstanceId:
+    Value: !Ref Instance
+  PublicAddress:
+    Description: The instance's fixed public address
+    Value: !GetAtt ElasticIp.PublicIp
+  CloudFrontUrl:
+    Description: The address people open, and the origin to register with Google
+    Value: !Sub 'https://${Distribution.DomainName}'

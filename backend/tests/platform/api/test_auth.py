@@ -76,6 +76,15 @@ def test_the_cookie_is_secure_over_https(world: World, public_key: Path) -> None
         assert set_cookie(response)[COOKIE]["secure"]
 
 
+def test_the_cookie_is_secure_behind_https_that_ends_before_the_agent(
+    world: World, public_key: Path
+) -> None:
+    app = world.app(public_key, agent_https_only=True)
+    with TestClient(app, base_url="http://agent.test") as client:
+        response = client.post("/api/auth/session", json={"credential": DANA_TOKEN})
+        assert set_cookie(response)[COOKIE]["secure"]
+
+
 @pytest.mark.parametrize(
     ("credential", "reason"),
     [

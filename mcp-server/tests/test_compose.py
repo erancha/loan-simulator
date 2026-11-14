@@ -2,7 +2,7 @@
 
 The agent reaches the engine over the Compose network. The engine's published port is for MCP
 Inspector during development and binds to the loopback interface (the rationale is in the compose
-file's header). The engine receives only its own .env keys, never the agent's secrets. The other
+file's header). The engine receives only its own keys, never the agent's secrets. The other
 services' ports are checked by backend/tests/test_compose.py.
 """
 
@@ -34,7 +34,7 @@ def test_the_image_builds_from_the_repo_root() -> None:
     assert build == {"context": ".", "dockerfile": "mcp-server/Dockerfile"}
 
 
-def test_the_engine_receives_only_its_own_keys_from_env() -> None:
+def test_the_engine_receives_only_its_own_keys() -> None:
     prefix = Settings.model_config["env_prefix"]
     environment = COMPOSE["services"]["engine"]["environment"]
     assert set(environment) == {f"{prefix}{name.upper()}" for name in Settings.model_fields}

@@ -59,6 +59,8 @@ class AppDeps:
     verifier: TokenVerifier
     google_client_id: str
     """The OAuth client the page signs people in with; published to the page, public."""
+    https_only: bool
+    """People reach the agent only over HTTPS, whatever scheme its own requests show."""
     ready: Callable[[], Awaitable[None]]
     clock: Callable[[], datetime]
 

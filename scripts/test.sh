@@ -51,7 +51,10 @@ run_project() {  # label project_dir venv_dir ensure_function
   local label="$1" project="$2" venv="$3" ensure="$4"
   echo "==> $label"
   echo "--> scripts (bash -n)"
-  for script in "$ROOT"/scripts/*.sh; do bash -n "$script"; done
+  for script in "$ROOT"/scripts/*.sh "$ROOT"/scripts/lib/*.sh "$ROOT"/scripts/tools/*.sh \
+      "$ROOT/.githooks/pre-commit"; do
+    bash -n "$script"
+  done
   "$ensure"
   echo "--> lint (ruff)"
   ( cd "$project" && "$venv/bin/ruff" check src tests )

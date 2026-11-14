@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Shared helpers for the loan-simulator scripts: repo paths, help text, .env and compose access,
-# and venv provisioning for the engine and the agent.
+# Shared helpers for the loan-simulator scripts: repo paths, help text, the settings files under
+# scripts/lib/, compose access, and venv provisioning for the engine and the agent.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -9,14 +9,51 @@ ENGINE_VENV="$ENGINE/.venv"
 BACKEND="$ROOT/backend"
 BACKEND_VENV="$BACKEND/.venv"
 FRONTEND="$ROOT/frontend"
-ENV_FILE="$ROOT/.env"
-COMPOSE_FILE="$ROOT/docker-compose.yml"
+# The stack's settings: stack-params.sh is committed; params.sh (this deployment's own settings)
+# and secrets.sh are gitignored and created by init-env.sh from their .example.sh files.
+STACK_PARAMS_FILE="$ROOT/scripts/lib/stack-params.sh"
+PARAMS_FILE="$ROOT/scripts/lib/params.sh"
+SECRETS_FILE="$ROOT/scripts/lib/secrets.sh"
+# The deploying user's AWS credentials and region, read only for the EC2 target.
+AWS_CONFIG_FILE="$ROOT/scripts/lib/aws-config.sh"
+# The Compose files of the target: docker-compose.yml alone on this machine; use_ec2 of
+# lib/ec2.sh adds the instance's override.
+COMPOSE_FILES=("$ROOT/docker-compose.yml")
 # Print the calling script's header comment block as --help text (single source of usage docs).
 print_help() { awk 'NR==1 {next} /^#/ {sub(/^# ?/, ""); print; next} {exit}' "$0"; }
 
-require_env() {
-  [ -f "$ENV_FILE" ] \
-    || { echo ".env not found; create it first:  ./scripts/init-env.sh" >&2; exit 1; }
+# shellcheck source=lib/settings-guard.sh
+source "$ROOT/scripts/lib/settings-guard.sh"
+# shellcheck source=lib/ec2.sh
+source "$ROOT/scripts/lib/ec2.sh"
+
+# Exports every setting of the three files into this shell, which is where docker compose takes
+# the ${...} values and each service's keys from. Stops when a gitignored file is missing, when
+# git tracks it, or when a tracked file holds one of its secrets or addresses.
+load_settings() {
+  # shellcheck source=lib/stack-params.sh
+  source "$STACK_PARAMS_FILE"
+  source_checked_file "$PARAMS_FILE" assert_addresses_untracked
+  source_checked_file "$SECRETS_FILE" assert_secrets_untracked
+}
+
+# Adds each listed setting that is blank or still its example's <placeholder> to
+# MISSING_SETTINGS, with the file under scripts/lib/ that sets it, so one run names them all.
+MISSING_SETTINGS=()
+collect_missing_settings() {  # file key...
+  local file="$1" key
+  shift
+  for key in "$@"; do
+    [[ -n "${!key:-}" && "${!key}" != "<"*">" ]] || MISSING_SETTINGS+=("$key ($file)")
+  done
+}
+
+# Stops when collect_missing_settings found any, listing every one of them.
+require_collected_settings() {
+  [ "${#MISSING_SETTINGS[@]}" -eq 0 ] && return
+  echo "Fill in these settings under scripts/lib/, then run the script again:" >&2
+  printf '  %s\n' "${MISSING_SETTINGS[@]}" >&2
+  exit 1
 }
 
 require_docker() {
@@ -24,18 +61,14 @@ require_docker() {
     || { echo "Docker is not reachable; start it and retry." >&2; exit 1; }
 }
 
-# --env-file makes the .env values available to the ${...} interpolation and to the keys each
-# service lists in its environment.
+# Compose reads the ${...} values and the keys each service lists in its environment from this
+# shell, so the settings are loaded first.
 compose() {
-  (cd "$ROOT" && docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@")
-}
-
-# The value of KEY in an env file (the last assignment); fails loudly when it is absent or blank.
-env_value() {  # file key
-  local value
-  value="$(sed -n "s/^$2=//p" "$1" | tail -n 1)"
-  [ -n "$value" ] || { echo "$2 has no value in $1" >&2; exit 1; }
-  printf '%s' "$value"
+  load_settings
+  local file
+  local -a files=()
+  for file in "${COMPOSE_FILES[@]}"; do files+=(-f "$file"); done
+  (cd "$ROOT" && docker compose "${files[@]}" "$@")
 }
 
 # Waits up to about a minute until the URL answers with any HTTP status; the engine's /mcp answers

@@ -1,8 +1,10 @@
 # The loan simulator's services: the engine, the agent, its Postgres and the one-shot migration.
-# The scripts call compose from this directory, so relative paths resolve from the repo root;
-# settings come from .env, which they also pass as --env-file so the ${...} values below
-# interpolate. The published ports bind to this machine's loopback interface only, since Docker
-# otherwise publishes on every host interface and exposes the port to the whole network.
+# The scripts call compose from this directory, so relative paths resolve from the repo root.
+# Settings come from the files under scripts/lib/ (stack-params.sh, params.sh, secrets.sh), which
+# the scripts export into their shell before calling compose, so the ${...} values below
+# interpolate; a bare docker compose call has none of them. The published ports bind to this
+# machine's loopback interface only, since Docker otherwise publishes on every host interface and
+# exposes the port to the whole network.
 name: loan-simulator
 
 x-agent-build: &agent-build
@@ -11,9 +13,9 @@ x-agent-build: &agent-build
 
 x-agent-image: &agent-image loan-agent:local
 
-# Each container receives only the .env keys it reads, listed once per service below. A key
-# listed without a value takes its value from .env (the --env-file above) and stays unset when .env
-# leaves it commented out, so the service keeps its default.
+# Each container receives only the settings it reads, listed once per service below. A key
+# listed without a value takes its value from the scripts' shell and stays unset when its settings
+# file leaves it commented out, so the service keeps its default.
 x-engine-access: &engine-access
   ENGINE_BEARER_TOKEN:
 
@@ -24,15 +26,16 @@ x-engine-env: &engine-env
   ENGINE_PORT:
   ENGINE_DATA_DIR:
 
-# The in-network address, overriding the host form .env holds.
+# The in-network address, overriding the host form secrets.sh holds.
 x-database-env: &database-env
-  DATABASE_URL: "postgresql+psycopg://${POSTGRES_USER:?set in .env}:\
-    ${POSTGRES_PASSWORD:?set in .env}@db:${DB_PORT:?set in .env}/${POSTGRES_DB:?set in .env}"
+  DATABASE_URL: "postgresql+psycopg://${POSTGRES_USER:?set in stack-params.sh}:\
+    ${POSTGRES_PASSWORD:?set in secrets.sh}@db:${DB_PORT:?set in stack-params.sh}/\
+    ${POSTGRES_DB:?set in stack-params.sh}"
 
 x-agent-env: &agent-env
   <<: [*engine-access, *database-env]
   # In-network, like DATABASE_URL above.
-  ENGINE_URL: http://engine:${ENGINE_PORT:?set in .env}/mcp
+  ENGINE_URL: http://engine:${ENGINE_PORT:?set in stack-params.sh}/mcp
   LLM_MODEL:
   LLM_API_KEY:
   GOOGLE_CLIENT_ID:
@@ -43,6 +46,7 @@ x-agent-env: &agent-env
   AGENT_TURN_LIMIT_OVERRIDES:
   AGENT_TURN_WINDOW_HOURS:
   AGENT_LOG_LEVEL:
+  AGENT_HTTPS_ONLY:
   AGENT_PORT:
 
 services:
@@ -54,7 +58,8 @@ services:
     # The agent reaches the engine at engine:<ENGINE_PORT> inside the Compose network. The
     # published port is for MCP Inspector during development.
     ports:
-      - "127.0.0.1:${ENGINE_HOST_PORT:?set in .env}:${ENGINE_PORT:?set in .env}"
+      - "127.0.0.1:${ENGINE_HOST_PORT:?set in stack-params.sh}:\
+        ${ENGINE_PORT:?set in stack-params.sh}"
     # The market data the engine stores survives restarts and rebuilds.
     volumes:
       - engine-data:/data
@@ -65,7 +70,7 @@ services:
         - CMD
         - python
         - -c
-        - "import socket; socket.create_connection(('localhost', ${ENGINE_PORT:?set in .env}), 2)"
+        - "import socket; socket.create_connection(('localhost', ${ENGINE_PORT}), 2)"
       interval: 3s
       timeout: 3s
       retries: 40
@@ -73,13 +78,13 @@ services:
   db:
     image: postgres:16
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:?set in .env}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
-      POSTGRES_DB: ${POSTGRES_DB:?set in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?set in stack-params.sh}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in secrets.sh}
+      POSTGRES_DB: ${POSTGRES_DB:?set in stack-params.sh}
       # Moves the server, and pg_isready below, off the default port.
-      PGPORT: ${DB_PORT:?set in .env}
+      PGPORT: ${DB_PORT:?set in stack-params.sh}
     ports:
-      - "127.0.0.1:${DB_HOST_PORT:?set in .env}:${DB_PORT:?set in .env}"
+      - "127.0.0.1:${DB_HOST_PORT:?set in stack-params.sh}:${DB_PORT:?set in stack-params.sh}"
     volumes:
       - db-data:/var/lib/postgresql/data
     healthcheck:
@@ -105,14 +110,14 @@ services:
     image: *agent-image
     environment: *agent-env
     ports:
-      - "127.0.0.1:${AGENT_HOST_PORT:?set in .env}:${AGENT_PORT:?set in .env}"
+      - "127.0.0.1:${AGENT_HOST_PORT:?set in stack-params.sh}:${AGENT_PORT:?set in stack-params.sh}"
     healthcheck:
       test:
         - CMD
         - python
         - -c
         - "import urllib.request; \
-          urllib.request.urlopen('http://localhost:${AGENT_PORT:?set in .env}/health')"
+          urllib.request.urlopen('http://localhost:${AGENT_PORT:?set in stack-params.sh}/health')"
       interval: 3s
       timeout: 3s
       retries: 20

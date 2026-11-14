@@ -1,9 +1,14 @@
 __pycache__/
 *.py[cod]
 .venv/
+# The settings files init-env.sh creates from their committed .example.sh files.
+/scripts/lib/secrets.sh
+/scripts/lib/params.sh
+/scripts/lib/aws-config.sh
+# The throwaway Instance Connect key pair and the socket of the EC2 instance's Docker daemon.
+/scripts/lib/.ssh/
 .env
 .env.*
-!.env.example
 *.egg-info/
 .pytest_cache/
 .mypy_cache/
@@ -11,7 +16,6 @@ __pycache__/
 node_modules/
 dist/
 docs/superpowers/*
-!docs/superpowers/ec2-lift-and-shift.md
 .claude/
 CLAUDE.local.md
 .superpowers/

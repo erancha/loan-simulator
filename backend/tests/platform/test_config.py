@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from loan_agent.platform.config import Settings
+from loan_agent.platform.config import SETTINGS_FILES, Settings
 
 REQUIRED = {
     "DATABASE_URL": "postgresql+psycopg://u:p@h:8102/d",
@@ -24,6 +24,7 @@ OPTIONAL = (
     "AGENT_TURN_LIMIT_OVERRIDES",
     "AGENT_TURN_WINDOW_HOURS",
     "AGENT_LOG_LEVEL",
+    "AGENT_HTTPS_ONLY",
 )
 
 
@@ -128,15 +129,27 @@ def test_a_test_issuer_and_key_file_replace_google(env: pytest.MonkeyPatch) -> N
     assert settings.auth_public_key_file == Path("/e2e/public.pem")
 
 
-def test_the_env_file_is_read_from_the_working_directory(
+def test_the_settings_files_are_read_from_the_working_directory(
     env: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """One .env at the repo root serves the engine and the agent; scripts run from there."""
+    """The files under scripts/lib/ serve the engine, the agent and the scripts, which source
+    them; the agent started from the repo root parses the same export lines, and a later file
+    wins."""
     env.delenv("LLM_MODEL")
-    (tmp_path / ".env").write_text("LLM_MODEL=openai:gpt-5.4\nENGINE_PORT=8020\n")
+    env.delenv("ENGINE_URL")
+    lib = tmp_path / "scripts" / "lib"
+    lib.mkdir(parents=True)
+    (lib / "stack-params.sh").write_text(
+        'export ENGINE_HOST_PORT="8100"\n'
+        'export ENGINE_URL="http://localhost:${ENGINE_HOST_PORT}/mcp"\n'
+        'export LLM_MODEL="openai:gpt-5.3"\n'
+    )
+    (lib / "params.sh").write_text('export LLM_MODEL="openai:gpt-5.4"\n')
     env.chdir(tmp_path)
-    env.setitem(Settings.model_config, "env_file", ".env")
-    assert Settings().llm_model == "openai:gpt-5.4"
+    env.setitem(Settings.model_config, "env_file", SETTINGS_FILES)
+    settings = Settings()
+    assert settings.llm_model == "openai:gpt-5.4"
+    assert settings.engine_url == "http://localhost:8100/mcp"
 
 
 def test_turn_limit_overrides_are_read_as_json(env: pytest.MonkeyPatch) -> None:

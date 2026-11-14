@@ -216,6 +216,7 @@ def create_app(
                 bus=bus,
                 verifier=verifier,
                 google_client_id=settings.google_client_id,
+                https_only=settings.agent_https_only,
                 ready=opened.ready,
                 clock=opened.clock,
             )

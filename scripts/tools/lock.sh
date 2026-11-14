@@ -3,7 +3,7 @@
 # Recompile mcp-server/requirements.txt and backend/requirements.txt, the exact pins the images
 # install, from each pyproject.toml.
 #
-#   ./scripts/lock.sh
+#   ./scripts/tools/lock.sh
 #
 # pip-compile resolves the markers of the Python it runs on, so each lock is compiled inside the
 # same python image its Dockerfile builds on, whatever Python this machine has. The container runs
@@ -12,8 +12,8 @@
 # after editing a dependency list; each project's tests/test_requirements_lock.py fails until the
 # lock matches pyproject.toml and the image.
 set -euo pipefail
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=common.sh
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=../common.sh
 source "$SCRIPT_DIR/common.sh"
 
 case "${1:-}" in -h|--help) print_help; exit 0 ;; "") ;; *) print_help >&2; exit 2 ;; esac

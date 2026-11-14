@@ -1,4 +1,4 @@
-"""Process settings read from the environment and .env, validated at startup."""
+"""Process settings read from the environment and the settings files, validated at startup."""
 
 from functools import lru_cache
 from pathlib import Path
@@ -11,15 +11,23 @@ from loan_agent.adapters.google_tokens import GOOGLE_ISSUER, GOOGLE_JWKS_URL
 
 SUPPORTED_PROVIDERS = ("anthropic", "openai")
 
+SETTINGS_FILES = (
+    "scripts/lib/stack-params.sh",
+    "scripts/lib/params.sh",
+    "scripts/lib/secrets.sh",
+)
+"""The stack's settings files, relative to the repo root; a later file wins over an earlier one.
+Each holds plain export KEY="value" lines, which the scripts source and this loader parses."""
+
 
 class Settings(BaseSettings):
     """A blank variable counts as unset, so a blank required key fails and a blank optional key
-    keeps its default. The .env file is read from the working directory, so the agent started
-    from the repo root reads the one .env it shares with the engine; the engine's own keys are
-    ignored here."""
+    keeps its default. SETTINGS_FILES are read from the working directory, so the agent started
+    from the repo root reads the files it shares with the engine and the scripts; a missing file
+    is skipped, and the engine's own keys are ignored here."""
 
     model_config = SettingsConfigDict(
-        env_file=".env", extra="ignore", frozen=True, env_ignore_empty=True
+        env_file=SETTINGS_FILES, extra="ignore", frozen=True, env_ignore_empty=True
     )
 
     database_url: SecretStr
@@ -47,6 +55,10 @@ class Settings(BaseSettings):
     them."""
     agent_turn_window_hours: int = Field(default=24, gt=0)
     agent_log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "WARNING"
+    agent_https_only: bool = False
+    """True where people reach the agent only over HTTPS that ends before it (a CDN or proxy
+    forwarding plain HTTP), so the sign-in cookie is marked Secure although the agent sees an
+    http request."""
     agent_frontend_dist: Path | None = None
     """The built page to serve at /, mounted after the API routes; unset when only the API runs
     (tests, a Vite dev server in front)."""
