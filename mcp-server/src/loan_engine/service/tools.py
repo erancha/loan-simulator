@@ -391,15 +391,22 @@ def register_tools(
         """Call this to choose the term of the example tracks: the shortest term, in steps of
         6 months, at which suggest_tracks' fixed and prime tracks keep their highest payment, in
         the worst historical window too, within 90% of the payment ceiling. Refused when no term
-        up to the longest the simulator prices fits.
+        up to the longest the simulator prices fits; the refusal names the largest loan the
+        ceiling carries.
         """
         market = history_provider()
         term = policy.shortest_comfortable_term(principal, payment_ceiling, market)
         if term is None:
+            largest = policy.largest_comfortable_loan(payment_ceiling, market)
+            carries = (
+                "it carries no loan the simulator prices"
+                if largest is None
+                else f"the largest loan it carries, over {MAX_TERM} months, is {largest} ₪"
+            )
             raise ToolError(
                 f"no term up to {MAX_TERM} months keeps the payment of a {principal} ₪ loan "
                 f"within {COMFORT_SHARE:.0%} of a {payment_ceiling} ₪ ceiling; the loan is too "
-                "large for this ceiling"
+                f"large for this ceiling: {carries}"
             )
         return ComfortableTerm(term_months=term, payment_limit=payment_ceiling * COMFORT_SHARE)
 

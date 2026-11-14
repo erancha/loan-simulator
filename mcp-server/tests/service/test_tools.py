@@ -1,4 +1,5 @@
 import json
+import re
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
@@ -272,11 +273,19 @@ async def test_shortest_comfortable_term_names_the_term_and_its_payment_limit(
 async def test_shortest_comfortable_term_refuses_a_ceiling_no_term_fits(
     settings: Settings, history: MarketHistory
 ) -> None:
-    arguments = {"principal": 31000, "payment_ceiling": 100}
     async with client(settings, history) as c:
-        result = await c.call_tool("shortest_comfortable_term", arguments)
-    assert result.is_error
-    assert "too large for this ceiling" in result.content[0].text
+        nothing_fits = await c.call_tool(
+            "shortest_comfortable_term", {"principal": 31000, "payment_ceiling": 100}
+        )
+        less_fits = await c.call_tool(
+            "shortest_comfortable_term", {"principal": 2000000, "payment_ceiling": 2000}
+        )
+    assert nothing_fits.is_error
+    assert "too large for this ceiling" in nothing_fits.content[0].text
+    assert "carries no loan the simulator prices" in nothing_fits.content[0].text
+    assert less_fits.is_error
+    carried = r"largest loan it carries, over 96 months, is \d+000 ₪"
+    assert re.search(carried, less_fits.content[0].text)
 
 
 async def test_offer_term_is_the_shortest_comfortable_term_under_the_maximum(

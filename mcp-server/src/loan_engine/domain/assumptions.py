@@ -15,3 +15,5 @@ CUSHION_MONTHS = 2
 # the worst historical rate path still leaves room; terms are tried in steps of TERM_STEP months.
 COMFORT_SHARE = Decimal("0.9")
 TERM_STEP = 6
+# The largest loan a payment ceiling carries is named to a whole LOAN_STEP shekels.
+LOAN_STEP = 1000

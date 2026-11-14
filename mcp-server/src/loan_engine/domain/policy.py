@@ -5,6 +5,7 @@
 - suggest_tracks(): fixed and prime tracks priced from the published average bank rate
 - shortest_comfortable_term(): the shortest term at which those tracks fit the payment ceiling
 - shortest_comfortable_offer_term(): the same search for one real offer, up to its longest term
+- largest_comfortable_loan(): the largest loan whose tracks fit the ceiling at the longest term
 """
 
 from collections.abc import Callable, Iterable
@@ -17,10 +18,11 @@ from loan_engine.domain.assumptions import (
     CUSHION_MONTHS,
     DISPOSABLE_SHARE_CAP,
     INCOME_SHARE_CAP,
+    LOAN_STEP,
     TERM_STEP,
 )
 from loan_engine.domain.history import MarketHistory, simulate
-from loan_engine.domain.limits import MAX_TERM
+from loan_engine.domain.limits import MAX_PRINCIPAL, MAX_TERM, MIN_PRINCIPAL
 from loan_engine.domain.models import Profile, Track
 
 Reason = Literal[
@@ -128,6 +130,31 @@ def shortest_comfortable_offer_term(
     )
 
 
+def largest_comfortable_loan(payment_ceiling: Decimal, history: MarketHistory) -> Decimal | None:
+    """The largest loan, in whole LOAN_STEP shekels up to MAX_PRINCIPAL, whose suggested tracks at
+    MAX_TERM stay within COMFORT_SHARE of the payment ceiling; None when even MIN_PRINCIPAL does
+    not."""
+
+    def peak(principal: Decimal) -> Decimal:
+        return _peak_payment(suggest_tracks(principal, MAX_TERM, history), history)
+
+    limit = payment_ceiling * COMFORT_SHARE
+    # A suggested track carries no fee, so its payment grows in proportion to the principal and
+    # the peak at MIN_PRINCIPAL places the answer; the loop absorbs the rounding of payments.
+    proportional = MIN_PRINCIPAL * limit / peak(Decimal(MIN_PRINCIPAL))
+    loan = min(proportional // LOAN_STEP * LOAN_STEP, Decimal(MAX_PRINCIPAL))
+    while loan >= MIN_PRINCIPAL and peak(loan) > limit:
+        loan -= LOAN_STEP
+    return loan if loan >= MIN_PRINCIPAL else None
+
+
+def _peak_payment(tracks: list[Track], history: MarketHistory) -> Decimal:
+    """The highest recurring payment among the tracks, in its worst historical window for a
+    variable track."""
+    outcomes = [simulate(track, history) for track in tracks]
+    return max(o.base.max_payment if o.worst is None else o.worst.max_payment for o in outcomes)
+
+
 def _first_comfortable_term(
     terms: Iterable[int],
     tracks_at: Callable[[int], list[Track]],
@@ -136,8 +163,6 @@ def _first_comfortable_term(
 ) -> int | None:
     limit = payment_ceiling * COMFORT_SHARE
     for term in terms:
-        outcomes = [simulate(track, history) for track in tracks_at(term)]
-        peaks = [o.base.max_payment if o.worst is None else o.worst.max_payment for o in outcomes]
-        if max(peaks) <= limit:
+        if _peak_payment(tracks_at(term), history) <= limit:
             return term
     return None

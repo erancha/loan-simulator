@@ -8,6 +8,7 @@ from loan_engine.domain.history import MarketHistory
 from loan_engine.domain.models import Profile, Track
 from loan_engine.domain.policy import (
     assess_affordability,
+    largest_comfortable_loan,
     shortest_comfortable_offer_term,
     shortest_comfortable_term,
     size_loan,
@@ -165,6 +166,19 @@ def test_the_shortest_term_keeps_the_payment_within_ninety_percent_of_the_ceilin
 
 def test_no_term_fits_a_ceiling_too_low_for_the_loan() -> None:
     assert shortest_comfortable_term(Decimal(31000), Decimal(300), FLAT) is None
+
+
+def test_the_largest_comfortable_loan_is_the_last_whole_thousand_that_fits() -> None:
+    ceiling = Decimal(2000)
+    largest = largest_comfortable_loan(ceiling, FLAT)
+
+    assert largest is not None and largest % 1000 == 0
+    assert shortest_comfortable_term(largest, ceiling, FLAT) is not None
+    assert shortest_comfortable_term(largest + 1000, ceiling, FLAT) is None
+
+
+def test_a_ceiling_below_the_smallest_loan_carries_none() -> None:
+    assert largest_comfortable_loan(Decimal(100), FLAT) is None
 
 
 def _offer(term_months: int) -> Track:

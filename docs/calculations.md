@@ -169,7 +169,9 @@ The term of the typical tracks is the shortest, in 6-month steps up to the longe
 at which both tracks' highest recurring payment stays within 90% of the payment ceiling. For the
 prime track that is the payment in its worst historical window, so a past rate rise lengthens the
 term. The 10% left over is room the worst path does not take. When no term fits, the loan is too
-large for the ceiling. The model asks the engine for this term and passes it to the tracks.
+large for the ceiling, and the refusal names the largest loan the ceiling carries at the longest
+term, to a whole 1,000 ₪, so the model can tell the person a concrete amount. The model asks the
+engine for this term and passes it to the tracks.
 
 An offer that leaves the term open ("up to 84 months") goes through the same search with its own
 rate: 6-month steps below its maximum, then the maximum itself. A longer term only adds interest,
