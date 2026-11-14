@@ -41,8 +41,10 @@ than the license contact (`PUBLISHED_SETTINGS` of `lib/settings-guard.sh`).
 - The checkpoint serializer (`checkpoint_serde` in `platform/checkpointer.py`) passes LangGraph
   an explicit allow-list, `CHECKPOINTED_TYPES`, so it restores LangChain messages natively and
   refuses every other class; a domain class placed in the graph's state must be listed there.
-- Before any AWS work, read `/mnt/c/Projects/-- docs --/aws-account-inventory.md`: it holds the
-  account's state, its ground rules for credentials and changes, and the decisions made.
+- Before any AWS work, read this account's inventory, the
+  `aws-account-inventory-<account ID>.md` under `/mnt/c/Projects/-- docs --/` that lists
+  loan-simulator: it holds the account's state, its ground rules for credentials and changes,
+  and the decisions made.
 - `test.sh [all|engine|backend|frontend]` (aliases `en`, `be`, `fe`) — the whole quality gate:
   bash syntax check, ruff, mypy, import-linter and pytest for `mcp-server/` and `backend/`;
   oxlint, `tsc`, Vitest and the Vite build for `frontend/`.
