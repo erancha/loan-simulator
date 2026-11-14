@@ -31,7 +31,9 @@ from fakes import (
 from loan_agent.application.agent_graph import (
     RECOMMENDATION_HEADING,
     SYSTEM_PROMPT,
+    AskArgs,
     AskQuestion,
+    PresentRecommendationArgs,
     SaveOptionArgs,
     TrackArgs,
     build_agent_graph,
@@ -367,6 +369,8 @@ def test_every_tool_the_system_prompt_names_is_bound(world: World) -> None:
         *SaveOptionArgs.model_fields,
         *TrackArgs.model_fields,
         *AskQuestion.model_fields,
+        *AskArgs.model_fields,
+        *PresentRecommendationArgs.model_fields,
     }
     named_tools = identifiers - set(get_args(OptionSource)) - tool_fields
     assert "present_recommendation" in named_tools

@@ -9,8 +9,10 @@ recommendation within the engine's bounds.
   ends; ask, emitting the question for the page and returning ASKED_RESULT, after which the turn
   ends; show_chart, emitting a market series from the engine for the page to draw
 - ToolError: a refusal whose message tells the model what is wrong and what to do next
+- ENGLISH_WORD: what marks text the person would see as not Hebrew
 """
 
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime
@@ -201,6 +203,12 @@ class CheckTools:
             )
 
     async def ask(self, question: Mapping[str, object], lead_in: str | None) -> str:
+        choices = question["choices"]
+        assert choices is None or isinstance(choices, list)
+        _require_hebrew("lead_in", lead_in)
+        _require_hebrew("text", question["text"])
+        for choice in choices or []:
+            _require_hebrew("choices", choice)
         if (
             question["offer_clone"]
             and await self._deps.recommendations.latest(self._check_id) is None
@@ -248,7 +256,12 @@ class CheckTools:
         )
 
     async def present_recommendation(
-        self, preferred_option_id: str, reasoning: str, alternative_option_id: str | None = None
+        self,
+        preferred_option_id: str,
+        reasoning: str,
+        alternative_option_id: str | None = None,
+        *,
+        person_accepts_smaller_cushion: bool = False,
     ) -> str:
         profile, profile_updated_at = await self._deps.profiles.get(self._user_id)
         check = await self._deps.checks.get(self._user_id, self._check_id)
@@ -268,6 +281,7 @@ class CheckTools:
                 "reasoning names an option by its id; the person sees it, so name the option by "
                 "its track in Hebrew (for example the prime track or the fixed track)"
             )
+        _require_hebrew("reasoning", reasoning)
         if alternative_option_id == preferred_option_id:
             raise ToolError("alternative_option_id must differ from preferred_option_id")
         preferred = await self._option("preferred_option_id", preferred_option_id)
@@ -280,11 +294,17 @@ class CheckTools:
         bounds = await self._deps.engine.assess(profile.engine_profile())
         sizing = await self._deps.engine.size(check.goal.price, profile.savings, bounds.min_cushion)
         _check_bounds(
-            bounds, sizing, [preferred] if alternative is None else [preferred, alternative]
+            bounds,
+            sizing,
+            [preferred] if alternative is None else [preferred, alternative],
+            person_accepts_smaller_cushion,
         )
+        borrowed = _as_borrowed(sizing, _principal(preferred.loan))
         if preferred.source == "published_average":
-            await self._require_no_fitting_offer(bounds, sizing)
-        sizing = _as_borrowed(sizing, _principal(preferred.loan))
+            await self._require_no_fitting_offer(
+                bounds, min(sizing.loan_amount, borrowed.loan_amount)
+            )
+        sizing = borrowed
 
         recommendation = Recommendation(
             check_id=self._check_id,
@@ -322,13 +342,13 @@ class CheckTools:
             }
         )
 
-    async def _require_no_fitting_offer(self, bounds: Bounds, sizing: Sizing) -> None:
+    async def _require_no_fitting_offer(self, bounds: Bounds, loan_amount: Decimal) -> None:
         """An example is an average, not a loan anyone can take, so it never beats a real offer
         that covers the loan within the payment ceiling."""
         for option in await self._deps.options.list(self._check_id):
             if (
                 option.source == "offer"
-                and _principal(option.loan) >= sizing.loan_amount
+                and _principal(option.loan) >= loan_amount
                 and option.summary.risk_payment <= bounds.payment_ceiling
             ):
                 raise ToolError(
@@ -349,7 +369,8 @@ class CheckTools:
 
 def _as_borrowed(sizing: Sizing, principal: Decimal) -> Sizing:
     """The loan a recommendation takes may be above the sized one, at the engine's minimum loan or
-    at an offer's amount. The savings it spares stay in the cushion."""
+    at an offer's amount, and the savings it spares stay in the cushion. It may be below the sized
+    one when the person insists, and the savings that fill the gap come out of the cushion."""
     above_sized = principal - sizing.loan_amount
     spared = min(above_sized, sizing.savings_used)
     return replace(
@@ -360,11 +381,34 @@ def _as_borrowed(sizing: Sizing, principal: Decimal) -> Sizing:
     )
 
 
-def _check_bounds(bounds: Bounds, sizing: Sizing, options: list[Option]) -> None:
-    """The guardrail: refuses when no loan is needed, when an option borrows less than the loan
-    amount the engine sized (the gap would come out of the minimum cushion), or when an option's
-    worst-case recurring payment exceeds the payment ceiling. A balloon is paid once at the end,
-    so it is not a recurring payment."""
+# The person reads Hebrew only, while the instructions and the tools' results the model reads name
+# tools and fields in English, and such a word can slip into text the person sees.
+ENGLISH_WORD = re.compile(r"[A-Za-z]{2,}")
+
+
+def _require_hebrew(argument: str, text: object) -> None:
+    """Refuses text the person sees when it has an English word; None is an omitted argument."""
+    if text is None:
+        return
+    assert isinstance(text, str)
+    word = ENGLISH_WORD.search(text)
+    if word is not None:
+        raise ToolError(
+            f"{argument} has the English word {word.group()!r}, and the person reads Hebrew only; "
+            "write it entirely in Hebrew, never naming a tool or a field, and spell a name in "
+            "Hebrew letters"
+        )
+
+
+def _check_bounds(
+    bounds: Bounds, sizing: Sizing, options: list[Option], person_accepts_smaller_cushion: bool
+) -> None:
+    """The guardrail: refuses when no loan is needed, when an option's worst-case recurring
+    payment exceeds the payment ceiling, or when an option borrows less than the loan amount the
+    engine sized, since the gap comes out of the minimum cushion. The person may accept that gap
+    after being told what it leaves, up to the whole cushion; a loan that leaves the price
+    uncovered even then is always refused. A balloon is paid once at the end, so it is not a
+    recurring payment."""
     if sizing.loan_amount == 0:
         raise ToolError(
             "no loan is needed: the savings cover the price while keeping the minimum cushion of "
@@ -372,15 +416,28 @@ def _check_bounds(bounds: Bounds, sizing: Sizing, options: list[Option]) -> None
         )
     for option in options:
         principal = _principal(option.loan)
-        if principal < sizing.loan_amount:
+        from_cushion = sizing.loan_amount - principal
+        if from_cushion > sizing.cushion_kept:
+            raise ToolError(
+                f"option {option.id} borrows {principal}, and the price stays uncovered by "
+                f"{from_cushion - sizing.cushion_kept} even with all the savings, cushion "
+                f"included; the smallest loan that covers it is "
+                f"{sizing.loan_amount - sizing.cushion_kept}. Tell the person, and save an "
+                "option with at least that principal. If that is above the engine's maximum "
+                "loan, no option can cover it: tell the person the purchase is outside the range "
+                "this simulator prices, suggest a cheaper goal, and ask whether more money is "
+                "available"
+            )
+        if from_cushion > 0 and not person_accepts_smaller_cushion:
             raise ToolError(
                 f"option {option.id} borrows {principal}, below the loan_amount of "
-                f"{sizing.loan_amount} the engine sized; the difference would come out of the "
-                f"minimum cushion of {bounds.min_cushion}. Save an option with a principal of at "
-                f"least {sizing.loan_amount} and recommend that. If {sizing.loan_amount} is above "
-                "the engine's maximum loan, no option can cover it: tell the person the purchase "
-                "is outside the range this simulator prices, and suggest a larger down payment "
-                "or a cheaper goal"
+                f"{sizing.loan_amount} the engine sized; the difference of {from_cushion} would "
+                f"come out of the minimum cushion of {bounds.min_cushion}, leaving "
+                f"{sizing.cushion_kept - from_cushion} aside. Recommend an option with a "
+                f"principal of at least {sizing.loan_amount}. Only when the person asked for the "
+                "smaller loan: tell them these amounts and why the cushion matters, and ask "
+                "whether to keep the smaller loan; if they then insist, call again with "
+                "person_accepts_smaller_cushion true"
             )
         risk_payment = option.summary.risk_payment
         if risk_payment > bounds.payment_ceiling:

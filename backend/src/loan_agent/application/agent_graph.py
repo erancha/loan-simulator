@@ -33,6 +33,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from loan_agent.application.check_tools import (
     CHECK_ARCHIVED_RESULT,
+    ENGLISH_WORD,
     ChartSeries,
     CheckTools,
     ToolDeps,
@@ -61,9 +62,6 @@ _REDO_THE_RECOMMENDATION = (
     "from their results. If no recommendation is possible, write the reply without that section."
 )
 
-# The person reads Hebrew only, while the tools' results the model reads are in English, and a
-# word of them can slip into a reply.
-_ENGLISH_WORD = re.compile(r"[A-Za-z]{2,}")
 _REWRITE_IN_HEBREW = (
     "Your reply was discarded and the person did not see it: it has English words, and the "
     "person reads Hebrew only. Write the same reply again entirely in Hebrew, with the exact "
@@ -177,6 +175,11 @@ class PresentRecommendationArgs(_Args):
     alternative_option_id: str | None = Field(
         default=None, description="option_id of a second choice, if any"
     )
+    person_accepts_smaller_cushion: bool = Field(
+        default=False,
+        description="True only after the person, told how much of the minimum cushion a loan "
+        "below the sized amount uses and what it leaves, insisted on that loan",
+    )
 
 
 QuestionField = Literal[
@@ -241,7 +244,8 @@ class AskArgs(_Args):
         default=None,
         description=(
             "Usually left out: the page shows the field's own label and hint. Only a short "
-            "Hebrew condition the label does not state; never why the figure is needed"
+            "Hebrew condition the label does not state, never why the figure is needed; or, "
+            "when the calculation cannot go on, the reason with its amounts"
         ),
     )
     # Filled by the tool node from the graph state and hidden from the model's schema.
@@ -308,9 +312,13 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
         reasoning: str,
         config: RunnableConfig,
         alternative_option_id: str | None = None,
+        person_accepts_smaller_cushion: bool = False,
     ) -> str:
         return await _tools_for(config, deps).present_recommendation(
-            preferred_option_id, reasoning, alternative_option_id
+            preferred_option_id,
+            reasoning,
+            alternative_option_id,
+            person_accepts_smaller_cushion=person_accepts_smaller_cushion,
         )
 
     async def show_chart(series: str, months: int, config: RunnableConfig) -> str:
@@ -360,7 +368,8 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
             description="Present the recommendation card: the preferred option and an optional "
             "alternative, with your reasoning. Refused, with the reason, when an option is "
             "outside the engine's bounds, or when an example is preferred over a real offer "
-            "within them.",
+            "within them. A loan below the sized amount passes only once the person accepted "
+            "the smaller cushion it leaves.",
             args_schema=PresentRecommendationArgs,
         ),
         StructuredTool.from_function(
@@ -418,7 +427,7 @@ def _correction_for(reply: AIMessage, messages: Sequence[BaseMessage]) -> str | 
     says, so a turn never loops on a correction."""
     if _recommends_without_the_tool(reply, messages):
         return _REDO_THE_RECOMMENDATION
-    if _ENGLISH_WORD.search(reply.text):
+    if ENGLISH_WORD.search(reply.text):
         return _REWRITE_IN_HEBREW
     return None
 

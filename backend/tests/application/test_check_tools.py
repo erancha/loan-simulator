@@ -53,7 +53,7 @@ COMPLETE_PROFILE = {
     "existing_loan_payments": "800",
     "savings": "70000",
 }
-REASONING = "Lowest total cost under the ceiling"
+REASONING = "העלות הכוללת הנמוכה ביותר בתוך התקרה"
 
 
 @dataclass
@@ -280,6 +280,38 @@ async def test_recommendation_refused_below_sized_loan(world: World) -> None:
     assert "option-1" in message
     assert "80000" in message
     assert "85000.00" in message
+    assert "leaving 25000.00 aside" in message
+    assert world.recommendations.rows == {}
+
+
+async def test_a_person_who_insists_takes_the_smaller_loan_out_of_the_cushion(
+    world: World,
+) -> None:
+    await ready_for_recommendation(world)
+    world.engine.sizing = replace(world.engine.sizing, loan_amount=Decimal("85000.00"))
+
+    await world.tools.present_recommendation(
+        "option-2", REASONING, person_accepts_smaller_cushion=True
+    )
+
+    recommendation = world.recommendations.rows[CHECK]
+    assert recommendation.loan_amount == Decimal(80000)
+    assert recommendation.cushion_kept == Decimal(25000)
+    sizing = world.sink.events[-1].data["sizing"]
+    assert (sizing["savings_used"], sizing["cushion_kept"]) == ("45000.00", "25000.00")
+
+
+async def test_a_loan_the_whole_cushion_cannot_complete_is_refused_even_when_accepted(
+    world: World,
+) -> None:
+    await ready_for_recommendation(world)
+    world.engine.sizing = replace(world.engine.sizing, loan_amount=Decimal("115000.00"))
+
+    with pytest.raises(ToolError, match="uncovered by 5000.00 even with all the savings"):
+        await world.tools.present_recommendation(
+            "option-1", REASONING, person_accepts_smaller_cushion=True
+        )
+
     assert world.recommendations.rows == {}
 
 
@@ -293,10 +325,10 @@ async def test_sized_loan_beyond_engine_maximum_tells_model_purchase_is_out_of_r
         await world.tools.present_recommendation("option-1", REASONING)
 
     message = str(refused.value)
-    assert "180000.00" in message
+    assert "150000.00" in message
     assert "above the engine's maximum loan" in message
     assert "outside the range this simulator prices" in message
-    assert "larger down payment or a cheaper goal" in message
+    assert "suggest a cheaper goal, and ask whether more money is available" in message
     assert world.recommendations.rows == {}
 
 
@@ -328,7 +360,7 @@ async def test_recommendation_refused_when_reasoning_names_an_option_id(world: W
 
 async def test_recommendation_figures_come_from_engine(world: World) -> None:
     await ready_for_recommendation(world)
-    reasoning = "Pay 999 a month and 12345 in total; cheapest by far"
+    reasoning = "החזר של 999 ₪ בחודש ו-12,345 ₪ בסך הכול; הזול ביותר בהרבה"
 
     summary = await world.tools.present_recommendation("option-2", reasoning, "option-1")
 
@@ -431,6 +463,32 @@ async def test_ask_refuses_the_minimum_when_variable_income_is_zero(world: World
             },
             None,
         )
+
+
+@pytest.mark.parametrize(
+    ("question", "lead_in"),
+    [
+        ({"text": "איזו הלוואה לקחת?", "choices": None}, "ההלוואה ש-size_loan חישב"),
+        ({"text": "how much?", "choices": None}, None),
+        ({"text": "איזו הלוואה?", "choices": ["הלוואה של 110,000 ₪", "loan"]}, None),
+    ],
+)
+async def test_ask_refuses_an_english_word_the_person_would_see(
+    world: World, question: dict[str, object], lead_in: str | None
+) -> None:
+    with pytest.raises(ToolError, match="reads Hebrew only"):
+        await world.tools.ask({**question, "field": None, "offer_clone": False}, lead_in)
+
+    assert world.sink.events == []
+
+
+async def test_recommendation_reasoning_with_an_english_word_is_refused(world: World) -> None:
+    await ready_for_recommendation(world)
+
+    with pytest.raises(ToolError, match="reasoning has the English word 'prime'"):
+        await world.tools.present_recommendation("option-2", "מסלול prime זול יותר")
+
+    assert world.recommendations.rows == {}
 
 
 async def test_ask_allows_a_goal_field_and_a_free_question(world: World) -> None:

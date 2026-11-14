@@ -33,8 +33,9 @@ holds the loan engine, the agent and the page.
   term, starting in the last ten years, and which stretch that was.
 - **Recommendation**: a card with the loan amount, term and payment, each option's worst case,
   and the ceiling and cushion behind it. Every figure on it comes from the engine's results,
-  never from the model's text. A guardrail in code refuses a recommendation that borrows less
-  than the sized loan or whose worst case is above the ceiling, and the model tries again.
+  never from the model's text. A guardrail in code refuses a recommendation whose worst case is
+  above the ceiling, or that borrows less than the sized loan unless the person, told what it
+  takes from the cushion, insisted; the model then tries again.
 - **Message limit**: each person may send 20 messages per 24 hours as shipped; the operator can
   set another limit for a person by email.
 - **Market data**: refreshed daily from public sources: the Bank of Israel rate and its average

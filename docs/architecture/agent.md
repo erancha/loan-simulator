@@ -74,7 +74,7 @@ The model sees two sets of tools. An agent tool's result is a compact `key: valu
 | Engine | `market_series` | Today's prime and the latest months of the prime and of the CPI's monthly change. |
 | Agent | `update_profile` | Saves the person's finances, as given. |
 | Agent | `set_goal` | Saves the purpose and the price together. |
-| Agent | `ask` | Puts one question on the person's screen: a profile or goal field, or free text with two or more optional choices, under an optional Hebrew lead-in. Refuses an empty question, a single choice, a profile field already saved, every `ask` of a model message that holds more than one, and the minimum-of-variable-income question when the variable income is 0. |
+| Agent | `ask` | Puts one question on the person's screen: a profile or goal field, or free text with two or more optional choices, under an optional Hebrew lead-in. Refuses an empty question, a single choice, a profile field already saved, an English word in the text the person would see, every `ask` of a model message that holds more than one, and the minimum-of-variable-income question when the variable income is 0. |
 | Agent | `save_option` | Simulates a loan through the engine and saves it as an option. Its result for an offer, once the profile is complete, tells the model to recommend again. Refuses an example (`published_average`) until the whole profile is known, and one whose worst-case payment is above the ceiling. Refuses an offer saved with `max_term_months` at any term but the one `shortest_comfortable_offer_term` gives. |
 | Agent | `show_chart` | Fetches the prime or the CPI's monthly change for the latest months from the engine and puts it in the conversation as a chart. |
 | Agent | `present_recommendation` | Checks a preferred option and an optional alternative against the engine's bounds, saves the recommendation with the loan the preferred option takes and the cushion that leaves. Refuses an example preferred over a real offer within those bounds. |
@@ -100,10 +100,12 @@ passes. It refuses when:
 - the profile or the goal is incomplete (the message lists what to ask for);
 - no loan is needed, because the savings cover the price while keeping the minimum cushion;
 - an option borrows less than the loan the engine sized, since the gap would come out of the
-  minimum cushion. When the sized loan is above the engine's maximum loan no option can pass, so
-  the refusal tells the model to say the purchase is outside the range the simulator prices and
-  to suggest a larger down payment or a cheaper goal; the system prompt says the same for a sized
-  loan below the engine's minimum;
+  minimum cushion. The refusal names the gap and what it leaves aside, and the system prompt has
+  the model explain them, recommend the sized loan and ask. A person who then insists is not
+  blocked: the model passes `person_accepts_smaller_cushion`, and the recommendation records the
+  smaller loan and the cushion it leaves;
+- an option borrows so little that the price stays uncovered even with all the savings, cushion
+  included, whatever the person accepts;
 - an option's worst-case recurring payment, from the replay of history, is above the payment
   ceiling. A balloon is paid once at the end, so it is not a recurring payment.
 
@@ -119,6 +121,12 @@ card unchanged. So the model node reads each reply before it enters the conversa
 the recommendation section and no successful `present_recommendation` in this turn is discarded and
 the model is told once to redo it. The second reply stands, because a reply about a case with no
 recommendation may share the heading. A discarded reply is only ever streamed live, never stored.
+
+The person reads Hebrew only, while the prompt and the tools' results name tools and fields in
+English. One pattern, two Latin letters in a row, guards every text the person sees: a reply
+with a match is discarded and rewritten once in the same way, and `ask` and
+`present_recommendation` refuse a question, a choice, a lead-in or a reasoning with a match, so
+the model calls again in Hebrew.
 
 ## Turns and the turn cap
 

@@ -137,8 +137,8 @@ panel's hint states it for a figure the person enters:
 The result names which cap applied (income share on a tie), whether a variable income
 minimum above 0 was counted, whether existing loans were deducted, and whether nothing is left.
 
-The minimum savings cushion is 2 months of fixed expenses; savings below it are never proposed as
-a down payment.
+The minimum savings cushion is 2 months of fixed expenses; savings below it are never proposed for
+the purchase.
 
 ### Loan sizing
 
