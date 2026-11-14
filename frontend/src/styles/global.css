@@ -123,6 +123,41 @@ body {
   line-height: 1.5;
 }
 
+/* Each step opens on a numbered accent circle, so the three read as a sequence at a glance. */
+.landing-steps {
+  margin: 4px 0 16px;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+  font-size: 1.05rem;
+  line-height: 1.5;
+}
+
+.landing-steps li {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  counter-increment: step;
+}
+
+.landing-steps li + li {
+  margin-block-start: 12px;
+}
+
+.landing-steps li::before {
+  content: counter(step);
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 1.7rem;
+  height: 1.7rem;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--panel);
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
 .landing-details {
   margin: 0 0 12px;
   padding-inline-start: 1.2rem;
@@ -142,6 +177,27 @@ body {
   font: inherit;
   font-size: 0.9rem;
   cursor: pointer;
+  font-weight: 700;
+  /* Five one-second flashes on load, between regular muted and bold red, draw the eye to the
+     details; the toggle then rests at its own bold muted style. */
+  animation: landing-more-flash 1s step-end 5;
+}
+
+@keyframes landing-more-flash {
+  0% {
+    font-weight: 400;
+  }
+
+  50% {
+    color: var(--red);
+    font-weight: 700;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-more {
+    animation: none;
+  }
 }
 
 .landing-more::before {

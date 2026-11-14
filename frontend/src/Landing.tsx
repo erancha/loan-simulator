@@ -7,7 +7,8 @@ import {
   DEMO_LINK,
   INVITE_LINK,
   LANDING_DETAILS,
-  LANDING_PITCH,
+  LANDING_LEAD,
+  LANDING_STEPS,
   LESS,
   MORE,
   SOURCE_LINK,
@@ -38,11 +39,16 @@ export function Landing({ pitch = false, children }: { pitch?: boolean; children
         <p className="app-version">{versionLine(__APP_VERSION__, __APP_COMMIT_DATE__)}</p>
         {pitch && (
           <>
-            {LANDING_PITCH.map((paragraph) => (
-              <p key={paragraph} className="landing-pitch">
-                {withBold(paragraph)}
-              </p>
-            ))}
+            <p className="landing-pitch">{withBold(LANDING_LEAD)}</p>
+            <ol className="landing-steps">
+              {LANDING_STEPS.map((step) => (
+                <li key={step.title}>
+                  <span>
+                    <strong>{step.title}</strong> {withBold(step.text)}
+                  </span>
+                </li>
+              ))}
+            </ol>
             {expanded && (
               <ul className="landing-details">
                 {LANDING_DETAILS.map((detail) => (
