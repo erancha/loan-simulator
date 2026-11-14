@@ -742,6 +742,13 @@ button.primary {
   display: block;
 }
 
+/* On its own line above the track, as on the option's card. */
+.totals .chip-example {
+  display: block;
+  width: fit-content;
+  margin-block-end: 2px;
+}
+
 .assumptions {
   color: var(--mute);
   font-size: calc(0.85rem - 2px);

@@ -1,6 +1,11 @@
 import type { OptionCard } from './card.ts'
 import { CHIP_EXAMPLE, LABEL_PREFERRED, monthlyPayment } from './copy.ts'
 
+/** The chip that marks an option nobody can take, on its card and on its row of the totals. */
+export function ExampleChip() {
+  return <span className="chip chip-example">{CHIP_EXAMPLE}</span>
+}
+
 /**
  * One saved option: its label when recommended, a chip when it is only an example, the track,
  * today's payment and the chip about how that payment can move.
@@ -14,7 +19,7 @@ export function OptionCardView({ option }: { option: OptionCard }) {
   return (
     <article className={className}>
       {option.label !== null && <span className="option-label">{option.label}</span>}
-      {option.isExample && <span className="chip chip-example">{CHIP_EXAMPLE}</span>}
+      {option.isExample && <ExampleChip />}
       <p className="option-track">{option.track}</p>
       <p className="option-source">{option.source}</p>
       <p className="option-payment">{monthlyPayment(option.paymentToday)}</p>

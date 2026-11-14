@@ -13,7 +13,7 @@ import {
   OFFER_DETAILS,
   TOTALS_HEADINGS,
 } from './copy.ts'
-import { OptionCardView } from './OptionCardView.tsx'
+import { ExampleChip, OptionCardView } from './OptionCardView.tsx'
 
 function OthersGroup({ title, options }: NonNullable<CardModel['others']>) {
   const titleId = useId()
@@ -59,6 +59,7 @@ function Fold({ fold, options }: FoldProps) {
           {options.map((option) => (
             <tr key={option.id}>
               <th scope="row">
+                {option.isExample && <ExampleChip />}
                 {option.track}
                 <span className="option-source totals-source">{option.source}</span>
               </th>

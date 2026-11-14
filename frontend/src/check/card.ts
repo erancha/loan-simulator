@@ -180,7 +180,12 @@ export function buildCard(state: CheckState): CardModel {
     }
   }
   const namedIds = named.map(({ option }) => option.option_id)
-  const otherOptions = [...state.options.values()].filter((o) => !namedIds.includes(o.option_id))
+  // Real offers lead: a person can take one, and a sample is only a yardstick for it.
+  const unnamed = [...state.options.values()].filter((o) => !namedIds.includes(o.option_id))
+  const otherOptions = [
+    ...unnamed.filter((o) => o.source === 'offer'),
+    ...unnamed.filter((o) => o.source === 'published_average'),
+  ]
   const shown = [...named.map(({ option }) => option), ...otherOptions]
 
   const others =

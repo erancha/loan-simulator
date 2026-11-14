@@ -103,11 +103,23 @@ test('a sample option carries a chip saying so and a real offer does not', () =>
 
   const offer = screen.getAllByText('הצעה מבנק הפועלים · 02.11.2026')[0].closest('article')!
   expect(within(offer).queryByText('דוגמא')).not.toBeInTheDocument()
-  const chips = screen.getAllByText('דוגמא')
+  const chips = screen.getAllByText('דוגמא').filter((chip) => chip.closest('article') !== null)
   expect(chips).toHaveLength(2)
   expect(chips[0]).toHaveClass('chip', 'chip-example')
   expect(chips[0].closest('article')).toHaveClass('option-example')
   expect(offer).not.toHaveClass('option-example')
+})
+
+test('a sample carries its chip in the totals table too, and a real offer does not', () => {
+  render(<RecommendationCard model={reference} />)
+  const rowHeaders = within(screen.getByRole('table')).getAllByRole('rowheader')
+
+  expect(rowHeaders.map((header) => within(header).queryByText('דוגמא') !== null)).toEqual([
+    true,
+    true,
+    false,
+  ])
+  expect(within(rowHeaders[0]).getByText('דוגמא')).toHaveClass('chip', 'chip-example')
 })
 
 test('a line above the options says what a sample is, once, only when one is shown', () => {

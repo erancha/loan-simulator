@@ -125,6 +125,11 @@ test('after a new recommendation, unnamed options go under "אפשרויות נ�
   )
 })
 
+test('real offers come before samples among the other options, each in saved order', () => {
+  const card = buildCard(stateOf(optionPrime36, optionFixed36, optionOfferFixed))
+  expect(card.others?.options.map((o) => o.id)).toEqual(['offer-hapoalim', 'prime-36', 'fixed-36'])
+})
+
 test('balloon option shows the balloon line with the amber chip', () => {
   const [option] = buildCard(stateOf(optionBalloon)).others!.options
   expect(option.track).toBe('מסלול פריים − 0.5%, בלון (חלק מהקרן נדחה לסוף), 36 חודשים')
