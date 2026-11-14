@@ -135,8 +135,27 @@ test('lists checks with price, recommendation and stale markers; the newest open
   const fresh = items.find((item) => within(item).queryByText('חושב לפי פרופיל קודם'))!
   expect(fresh).toHaveTextContent('בדיקה חדשה')
   expect(fresh.querySelector('[aria-current="true"]')).not.toBeNull()
-  expect(openedStreams()).toEqual(['/api/checks/new/events'])
+  await waitFor(() => expect(openedStreams()).toEqual(['/api/checks/new/events']))
   expect(window.location.hash).toBe('#check=new')
+})
+
+test('picking a check opens its recommendation if it has one, else its chat', async () => {
+  stubApi([
+    [
+      summary('ready', '2026-03-01T00:00:00Z', { goal, recommendation: RECOMMENDATION }),
+      summary('open', '2026-01-01T00:00:00Z', { goal }),
+    ],
+  ])
+  const user = userEvent.setup()
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  const list = await screen.findByRole('navigation', { name: 'הבדיקות שלי' })
+  const [ready, open] = within(list).getAllByRole('listitem')
+  await user.click(screen.getByRole('tab', { name: 'פרופיל' }))
+
+  await user.click(within(ready).getAllByRole('button')[0])
+  expect(document.querySelector('.check-page')).toHaveAttribute('data-active-pane', 'card')
+  await user.click(within(open).getAllByRole('button')[0])
+  expect(document.querySelector('.check-page')).toHaveAttribute('data-active-pane', 'chat')
 })
 
 test('a check recommending only examples says so beside its ready chip', async () => {

@@ -82,7 +82,7 @@ it('the minimum of the variable income is an ordinary money answer', async () =>
       onSkip={vi.fn()}
     />,
   )
-  expect(screen.getByText('כמה מההכנסה המשתנה מגיע גם בחודש חלש?')).toBeInTheDocument()
+  expect(screen.getByText('ובחודש חלש, כמה מההכנסה המשתנה בכל זאת נכנס?')).toBeInTheDocument()
   await user.type(screen.getByRole('textbox', { name: 'מינימלית' }), '2000')
   await user.click(screen.getByRole('button', { name: 'אישור' }))
   expect(onAnswer).toHaveBeenCalledWith({

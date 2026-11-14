@@ -59,6 +59,20 @@ test('an empty chat opens with the opening line, on the agent side', () => {
   expect(screen.getByText(/כדי להמליץ על הלוואה שמתאימה לך/)).toHaveClass('bubble-assistant')
 })
 
+test('a fresh check sweeps the input, then the samples, and bolds where to write', () => {
+  renderChat({ messages: [] })
+  expect(screen.getByText('כתבו בתיבה למטה').tagName).toBe('STRONG')
+  expect(screen.getByRole('textbox').parentElement).toHaveClass('border-sweep')
+  for (const sample of document.querySelectorAll('.chat-samples button')) {
+    expect(sample).toHaveClass('border-sweep', 'sweep-after-input')
+  }
+})
+
+test('a check with messages sweeps nothing', () => {
+  renderChat()
+  expect(document.querySelector('.border-sweep')).toBeNull()
+})
+
 test('the opening line stays first once messages exist', () => {
   renderChat()
   const turns = screen.getAllByRole('listitem')

@@ -77,17 +77,25 @@ export function Shell({ user, onSignOut }: Props) {
     }
   }, [selectedId])
 
-  function select(id: string) {
+  function select(id: string, opening: Pane) {
     setWantedId(id)
     setCreateError(null)
-    setPane('chat')
+    setPane(opening)
+  }
+
+  // A check with a recommendation opens on its card, the answer the person comes back for; any
+  // other check opens on its conversation.
+  function open(id: string) {
+    const check = checks?.find((listed) => listed.id === id)
+    if (check === undefined) throw new Error(`check ${id} is not in the list it was picked from`)
+    select(id, check.recommendation === null ? 'chat' : 'card')
   }
 
   async function create() {
     try {
       const { id } = await createCheck()
       await refresh()
-      select(id)
+      select(id, 'chat')
     } catch (error) {
       setCreateError(createFailed(errorText(error)))
     }
@@ -122,7 +130,7 @@ export function Shell({ user, onSignOut }: Props) {
       <ChecksList
         checks={checks}
         selectedId={selectedId}
-        onSelect={select}
+        onSelect={open}
         onCreate={() => void create()}
         onDelete={(id) => void remove(id)}
       />

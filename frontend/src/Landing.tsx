@@ -27,7 +27,7 @@ export function Landing({ pitch = false, children }: { pitch?: boolean; children
             {expanded && (
               <ul className="landing-details">
                 {LANDING_DETAILS.map((detail) => (
-                  <li key={detail}>{detail}</li>
+                  <li key={detail}>{withBold(detail)}</li>
                 ))}
               </ul>
             )}

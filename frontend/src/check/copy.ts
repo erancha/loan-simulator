@@ -137,11 +137,12 @@ export function monthlyPayment(amount: string): string {
 
 export const CARD_FAILED = 'לא הצלחנו להציג את ההמלצה.'
 
-/** The page's own opening line, the first bubble of every check, so the first reply has a question. */
+/** The page's own opening line, the first bubble of every check, so the first reply has a question;
+ * **marked** words show in bold. */
 export const CHAT_WELCOME =
   'כדי להמליץ על הלוואה שמתאימה לך, צריך לדעת מה רוצים לקנות ובכמה, כמה כסף זמין יש, הכנסה' +
   ' קבועה ומשתנה (נטו), הוצאות קבועות והחזרי הלוואות קיימות.\n\n' +
-  "כתבו בתיבה למטה את כל או חלק מהנתונים הנדרשים במלל חופשי, או ענו על השאלות בצ'אט אחת אחת."
+  "**כתבו בתיבה למטה** את כל או חלק מהנתונים הנדרשים במלל חופשי, או ענו על השאלות בצ'אט אחת אחת."
 
 /** Sample opening messages above the input; a tap only fills the input, the person sends. */
 export const SAMPLE_MESSAGES: { label: string; text: string }[] = [
@@ -277,7 +278,7 @@ const PROFILE_QUESTIONS: Record<MoneyKey, string> = {
   savings: 'כמה כסף זמין יש לקנייה?',
   net_fixed_income: 'מה ההכנסה הקבועה שלך בחודש, נטו?',
   variable_income: 'מה ההכנסה המשתנה שלך בחודש, בממוצע ונטו?',
-  variable_income_minimum: 'כמה מההכנסה המשתנה מגיע גם בחודש חלש?',
+  variable_income_minimum: 'ובחודש חלש, כמה מההכנסה המשתנה בכל זאת נכנס?',
   fixed_expenses: 'כמה יוצא כל חודש על הוצאות קבועות?',
   existing_loan_payments:
     'האם יש הלוואות קיימות עם יותר מ-3 חודשים לסיום, ואם כן - מה ההחזר החודשי?',

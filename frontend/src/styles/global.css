@@ -505,6 +505,13 @@ fieldset.field.changed {
   align-items: flex-end;
 }
 
+.chat-input-box {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  border-radius: 8px;
+}
+
 .chat-input textarea {
   flex: 1;
   min-width: 0;
@@ -1077,4 +1084,62 @@ button.primary {
 
 .market-chart .series-bar.negative {
   fill: var(--red);
+}
+
+/* A control that just became the place to start leads the eye to it: an arc in the accent sweeps
+   its edge once, then goes. The overlay is masked down to a two-pixel band over the border, so the
+   sweep never crosses the content. The angle is a registered property so the sweep can be animated
+   at all. A carrier sets its own run, and a delay to follow another sweep. */
+@property --sweep {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.border-sweep {
+  position: relative;
+  --sweep-seconds: 3;
+  --sweep-delay: 0;
+}
+
+.border-sweep::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  padding: 2px;
+  border-radius: inherit;
+  opacity: 0;
+  pointer-events: none;
+  background: conic-gradient(from var(--sweep), transparent 70%, var(--accent));
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: border-sweep calc(var(--sweep-seconds) * 1s) linear calc(var(--sweep-delay) * 1s);
+}
+
+@keyframes border-sweep {
+  from {
+    --sweep: 0deg;
+    opacity: 1;
+  }
+
+  85% {
+    opacity: 1;
+  }
+
+  to {
+    --sweep: calc(var(--sweep-seconds) * 1.4 * 360deg);
+    opacity: 0;
+  }
+}
+
+/* The samples sweep for two seconds once the input's three-second sweep ends. */
+.border-sweep.sweep-after-input {
+  --sweep-seconds: 2;
+  --sweep-delay: 3;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .border-sweep::before {
+    animation: none;
+  }
 }

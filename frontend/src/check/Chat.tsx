@@ -92,6 +92,9 @@ export function Chat({
   // question; market data is worth asking at any point, so that sample stays until tapped.
   const opening = !entries.some((entry) => entry.role === 'question')
   const samples = [...(opening ? SAMPLE_MESSAGES : []), ...(marketTapped ? [] : [MARKET_SAMPLE])]
+  // A check with no message yet leads the eye to where to start: the input's edge, then the
+  // samples' (the border-sweep classes in global.css).
+  const fresh = entries.length === 0
   const input = useRef<HTMLTextAreaElement>(null)
   const log = useRef<HTMLDivElement>(null)
   const following = useRef(true)
@@ -163,7 +166,7 @@ export function Chat({
       <div className="chat-log" ref={log} onScroll={trackFollowing}>
         <ol className="chat-messages">
           <li className="chat-turn">
-            <p className="bubble bubble-assistant chat-welcome">{CHAT_WELCOME}</p>
+            <p className="bubble bubble-assistant chat-welcome">{withBold(CHAT_WELCOME)}</p>
             <PanelNoteLines notes={panelNotes} after={null} />
           </li>
           {entries.map((entry) => (
@@ -208,6 +211,7 @@ export function Chat({
             <button
               key={sample.label}
               type="button"
+              className={fresh ? 'border-sweep sweep-after-input' : undefined}
               disabled={locked}
               onClick={() => {
                 // The trailing space invites the person to type on after the sample.
@@ -226,7 +230,9 @@ export function Chat({
         </div>
       )}
       <form className="chat-input" onSubmit={onSubmit}>
-        <textarea
+        {/* A textarea draws no ::before, so the sweep runs on this wrapper of the same shape. */}
+        <div className={fresh ? 'chat-input-box border-sweep' : 'chat-input-box'}>
+          <textarea
           ref={input}
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
@@ -235,7 +241,8 @@ export function Chat({
           placeholder={running ? INPUT_PLACEHOLDER.running : INPUT_PLACEHOLDER.idle}
           disabled={locked}
           rows={2}
-        />
+          />
+        </div>
         <button type="submit" disabled={locked || draft.trim() === ''}>
           {SEND_BUTTON}
         </button>
