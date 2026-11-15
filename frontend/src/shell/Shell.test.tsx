@@ -1,23 +1,25 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import type { CheckSummary, User } from '../api/types.ts'
 import { FakeEventSource } from '../test/fakeEventSource.ts'
-import { goal, profileView } from '../test/fixtures.ts'
+import { checkTitle } from '../check/copy.ts'
+import { loan } from '../test/fixtures.ts'
 import { Shell } from './Shell.tsx'
 
+const LOAN_TITLE = checkTitle(loan)
 const dana: User = { id: '1001', email: 'dana@example.com', name: 'Dana' }
 
 function summary(id: string, created_at: string, over: Partial<CheckSummary> = {}): CheckSummary {
   return {
     id,
     created_at,
-    goal: null,
+    loan: null,
     recommendation: null,
     recommends_examples_only: false,
-    profile_stale: false,
+    term_months: null,
     archived: false,
-    restorable: false,
+    started: true,
     ...over,
   }
 }
@@ -37,7 +39,6 @@ function stubApi(
   let served = 0
   const fetchStub = vi.fn((path: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET'
-    if (path === '/api/profile') return Promise.resolve(jsonResponse(200, profileView))
     if (path === '/api/checks' && method === 'GET') {
       const next = lists[Math.min(served++, lists.length - 1)]
       return Promise.resolve(next instanceof Response ? next : jsonResponse(200, next))
@@ -132,11 +133,11 @@ test('no checks: the empty state; the button creates and opens a check', async (
   expect(posts).toHaveLength(1)
 })
 
-test('lists checks with price, recommendation and stale markers; the newest opens', async () => {
+test('lists checks with price and recommendation markers; the newest opens', async () => {
   stubApi([
     [
-      summary('old', '2026-01-01T00:00:00Z', { goal, recommendation: RECOMMENDATION }),
-      summary('new', '2026-03-01T00:00:00Z', { profile_stale: true }),
+      summary('old', '2026-01-01T00:00:00Z', { loan, recommendation: RECOMMENDATION }),
+      summary('new', '2026-03-01T00:00:00Z'),
     ],
   ])
   render(<Shell user={dana} onSignOut={vi.fn()} />)
@@ -145,9 +146,8 @@ test('lists checks with price, recommendation and stale markers; the newest open
   const items = within(list).getAllByRole('listitem')
   expect(items).toHaveLength(2)
   const old = items.find((item) => within(item).queryByText('המלצה מוכנה'))!
-  expect(old).toHaveTextContent(goal.purpose)
-  expect(old).toHaveTextContent('₪')
-  const fresh = items.find((item) => within(item).queryByText('חושב לפי פרופיל קודם'))!
+  expect(old).toHaveTextContent('רכב - הלוואה בסך 29,000₪')
+  const fresh = items.find((item) => item !== old)!
   expect(fresh).toHaveTextContent('בדיקה חדשה')
   expect(fresh.querySelector('[aria-current="true"]')).not.toBeNull()
   await waitFor(() => expect(openedStreams()).toEqual(['/api/checks/new/events']))
@@ -157,15 +157,15 @@ test('lists checks with price, recommendation and stale markers; the newest open
 test('picking a check opens its recommendation if it has one, else its chat', async () => {
   stubApi([
     [
-      summary('ready', '2026-03-01T00:00:00Z', { goal, recommendation: RECOMMENDATION }),
-      summary('open', '2026-01-01T00:00:00Z', { goal }),
+      summary('ready', '2026-03-01T00:00:00Z', { loan, recommendation: RECOMMENDATION }),
+      summary('open', '2026-01-01T00:00:00Z', { loan }),
     ],
   ])
   const user = userEvent.setup()
   render(<Shell user={dana} onSignOut={vi.fn()} />)
   const list = await screen.findByRole('navigation', { name: 'הבדיקות שלי' })
   const [ready, open] = within(list).getAllByRole('listitem')
-  await user.click(screen.getByRole('tab', { name: 'פרופיל' }))
+  await user.click(screen.getByRole('tab', { name: 'בדיקות' }))
 
   await user.click(within(ready).getAllByRole('button')[0])
   expect(document.querySelector('.check-page')).toHaveAttribute('data-active-pane', 'card')
@@ -177,11 +177,11 @@ test('a check recommending only examples says so beside its ready chip', async (
   stubApi([
     [
       summary('examples', '2026-03-01T00:00:00Z', {
-        goal,
+        loan,
         recommendation: RECOMMENDATION,
         recommends_examples_only: true,
       }),
-      summary('offer', '2026-01-01T00:00:00Z', { goal, recommendation: RECOMMENDATION }),
+      summary('offer', '2026-01-01T00:00:00Z', { loan, recommendation: RECOMMENDATION }),
     ],
   ])
   render(<Shell user={dana} onSignOut={vi.fn()} />)
@@ -229,8 +229,16 @@ test('the tab bar switches the active pane', async () => {
   await user.click(screen.getByRole('tab', { name: 'המלצה' }))
   expect(page).toHaveAttribute('data-active-pane', 'card')
   expect(screen.getByRole('tab', { name: 'המלצה' })).toHaveAttribute('aria-selected', 'true')
-  await user.click(screen.getByRole('tab', { name: 'פרופיל' }))
+  await user.click(screen.getByRole('tab', { name: 'בדיקות' }))
   expect(page).toHaveAttribute('data-active-pane', 'side')
+})
+
+test('the side tab is named בדיקות', async () => {
+  stubApi([[summary('a', '2026-01-01T00:00:00Z')]])
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  await screen.findByRole('navigation', { name: 'הבדיקות שלי' })
+  expect(screen.getByRole('tab', { name: 'בדיקות' })).toBeInTheDocument()
+  expect(screen.queryByRole('tab', { name: 'פרופיל' })).not.toBeInTheDocument()
 })
 
 test('a failing list shows an alert', async () => {
@@ -252,8 +260,7 @@ test('a refresh answered late does not overwrite a newer list', async () => {
   const listAnswers: Array<(response: Response) => void> = []
   vi.stubGlobal(
     'fetch',
-    vi.fn((path: string, init?: RequestInit) => {
-      if (path === '/api/profile') return Promise.resolve(jsonResponse(200, profileView))
+    vi.fn((_path: string, init?: RequestInit) => {
       if (init?.method === 'POST') return Promise.resolve(jsonResponse(201, { id: 'n' }))
       return new Promise<Response>((resolve) => listAnswers.push(resolve))
     }),
@@ -295,13 +302,13 @@ test('deleting asks first; a cancel keeps the check and sends nothing', async ()
 
 test('a deleted open check gives way to the newest one left', async () => {
   const older = summary('older', '2026-01-01T00:00:00Z')
-  const newer = summary('newer', '2026-02-01T00:00:00Z', { goal, ...ARCHIVED })
+  const newer = summary('newer', '2026-02-01T00:00:00Z', { loan, ...ARCHIVED })
   const fetchStub = stubApi([[newer, older], [older]])
   const user = userEvent.setup()
   render(<Shell user={dana} onSignOut={vi.fn()} />)
   await openArchive(user)
 
-  await user.click(await screen.findByRole('button', { name: `מחיקת הבדיקה: ${goal.purpose}` }))
+  await user.click(await screen.findByRole('button', { name: `מחיקת הבדיקה: ${LOAN_TITLE}` }))
   await user.click(screen.getByRole('button', { name: 'מחיקה' }))
 
   await waitFor(() => expect(window.location.hash).toBe('#check=older'))
@@ -359,28 +366,27 @@ test('a failed delete is shown with its reason', async () => {
 
 test('the duplicate icon clones a check and opens the copy', async () => {
   const fetchStub = stubApi([
-    [summary('old', '2026-01-01T00:00:00Z', { goal })],
+    [summary('old', '2026-01-01T00:00:00Z', { loan })],
     [
-      summary('old', '2026-01-01T00:00:00Z', { goal }),
-      summary('copy', '2026-02-01T00:00:00Z', { goal }),
+      summary('old', '2026-01-01T00:00:00Z', { loan }),
+      summary('copy', '2026-02-01T00:00:00Z', { loan }),
     ],
   ])
   const user = userEvent.setup()
   render(<Shell user={dana} onSignOut={vi.fn()} />)
 
-  await user.click(await screen.findByRole('button', { name: `שכפול הבדיקה: ${goal.purpose}` }))
+  await user.click(await screen.findByRole('button', { name: `שכפול הבדיקה: ${LOAN_TITLE}` }))
 
   await waitFor(() => expect(window.location.hash).toBe('#check=copy'))
   const clones = fetchStub.mock.calls.filter(([p]) => p === '/api/checks/old/clone')
   expect(clones).toHaveLength(1)
 })
 
-test('an archived check is grouped and marked archived only, not stale or ready', async () => {
+test('an archived check is grouped and marked archived only, not ready', async () => {
   stubApi([
     [
       summary('old', '2026-01-01T00:00:00Z', {
         archived: true,
-        profile_stale: true,
         recommendation: RECOMMENDATION,
       }),
     ],
@@ -390,7 +396,6 @@ test('an archived check is grouped and marked archived only, not stale or ready'
   const list = await screen.findByRole('navigation', { name: 'הבדיקות שלי' })
   expect(within(list).getByText('בדיקות בארכיון (1)')).toBeInTheDocument()
   expect(within(list).getByText('בארכיון')).toHaveClass('chip', 'chip-gray')
-  expect(within(list).queryByText('חושב לפי פרופיל קודם')).not.toBeInTheDocument()
   expect(within(list).queryByText('המלצה מוכנה')).not.toBeInTheDocument()
 })
 
@@ -445,33 +450,10 @@ test('the archived group starts unfolded when every check is archived', async ()
   expect(list.querySelector('details')).toHaveAttribute('open')
 })
 
-test('jumping to an archived check opens the archived group and marks the check', async () => {
-  stubApi([
-    [
-      summary('live', '2026-03-01T00:00:00Z'),
-      summary('gone', '2026-02-01T00:00:00Z', { archived: true }),
-    ],
-  ])
-  const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
-  await waitFor(() => expect(openedStreams()).toEqual(['/api/checks/live/events']))
-  act(() => {
-    const follows = { check_id: 'gone', changes: [{ field: 'savings', from: '1', to: '2' }] }
-    FakeEventSource.last().emit('check.follows', JSON.stringify(follows), '1')
-  })
-
-  await user.click(screen.getByRole('button', { name: 'מעבר לבדיקה הקודמת שבארכיון' }))
-
-  await waitFor(() => expect(window.location.hash).toBe('#check=gone'))
-  const group = screen.getByRole('navigation', { name: 'הבדיקות שלי' }).querySelector('details')!
-  expect(group).toHaveAttribute('open')
-  expect(group.querySelector('[aria-current="true"]')).not.toBeNull()
-})
-
-test('a live check has an archive icon and no delete icon; archiving refreshes the list', async () => {
+test('a live check has an archive icon, no delete icon; archiving refreshes the list', async () => {
   const fetchStub = stubApi([
     [summary('a', '2026-01-01T00:00:00Z')],
-    [summary('a', '2026-01-01T00:00:00Z', { archived: true, restorable: true })],
+    [summary('new', '2026-02-01T00:00:00Z'), summary('a', '2026-01-01T00:00:00Z', ARCHIVED)],
   ])
   const user = userEvent.setup()
   render(<Shell user={dana} onSignOut={vi.fn()} />)
@@ -487,20 +469,107 @@ test('a live check has an archive icon and no delete icon; archiving refreshes t
   )
 })
 
-test('only a restorable archived check has a restore icon; restoring refreshes the list', async () => {
+test('a check with a confirmed term shows it under its title', async () => {
+  stubApi([
+    [
+      summary('termed', '2026-02-01T00:00:00Z', { loan, term_months: 72 }),
+      summary('open', '2026-01-01T00:00:00Z', { loan }),
+    ],
+  ])
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+
+  const [termed, open] = await screen.findAllByRole('button', { name: new RegExp(`^${LOAN_TITLE}`) })
+  expect(within(termed).getByText('72 חודשים')).toBeInTheDocument()
+  expect(open).not.toHaveTextContent('חודשים')
+})
+
+test('a check holding only the opening line has no duplicate or archive icon', async () => {
+  stubApi([[summary('empty', '2026-01-01T00:00:00Z', { started: false })]])
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+
+  expect(await screen.findByRole('button', { name: /^בדיקה חדשה/ })).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: /^שכפול/ })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: /^העברה לארכיון/ })).not.toBeInTheDocument()
+})
+
+test('archiving the open check opens the newest live one in its place', async () => {
+  stubApi([
+    [
+      summary('open', '2026-03-01T00:00:00Z'),
+      summary('live-new', '2026-02-01T00:00:00Z'),
+      summary('live-old', '2026-01-01T00:00:00Z'),
+    ],
+    [
+      summary('live-new', '2026-02-01T00:00:00Z'),
+      summary('live-old', '2026-01-01T00:00:00Z'),
+      summary('open', '2026-03-01T00:00:00Z', ARCHIVED),
+    ],
+  ])
+  const user = userEvent.setup()
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  await waitFor(() => expect(window.location.hash).toBe('#check=open'))
+
+  const live = await screen.findAllByRole('button', { name: /^העברה לארכיון/ })
+  await user.click(live[0])
+
+  await waitFor(() => expect(window.location.hash).toBe('#check=live-new'))
+})
+
+test('archiving the last live check opens a new check', async () => {
+  const fetchStub = stubApi([
+    [summary('open', '2026-02-01T00:00:00Z'), summary('gone', '2026-01-01T00:00:00Z', ARCHIVED)],
+    [
+      summary('new', '2026-03-01T00:00:00Z'),
+      summary('open', '2026-02-01T00:00:00Z', ARCHIVED),
+      summary('gone', '2026-01-01T00:00:00Z', ARCHIVED),
+    ],
+  ])
+  const user = userEvent.setup()
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  await waitFor(() => expect(window.location.hash).toBe('#check=open'))
+
+  await user.click(await screen.findByRole('button', { name: /^העברה לארכיון/ }))
+
+  await waitFor(() => expect(window.location.hash).toBe('#check=new'))
+  const posts = fetchStub.mock.calls.filter(([p, i]) => p === '/api/checks' && i?.method === 'POST')
+  expect(posts).toHaveLength(1)
+})
+
+test('archiving a check that is not open keeps the open one', async () => {
+  const fetchStub = stubApi([
+    [summary('open', '2026-02-01T00:00:00Z'), summary('other', '2026-01-01T00:00:00Z')],
+    [summary('open', '2026-02-01T00:00:00Z'), summary('other', '2026-01-01T00:00:00Z', ARCHIVED)],
+  ])
+  const user = userEvent.setup()
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  await waitFor(() => expect(window.location.hash).toBe('#check=open'))
+
+  const live = await screen.findAllByRole('button', { name: /^העברה לארכיון/ })
+  await user.click(live[1])
+
+  expect(await screen.findByText('בדיקות בארכיון (1)')).toBeInTheDocument()
+  expect(window.location.hash).toBe('#check=open')
+  const posts = fetchStub.mock.calls.filter(([p, i]) => p === '/api/checks' && i?.method === 'POST')
+  expect(posts).toHaveLength(0)
+})
+
+test('an archived check has a restore icon; restoring refreshes the list', async () => {
   const fetchStub = stubApi([
     [
-      summary('mine', '2026-02-01T00:00:00Z', { goal, archived: true, restorable: true }),
+      summary('mine', '2026-02-01T00:00:00Z', { loan, archived: true }),
       summary('stale', '2026-01-01T00:00:00Z', ARCHIVED),
     ],
-    [summary('mine', '2026-02-01T00:00:00Z', { goal }), summary('stale', '2026-01-01T00:00:00Z', ARCHIVED)],
+    [
+      summary('mine', '2026-02-01T00:00:00Z', { loan }),
+      summary('stale', '2026-01-01T00:00:00Z', ARCHIVED),
+    ],
   ])
   const user = userEvent.setup()
   render(<Shell user={dana} onSignOut={vi.fn()} />)
   await openArchive(user)
 
-  expect(screen.getAllByRole('button', { name: /^שחזור מהארכיון/ })).toHaveLength(1)
-  await user.click(screen.getByRole('button', { name: `שחזור מהארכיון: ${goal.purpose}` }))
+  expect(screen.getAllByRole('button', { name: /^שחזור מהארכיון/ })).toHaveLength(2)
+  await user.click(screen.getByRole('button', { name: `שחזור מהארכיון: ${LOAN_TITLE}` }))
 
   expect(await screen.findByText('בדיקות בארכיון (1)')).toBeInTheDocument()
   expect(fetchStub).toHaveBeenCalledWith(

@@ -13,7 +13,7 @@ from langchain_core.tools import BaseTool, StructuredTool, ToolException
 from langgraph.checkpoint.memory import InMemorySaver
 
 from fakes import (
-    ENGINE_TOOL_NAMES,
+    BALLOON_SIMULATION,
     NOW,
     PRIME_SIMULATION,
     PRIME_TRACK,
@@ -22,25 +22,32 @@ from fakes import (
     Ids,
     InMemoryCheckRepository,
     InMemoryOptionRepository,
-    InMemoryProfileRepository,
     InMemoryRecommendationRepository,
     RecordingSink,
     ScriptedChatModel,
     engine_fixture,
 )
+from loan_agent.adapters.engine_mcp import MODEL_ENGINE_TOOLS
 from loan_agent.application.agent_graph import (
     RECOMMENDATION_HEADING,
     SYSTEM_PROMPT,
     AskArgs,
     AskQuestion,
+    AskTermArgs,
     PresentRecommendationArgs,
+    QuestionField,
     SaveOptionArgs,
+    SetCeilingArgs,
+    SetLoanArgs,
+    SetTermArgs,
     TrackArgs,
+    UpdateFinancesArgs,
     build_agent_graph,
     check_config,
 )
-from loan_agent.application.check_tools import ASKED_RESULT, CHECK_ARCHIVED_RESULT, ToolDeps
-from loan_agent.domain.models import Check, Goal, OptionSource, Profile, Recommendation
+from loan_agent.application.check_tools import ASKED_RESULT, ToolDeps
+from loan_agent.application.turn_state import turn_state
+from loan_agent.domain.models import Check, Finances, LoanRequest, OptionSource, Recommendation
 from loan_agent.platform.checkpointer import checkpoint_serde
 from loan_agent.ports.events import QUESTION_ASKED
 
@@ -49,17 +56,12 @@ CHECK = "check-1"
 OTHER_PERSON = "2002"
 OTHER_CHECK = "check-2"
 SIMULATION_SUMMARY = "first_payment: 1887.99\nworst_peak_payment: 2038.63"
-COMPLETE_FIGURES = {
-    "net_fixed_income": "18000",
-    "variable_income": "4000",
-    "variable_income_minimum": "2000",
-    "fixed_expenses": "9000",
-    "existing_loan_payments": "800",
-    "savings": "70000",
-}
 CHECK_TOOL_NAMES = {
-    "update_profile",
-    "set_goal",
+    "set_loan",
+    "ask_term",
+    "set_term",
+    "set_ceiling",
+    "update_finances",
     "save_option",
     "present_recommendation",
     "ask",
@@ -69,7 +71,6 @@ CHECK_TOOL_NAMES = {
 
 @dataclass
 class World:
-    profiles: InMemoryProfileRepository
     checks: InMemoryCheckRepository
     options: InMemoryOptionRepository
     recommendations: InMemoryRecommendationRepository
@@ -82,16 +83,14 @@ class World:
 @pytest.fixture
 async def world() -> World:
     clock = Clock()
-    profiles = InMemoryProfileRepository(clock)
     checks = InMemoryCheckRepository()
     options = InMemoryOptionRepository()
     recommendations = InMemoryRecommendationRepository()
     engine = FakeLoanEngine()
     sink = RecordingSink()
-    await checks.add(Check(CHECK, PERSON, NOW, None, None))
-    await checks.add(Check(OTHER_CHECK, OTHER_PERSON, NOW, None, None))
+    await checks.add(Check(CHECK, PERSON, NOW, None, None, None, None, Finances()))
+    await checks.add(Check(OTHER_CHECK, OTHER_PERSON, NOW, None, None, None, None, Finances()))
     deps = ToolDeps(
-        profiles=profiles,
         checks=checks,
         options=options,
         recommendations=recommendations,
@@ -101,7 +100,6 @@ async def world() -> World:
         new_id=Ids("option"),
     )
     return World(
-        profiles,
         checks,
         options,
         recommendations,
@@ -128,11 +126,11 @@ def fake_simulate_loan() -> BaseTool:
 
 
 def failing_engine_tool(error: Exception) -> BaseTool:
-    async def size_loan(goal_price: str) -> str:
+    async def suggest_tracks(principal: str) -> str:
         raise error
 
     return StructuredTool.from_function(
-        coroutine=size_loan, name="size_loan", description="Size the loan"
+        coroutine=suggest_tracks, name="suggest_tracks", description="Suggest tracks"
     )
 
 
@@ -185,17 +183,13 @@ async def test_tool_call_runs_and_model_sees_summary_only(world: World) -> None:
 
 
 async def test_guardrail_refusal_reaches_model_which_retries(world: World) -> None:
-    await world.profiles.save(
-        PERSON,
-        Profile().merged(COMPLETE_FIGURES),
-    )
-    await world.checks.set_goal(CHECK, Goal("car", Decimal(120000)))
-    world.engine.simulations = [PRIME_SIMULATION, PRIME_SIMULATION]
-    short_track = {**PRIME_TRACK, "principal": "70000"}
+    await world.checks.set_loan(CHECK, LoanRequest("רכב", Decimal(80000)))
+    await world.checks.set_ceiling(CHECK, Decimal(1500), "stated")
+    world.engine.simulations = [PRIME_SIMULATION, BALLOON_SIMULATION]
     model = ScriptedChatModel(
         replies=[
             calls(
-                ("save_option", {"loan": {"tracks": [short_track]}, "source": "published_average"}),
+                ("save_option", {"loan": {"tracks": [PRIME_TRACK]}, "source": "published_average"}),
                 ("save_option", {"loan": {"tracks": [PRIME_TRACK]}, "source": "published_average"}),
             ),
             calls(
@@ -219,7 +213,8 @@ async def test_guardrail_refusal_reaches_model_which_retries(world: World) -> No
 
     refusal, accepted = tool_messages(state["messages"])[2:]
     assert refusal.status == "error"
-    assert "below the loan_amount of 80000.00" in str(refusal.content)
+    assert "above the payment_ceiling of 1500" in str(refusal.content)
+    assert "option option-2 fits" in str(refusal.content)
     assert refusal in model.received[2]
     assert accepted.status == "success"
     recommendation = await world.recommendations.latest(CHECK)
@@ -249,16 +244,16 @@ async def test_model_cannot_choose_user_or_check(world: World) -> None:
         replies=[
             calls(
                 (
-                    "set_goal",
+                    "set_loan",
                     {
                         "purpose": "רכב",
-                        "price": "55000",
+                        "amount": "55000",
                         "user_id": OTHER_PERSON,
                         "check_id": OTHER_CHECK,
                     },
                 )
             ),
-            calls(("set_goal", {"purpose": "רכב", "price": "55000"})),
+            calls(("set_loan", {"purpose": "רכב", "amount": "55000"})),
             AIMessage("נשמר"),
         ]
     )
@@ -273,8 +268,8 @@ async def test_model_cannot_choose_user_or_check(world: World) -> None:
     smuggled, saved = tool_messages(state["messages"])
     assert smuggled.status == "error"
     assert saved.status == "success"
-    assert (await world.checks.get(PERSON, CHECK)).goal == Goal("רכב", Decimal(55000))
-    assert (await world.checks.get(OTHER_PERSON, OTHER_CHECK)).goal is None
+    assert (await world.checks.get(PERSON, CHECK)).loan == LoanRequest("רכב", Decimal(55000))
+    assert (await world.checks.get(OTHER_PERSON, OTHER_CHECK)).loan is None
     assert [event.check_id for event in world.sink.events] == [CHECK]
 
 
@@ -328,19 +323,19 @@ async def test_save_option_schema_types_money_as_decimal_strings(world: World) -
 
 async def test_engine_tool_error_reaches_model(world: World) -> None:
     model = ScriptedChatModel(
-        replies=[calls(("size_loan", {"goal_price": "-1"})), AIMessage("אבדוק שוב")]
+        replies=[calls(("suggest_tracks", {"principal": "-1"})), AIMessage("אבדוק שוב")]
     )
-    graph = run(world, model, [failing_engine_tool(ToolException("goal_price must be >= 0"))])
+    graph = run(world, model, [failing_engine_tool(ToolException("principal must be >= 0"))])
 
     state = await graph.ainvoke(said("כמה ללוות?"), check_config(PERSON, CHECK))
 
     (error,) = tool_messages(state["messages"])
-    assert error.content == "goal_price must be >= 0"
+    assert error.content == "principal must be >= 0"
     assert error in model.received[1]
 
 
 async def test_unexpected_tool_failure_ends_the_turn(world: World) -> None:
-    model = ScriptedChatModel(replies=[calls(("size_loan", {"goal_price": "1"}))])
+    model = ScriptedChatModel(replies=[calls(("suggest_tracks", {"principal": "1"}))])
     graph = run(world, model, [failing_engine_tool(RuntimeError("engine unreachable"))])
 
     with pytest.raises(RuntimeError, match="engine unreachable"):
@@ -363,7 +358,7 @@ def test_system_prompt_names_the_same_purpose_choices_as_the_page() -> None:
     assert ", ".join(f"'{choice}'" for choice in choices) in SYSTEM_PROMPT
 
 
-def test_every_tool_the_system_prompt_names_is_bound(world: World) -> None:
+async def test_every_tool_the_system_prompt_names_is_bound(world: World) -> None:
     def stand_in(name: str) -> BaseTool:
         async def engine_call() -> str:
             return ""
@@ -371,17 +366,27 @@ def test_every_tool_the_system_prompt_names_is_bound(world: World) -> None:
         return StructuredTool.from_function(coroutine=engine_call, name=name, description=name)
 
     model = ScriptedChatModel(replies=[])
-    run(world, model, [stand_in(name) for name in sorted(ENGINE_TOOL_NAMES)])
+    run(world, model, [stand_in(name) for name in sorted(MODEL_ENGINE_TOOLS)])
 
     identifiers = set(re.findall(r"\b[a-z]+(?:_[a-z]+)+\b", SYSTEM_PROMPT))
     tool_fields = {
+        *SetLoanArgs.model_fields,
+        *AskTermArgs.model_fields,
+        *SetTermArgs.model_fields,
+        *SetCeilingArgs.model_fields,
+        *UpdateFinancesArgs.model_fields,
         *SaveOptionArgs.model_fields,
         *TrackArgs.model_fields,
         *AskQuestion.model_fields,
         *AskArgs.model_fields,
         *PresentRecommendationArgs.model_fields,
     }
-    named_tools = identifiers - set(get_args(OptionSource)) - tool_fields
+    state_keys = {
+        line.split(":")[0] for line in (await turn_state(PERSON, CHECK, world.deps)).splitlines()
+    }
+    named_tools = (
+        identifiers - set(get_args(OptionSource)) - set(get_args(QuestionField)) - tool_fields
+    ) - state_keys
     assert "present_recommendation" in named_tools
     assert named_tools <= {tool.name for tool in model.tools}
     assert re.search(r"\bask\b", SYSTEM_PROMPT)
@@ -433,7 +438,9 @@ async def test_two_ask_calls_with_equal_ids_are_still_two_questions(world: World
     def ask_call(field: str) -> Any:
         return {"name": "ask", "args": {"question": {"field": field}}, "id": "same"}
 
-    twice = AIMessage(content="", tool_calls=[ask_call("savings"), ask_call("price")])
+    twice = AIMessage(
+        content="", tool_calls=[ask_call("net_fixed_income"), ask_call("fixed_expenses")]
+    )
     model = ScriptedChatModel(replies=[twice, AIMessage("סליחה")])
     graph = run(world, model)
     await graph.ainvoke(said("שלום"), check_config(PERSON, CHECK))
@@ -445,7 +452,7 @@ async def test_ask_ends_the_turn_even_when_a_sibling_call_fails(world: World) ->
     model = ScriptedChatModel(
         replies=[
             calls(
-                ("update_profile", {"savings": "-5"}),
+                ("update_finances", {"net_fixed_income": "-5"}),
                 ("ask", {"question": {"field": "net_fixed_income"}}),
             ),
             AIMessage("never reached"),
@@ -459,10 +466,10 @@ async def test_ask_ends_the_turn_even_when_a_sibling_call_fails(world: World) ->
 
 
 async def test_a_refused_ask_returns_to_the_model(world: World) -> None:
-    await world.profiles.save(PERSON, Profile().merged({"savings": "12000"}))
+    await world.checks.set_finances(CHECK, Finances(net_fixed_income=Decimal(12000)))
     model = ScriptedChatModel(
         replies=[
-            calls(("ask", {"question": {"field": "savings"}})),
+            calls(("ask", {"question": {"field": "net_fixed_income"}})),
             AIMessage("אז נמשיך"),
         ]
     )
@@ -476,7 +483,7 @@ async def test_two_asks_in_one_message_are_both_refused(world: World) -> None:
     model = ScriptedChatModel(
         replies=[
             calls(
-                ("ask", {"question": {"field": "savings"}}),
+                ("ask", {"question": {"field": "net_fixed_income"}}),
                 ("ask", {"question": {"field": "fixed_expenses"}}),
             ),
             AIMessage("אשאל אחת"),
@@ -492,7 +499,7 @@ async def test_two_asks_in_one_message_are_both_refused(world: World) -> None:
 async def test_ask_schema_wants_exactly_one_of_field_and_text(world: World) -> None:
     model = ScriptedChatModel(
         replies=[
-            calls(("ask", {"question": {"field": "savings", "text": "כמה?"}})),
+            calls(("ask", {"question": {"field": "amount", "text": "כמה?"}})),
             calls(("ask", {"question": {"choices": ["כן"]}})),
             AIMessage("אתקן"),
         ]
@@ -528,9 +535,7 @@ async def test_ask_offers_a_clone_only_after_a_recommendation(world: World) -> N
     assert tool_messages(state["messages"])[0].status == "error"
     assert not world.sink.events
 
-    await world.recommendations.save(
-        Recommendation(CHECK, "o1", None, "כי", Decimal(1), Decimal(1), Decimal(1), Decimal(1), NOW)
-    )
+    await world.recommendations.save(Recommendation(CHECK, "o1", None, "כי", Decimal(1), None, NOW))
     model.replies.append(calls(offer))
     await graph.ainvoke(said("ומה עם 1,000 בחודש?"), check_config(PERSON, CHECK))
     assert [e.data for e in world.sink.events] == [
@@ -553,55 +558,30 @@ async def test_ask_schema_keeps_a_clone_offer_free_of_field_text_and_choices(wor
     assert tool_messages(state["messages"])[0].status == "error"
 
 
-async def test_a_profile_change_that_archives_the_check_ends_the_turn(world: World) -> None:
-    await world.profiles.save(PERSON, Profile(savings=Decimal(35000)))
-    await world.checks.snapshot_profile(CHECK, NOW)
-    model = ScriptedChatModel(
-        replies=[calls(("update_profile", {"savings": "23000"})), AIMessage("never reached")]
-    )
-    graph = run(world, model)
-    state = await graph.ainvoke(said("טעיתי"), check_config(PERSON, CHECK))
-    assert len(model.received) == 1
-    assert state["messages"][-1].content == CHECK_ARCHIVED_RESULT
-
-
-async def test_state_block_says_the_minimum_is_not_needed_without_variable_income(
-    world: World,
-) -> None:
-    await world.profiles.save(PERSON, Profile().merged({"variable_income": "0"}))
-    model = ScriptedChatModel(replies=[AIMessage("קיבלתי")])
-    graph = run(world, model)
-    await graph.ainvoke(said("שלום"), check_config(PERSON, CHECK))
-    (seen,) = model.received
-    block = seen[1].content
-    assert "variable_income_minimum: not needed" in block
-    assert "variable_income_minimum" not in block.split("missing:")[1].split("\n")[0]
-
-
 async def test_state_block_carries_page_saved_figures_without_a_tool_call(world: World) -> None:
-    await world.profiles.save(PERSON, Profile().merged({"net_fixed_income": "8000"}))
-    await world.checks.set_goal(CHECK, Goal("מכונית", Decimal(60000)))
+    await world.checks.set_finances(CHECK, Finances(net_fixed_income=Decimal(8000)))
+    await world.checks.set_loan(CHECK, LoanRequest("מכונית", Decimal(60000)))
     model = ScriptedChatModel(replies=[AIMessage("קיבלתי")])
     graph = run(world, model)
     await graph.ainvoke(said("שלום"), check_config(PERSON, CHECK))
     (seen,) = model.received
     block = seen[1].content
     assert "net_fixed_income: 8000" in block
-    assert "savings: not told" in block
-    assert "missing:" in block and "savings" in block
+    assert "fixed_expenses: not told" in block
+    assert "missing: fixed_expenses" in block
     assert "מכונית" in block and "60000" in block
 
 
 async def test_state_block_is_fresh_within_a_turn_and_never_checkpointed(world: World) -> None:
     model = ScriptedChatModel(
-        replies=[calls(("update_profile", {"savings": "5000"})), AIMessage("נשמר")]
+        replies=[calls(("update_finances", {"net_fixed_income": "5000"})), AIMessage("נשמר")]
     )
     graph = run(world, model)
     config = check_config(PERSON, CHECK)
-    state = await graph.ainvoke(said("יש לי 5000 בצד"), config)
+    state = await graph.ainvoke(said("אני מרוויח 5000 נטו"), config)
     first, second = model.received
-    assert "savings: not told" in first[1].content
-    assert "savings: 5000" in second[1].content
+    assert "net_fixed_income: not told" in first[1].content
+    assert "net_fixed_income: 5000" in second[1].content
     assert not [m for m in state["messages"] if isinstance(m, SystemMessage)]
     snapshot = await graph.aget_state(config)
     assert not [m for m in snapshot.values["messages"] if isinstance(m, SystemMessage)]
@@ -640,8 +620,7 @@ async def test_a_recommendation_is_redone_only_once(world: World) -> None:
 async def test_a_recommendation_from_an_earlier_turn_does_not_back_this_ones_text(
     world: World,
 ) -> None:
-    await world.profiles.save(PERSON, Profile().merged(COMPLETE_FIGURES))
-    await world.checks.set_goal(CHECK, Goal("car", Decimal(120000)))
+    await world.checks.set_loan(CHECK, LoanRequest("רכב", Decimal(80000)))
     world.engine.simulations = [PRIME_SIMULATION]
     first = ScriptedChatModel(
         replies=[
@@ -703,3 +682,69 @@ async def test_a_hebrew_reply_with_numbers_and_shekels_stands(world: World) -> N
     await graph.ainvoke(said("שלום"), check_config(PERSON, CHECK))
 
     assert len(model.received) == 1
+
+
+async def test_ask_term_ends_the_turn(world: World) -> None:
+    await world.checks.set_loan(CHECK, LoanRequest(None, Decimal(80000)))
+    model = ScriptedChatModel(replies=[calls(("ask_term", {})), AIMessage("never reached")])
+    graph = run(world, model)
+
+    state = await graph.ainvoke(said("אני צריך הלוואה של 80,000"), check_config(PERSON, CHECK))
+
+    assert len(model.received) == 1
+    assert state["messages"][-1].content == ASKED_RESULT
+    assert [e.data for e in world.sink.events] == [
+        {
+            "question": {"kind": "term", "term_months": 24, "first_payment": "1750.00"},
+            "lead_in": None,
+        }
+    ]
+
+
+async def test_ask_term_and_ask_in_one_message_are_both_refused(world: World) -> None:
+    await world.checks.set_loan(CHECK, LoanRequest(None, Decimal(80000)))
+    model = ScriptedChatModel(
+        replies=[
+            calls(("ask_term", {}), ("ask", {"question": {"field": "purpose"}})),
+            AIMessage("אשאל אחת"),
+        ]
+    )
+    graph = run(world, model)
+
+    state = await graph.ainvoke(said("80,000"), check_config(PERSON, CHECK))
+
+    assert all(r.status == "error" for r in tool_messages(state["messages"]))
+    assert not world.sink.events
+    assert len(model.received) == 2
+
+
+def test_the_prompt_no_longer_names_removed_tools() -> None:
+    for removed in ("update_profile", "set_goal", "size_loan", "assess_affordability"):
+        assert removed not in SYSTEM_PROMPT
+
+
+def test_the_prompt_asks_to_reuse_the_previous_finances_in_the_designs_words() -> None:
+    question = "האם להשתמש בהכנסה החודשית ובהוצאות הקבועות מהבדיקה הקודמת (X₪, Y₪)?"
+    assert question in SYSTEM_PROMPT
+    assert "(12,000₪, 6,000₪)" in SYSTEM_PROMPT
+
+
+async def test_a_smaller_loan_is_asked_as_a_free_question_once_the_loan_is_saved(
+    world: World,
+) -> None:
+    await world.checks.set_loan(CHECK, LoanRequest("רכב", Decimal(60000)))
+    model = ScriptedChatModel(
+        replies=[
+            calls(("ask", {"question": {"field": "amount"}})),
+            calls(("ask", {"question": {"text": "כמה ללוות?"}})),
+            AIMessage("never reached"),
+        ]
+    )
+    graph = run(world, model)
+
+    state = await graph.ainvoke(said("סכום אחר"), check_config(PERSON, CHECK))
+
+    refused, asked = tool_messages(state["messages"])
+    assert refused.status == "error" and "already known" in str(refused.content)
+    assert asked.content == ASKED_RESULT
+    assert "שאלה חופשית עם text" in SYSTEM_PROMPT

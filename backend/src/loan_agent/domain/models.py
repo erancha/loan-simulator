@@ -1,36 +1,23 @@
-"""Framework-free types of the loan agent: people, finances, goals, checks, options and
+"""Framework-free types of the loan agent: people, finances, loans, checks, options and
 recommendations.
 
 - User, and the VerifiedToken that names them
-- Profile (partial until the person has told everything), Goal
-- Check, Option with its OptionFigures, Recommendation
+- Finances (partial until the person has told both figures), LoanRequest
+- Check, which holds the loan, the term, the payment ceiling and the finances
+- Option with its OptionFigures, Recommendation
 
 Money is Decimal. Datetimes are timezone-aware UTC.
 """
 
 from collections.abc import Mapping
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 
-from loan_agent.domain.errors import GoalError, ProfileError
+from loan_agent.domain.errors import FinancesError, LoanError
 
-_MONEY_FIELDS = (
-    "savings",
-    "net_fixed_income",
-    "variable_income",
-    "variable_income_minimum",
-    "fixed_expenses",
-    "existing_loan_payments",
-)
-_ENGINE_FIELDS = (
-    "net_fixed_income",
-    "variable_income",
-    "variable_income_minimum",
-    "fixed_expenses",
-    "existing_loan_payments",
-)
+_MONEY_FIELDS = ("net_fixed_income", "fixed_expenses")
 
 
 def _require_utc(name: str, value: datetime) -> None:
@@ -40,19 +27,19 @@ def _require_utc(name: str, value: datetime) -> None:
 
 def _money(name: str, value: object) -> Decimal:
     if isinstance(value, (bool, float)):
-        raise ProfileError(
+        raise FinancesError(
             f"{name} must be a Decimal, an integer or a decimal string, not {value!r}"
         )
     if not isinstance(value, Decimal | int | str):
-        raise ProfileError(f"{name} must be a Decimal, an integer or a decimal string")
+        raise FinancesError(f"{name} must be a Decimal, an integer or a decimal string")
     try:
         amount = Decimal(str(value))
     except InvalidOperation:
-        raise ProfileError(f"{name} is not a number: {value!r}") from None
+        raise FinancesError(f"{name} is not a number: {value!r}") from None
     if not amount.is_finite():
-        raise ProfileError(f"{name} must be a finite number")
+        raise FinancesError(f"{name} must be a finite number")
     if amount < 0:
-        raise ProfileError(f"{name} cannot be negative")
+        raise FinancesError(f"{name} cannot be negative")
     return amount
 
 
@@ -70,101 +57,80 @@ class VerifiedToken:
 
 
 @dataclass(frozen=True)
-class Profile:
-    """The person's monthly finances in ₪ and their savings; None marks a field not yet told,
-    except variable_income_minimum, which stays None without being missing when variable_income
-    is 0: there is no variable income to hold a minimum of. A minimum never exceeds
-    variable_income.
+class Finances:
+    """The person's monthly finances in ₪; None marks a figure not yet told.
 
-    Fields run from the money already at hand to money coming in and then money going out, the
-    order the profile panel shows and missing() lists them, so the agent asks in that order too."""
+    Fields run from money coming in to money going out, the order missing() lists them, so the
+    agent asks in that order too."""
 
-    savings: Decimal | None = None
     net_fixed_income: Decimal | None = None
-    variable_income: Decimal | None = None
-    variable_income_minimum: Decimal | None = None
     fixed_expenses: Decimal | None = None
-    existing_loan_payments: Decimal | None = None
 
     def missing(self) -> tuple[str, ...]:
-        no_variable_income = self.variable_income == 0
-        return tuple(
-            f.name
-            for f in fields(self)
-            if getattr(self, f.name) is None
-            and not (f.name == "variable_income_minimum" and no_variable_income)
-        )
+        return tuple(name for name in _MONEY_FIELDS if getattr(self, name) is None)
 
-    def merged(self, update: Mapping[str, object]) -> "Profile":
-        known = {f.name for f in fields(self)}
-        unknown = sorted(set(update) - known)
+    def merged(self, update: Mapping[str, object]) -> "Finances":
+        unknown = sorted(set(update) - set(_MONEY_FIELDS))
         if unknown:
-            raise ProfileError(f"Unknown profile field: {', '.join(unknown)}")
+            raise FinancesError(f"Unknown finances field: {', '.join(unknown)}")
         converted = {name: _money(name, value) for name, value in update.items()}
-        merged = replace(self, **converted)
-        minimum, variable = merged.variable_income_minimum, merged.variable_income
-        if minimum is not None and variable is not None and minimum > variable:
-            raise ProfileError(
-                f"variable_income_minimum ({minimum}) cannot exceed variable_income ({variable})"
-            )
-        return merged
+        return replace(self, **converted)
 
     def engine_profile(self) -> dict[str, str]:
-        """The engine's Profile arguments; savings stay agent-side (they go to size_loan)."""
-        missing = [name for name in self.missing() if name in _ENGINE_FIELDS]
+        """The engine's Profile arguments, as decimal strings."""
+        missing = self.missing()
         if missing:
-            raise ProfileError(f"Profile is incomplete; still missing: {', '.join(missing)}")
-        result: dict[str, str] = {}
-        for name in _ENGINE_FIELDS:
-            value = getattr(self, name)
-            if name == "variable_income_minimum" and value is None:
-                value = Decimal(0)  # missing() lets it stay unset only when variable_income is 0
-            result[name] = str(value)
-        return result
+            raise FinancesError(f"Finances are incomplete; still missing: {', '.join(missing)}")
+        return {name: str(getattr(self, name)) for name in _MONEY_FIELDS}
+
+
+# The purpose the term card treats as a car loan, stored in this normalised form.
+CAR_PURPOSE = "רכב"
+# The term the card proposes for a car loan.
+CAR_TERM_MONTHS = 60
+# The first payment the card aims for when it proposes a term for another purpose.
+FIRST_PAYMENT_TARGET = Decimal(1000)
 
 
 @dataclass(frozen=True)
-class Goal:
-    purpose: str
-    price: Decimal
+class LoanRequest:
+    """purpose is None until the person names one; amount is in ₪."""
+
+    purpose: str | None
+    amount: Decimal
 
     def __post_init__(self) -> None:
-        if self.price <= 0:
-            raise GoalError("price must be greater than zero")
+        if self.amount <= 0:
+            raise LoanError("amount must be greater than zero")
+
+
+CeilingSource = Literal["stated", "finances"]
 
 
 @dataclass(frozen=True)
 class Check:
-    """archived_at is set once a profile save replaces the figures the check's recommendation was
-    computed from, or when the person archives the check; an archived check is read-only."""
+    """The loan, its term and the payment ceiling are None until set. The ceiling is either
+    stated by the person or derived from their finances, and ceiling_source says which; the two
+    are set together. archived_at is set when the person archives the check, which makes it
+    read-only; an archived check can always be restored."""
 
     id: str
     user_id: str
     created_at: datetime
-    goal: Goal | None
-    profile_snapshot_at: datetime | None
+    loan: LoanRequest | None
+    term_months: int | None
+    payment_ceiling: Decimal | None
+    ceiling_source: CeilingSource | None
+    finances: Finances
     archived_at: datetime | None = None
 
     def __post_init__(self) -> None:
         _require_utc("created_at", self.created_at)
-        for name in ("profile_snapshot_at", "archived_at"):
-            value = getattr(self, name)
-            if value is not None:
-                _require_utc(name, value)
-
-    def is_restorable(self, profile_updated_at: datetime | None) -> bool:
-        """Whether the archived check may be reopened: its recommendation, if it has one, still
-        matches the profile. A profile change archives a check by leaving it stale, so only a
-        check the person archived themselves passes."""
-        return self.archived_at is not None and not self.is_stale(profile_updated_at)
-
-    def is_stale(self, profile_updated_at: datetime | None) -> bool:
-        """Whether the profile was saved after the version the recommendation was computed from.
-        profile_updated_at: when the person's profile was last saved; None when they have none."""
-        if self.profile_snapshot_at is None:
-            return False
-        assert profile_updated_at is not None, "a snapshot records a profile save"
-        return profile_updated_at > self.profile_snapshot_at
+        if self.archived_at is not None:
+            _require_utc("archived_at", self.archived_at)
+        assert (self.payment_ceiling is None) == (self.ceiling_source is None), (
+            "payment_ceiling and ceiling_source are set together"
+        )
 
 
 OptionSource = Literal["published_average", "offer"]
@@ -242,6 +208,9 @@ class Option:
     source: OptionSource
     lender: str | None
     offer_date: date | None
+    max_term_months: int | None
+    """For a real offer that leaves its term open, the longest term its lender allows; the offer
+    is priced at the check's term up to it."""
     summary: OptionFigures
     created_at: datetime
 
@@ -256,10 +225,12 @@ class Recommendation:
     alternative_option_id: str | None
     reasoning: str
     loan_amount: Decimal
-    payment_ceiling: Decimal
-    min_cushion: Decimal
-    cushion_kept: Decimal
+    payment_ceiling: Decimal | None
     created_at: datetime
 
     def __post_init__(self) -> None:
         _require_utc("created_at", self.created_at)
+
+    @property
+    def checked(self) -> bool:
+        return self.payment_ceiling is not None

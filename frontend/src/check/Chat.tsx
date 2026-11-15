@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent, KeyboardEvent } from 'react'
-import type { ProfileFields } from '../api/types.ts'
+import type { Finances } from '../api/types.ts'
 import {
   CHAT_WELCOME,
   INPUT_LABEL, INPUT_PLACEHOLDER,
@@ -14,25 +14,17 @@ import {
   SAMPLE_MESSAGES,
   SEND_BUTTON,
   THINKING,
+  cloneLine,
 } from './copy.ts'
 import { ArchiveNote } from './ArchiveNote.tsx'
-import { FollowsNote } from './FollowsNote.tsx'
+import { CloneNote } from './CloneNote.tsx'
 import { isArchived, isMessage } from './events.ts'
-import type { ChatEntry, CheckState } from './events.ts'
-import { marketSampleTappedToday, rememberMarketSampleTapped } from './dailySample.ts'
+import type { ChatEntry, ChatMessage, CheckState } from './events.ts'
 import { formatTimestamp } from '../money.ts'
 import { withBold } from './emphasis.tsx'
 import { MarketChart } from './MarketChart.tsx'
 import { QuestionBubble } from './QuestionBubble.tsx'
 import type { Answer } from './QuestionBubble.tsx'
-
-/** A panel edit, shown in this tab's conversation after the entry it follows. */
-export interface PanelNote {
-  id: number
-  /** The last stored entry when the edit was saved; null when the conversation was empty. */
-  afterEntryId: string | null
-  text: string
-}
 
 /** How far from the end of the log (px) a reader still counts as following the conversation. */
 const FOLLOW_DISTANCE = 80
@@ -41,8 +33,9 @@ interface Props {
   messages: ChatEntry[]
   /** The question entry that still takes an answer; every other question shows as text. */
   liveQuestionId: string | null
-  profile: ProfileFields | null
-  panelNotes: PanelNote[]
+  finances: Finances | null
+  /** The payment ceiling the check holds; null while it has none. */
+  ceiling: string | null
   turn: CheckState['turn']
   failure: string | null
   /** Why the last send did not go through. */
@@ -53,11 +46,19 @@ interface Props {
   onSkip: (line: string) => Promise<boolean>
   /** Clones the check and sends the line to the copy. */
   onClone: (line: string) => Promise<void>
-  /** The check an archived check's conversation went on in. */
-  continuedIn: string | null
+  /** Opens another of the person's checks: the copy a handoff note names. */
   onOpenCheck: (id: string) => void
   /** The check has a recommendation, so the next step is bringing real offers. */
   recommended: boolean
+}
+
+/** The person's last message before the entry at index: the request a question answers. */
+function requestBefore(entries: ChatEntry[], index: number): string {
+  const request = entries
+    .slice(0, index)
+    .findLast((entry): entry is ChatMessage => entry.role === 'user')
+  if (request === undefined) throw new Error('a question is asked after a message of the person')
+  return request.text
 }
 
 /** When an entry was said, under its bubble on the bubble's side. */
@@ -70,26 +71,15 @@ function EntryTime({ at, side }: { at: string | undefined; side: 'user' | 'assis
   )
 }
 
-function PanelNoteLines({ notes, after }: { notes: PanelNote[]; after: string | null }) {
-  return notes
-    .filter((note) => note.afterEntryId === after)
-    .map((note) => (
-      <p key={note.id} className="panel-note-line">
-        {note.text}
-      </p>
-    ))
-}
-
 /**
  * The conversation of a check: its bubbles and question bubbles, each with the time it was
- * said, what each turn saved, the profile edits made beside it, and the message input, which an
- * archived check does not have.
+ * said, and the message input, which an archived check does not have.
  */
 export function Chat({
   messages: entries,
   liveQuestionId,
-  profile,
-  panelNotes,
+  finances,
+  ceiling,
   turn,
   failure,
   notice,
@@ -97,7 +87,6 @@ export function Chat({
   onAnswer,
   onSkip,
   onClone,
-  continuedIn,
   onOpenCheck,
   recommended,
 }: Props) {
@@ -118,15 +107,14 @@ export function Chat({
   }
   const locked = running || sending
   const archived = isArchived({ messages: entries })
-  const [marketTapped, setMarketTapped] = useState(marketSampleTappedToday)
   // The opening samples help start a conversation, so they go once the model asks its first
   // question; once there is a recommendation, the offer sample shows how to bring a real offer.
-  // Market data is worth asking at any point, so that sample stays until tapped.
+  // Market data is worth asking at any point and costs no model call, so that sample stays.
   const opening = !recommended && !entries.some((entry) => entry.role === 'question')
   const samples = [
     ...(opening ? SAMPLE_MESSAGES : []),
     ...(recommended ? [OFFER_SAMPLE] : []),
-    ...(marketTapped ? [] : [MARKET_SAMPLE]),
+    MARKET_SAMPLE,
   ]
   // A check with no message yet leads the eye to where to start: the input's edge, then the
   // samples' (the border-sweep classes in global.css).
@@ -155,7 +143,6 @@ export function Chat({
 
   useEffect(pinToEnd, [
     lastLength,
-    panelNotes.length,
     liveQuestionId,
     failure,
     notice,
@@ -218,29 +205,25 @@ export function Chat({
         <ol className="chat-messages">
           <li className="chat-turn">
             <p className="bubble bubble-assistant chat-welcome">{withBold(CHAT_WELCOME)}</p>
-            <PanelNoteLines notes={panelNotes} after={null} />
           </li>
-          {entries.map((entry) => (
+          {entries.map((entry, index) => (
             <li key={entry.id} className="chat-turn">
               {entry.role === 'question' ? (
                 <QuestionBubble
                   entry={entry}
                   live={entry.id === liveQuestionId}
-                  profile={profile}
+                  finances={finances}
+                  ceiling={ceiling}
                   onAnswer={onAnswer}
                   onSkip={onSkip}
-                  onClone={onClone}
+                  onClone={() => onClone(cloneLine(requestBefore(entries, index)))}
                 />
               ) : entry.role === 'chart' ? (
                 <MarketChart chart={entry.chart} />
               ) : entry.role === 'archived' ? (
-                <ArchiveNote
-                  archive={entry.archive}
-                  continuedIn={continuedIn}
-                  onOpenCheck={onOpenCheck}
-                />
-              ) : entry.role === 'follows' ? (
-                <FollowsNote follows={entry.follows} onOpenCheck={onOpenCheck} />
+                <ArchiveNote archive={entry.archive} />
+              ) : entry.role === 'cloned' ? (
+                <CloneNote cloneId={entry.cloneId} onOpenCheck={onOpenCheck} />
               ) : (
                 <p className={`bubble bubble-${entry.role}`}>
                   {entry.role === 'assistant' ? withBold(entry.text) : entry.text}
@@ -249,7 +232,6 @@ export function Chat({
               )}
               {entry.role === 'question' && <EntryTime at={entry.at} side="assistant" />}
               {isMessage(entry) && <EntryTime at={entry.at} side={entry.role} />}
-              <PanelNoteLines notes={panelNotes} after={entry.id} />
             </li>
           ))}
           {running && !streaming && (
@@ -280,10 +262,6 @@ export function Chat({
                 setDraft(`${sample.text} `)
                 if (input.current === null) throw new Error('the input renders with the samples')
                 input.current.focus()
-                if (sample === MARKET_SAMPLE) {
-                  rememberMarketSampleTapped()
-                  setMarketTapped(true)
-                }
               }}
             >
               {sample.label}

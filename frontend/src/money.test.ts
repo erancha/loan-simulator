@@ -7,6 +7,7 @@ import {
   formatShekelRange,
   formatShekels,
   formatTimestamp,
+  exceeds,
   formatYearRange,
   isZero,
   normaliseMoneyInput,
@@ -85,4 +86,11 @@ test('formatTimestamp gives the local day and time', () => {
   const at = new Date(2026, 10, 4, 9, 5, 7)
   expect(formatTimestamp(at.toISOString())).toBe('04.11.2026 09:05:07')
   expect(() => formatTimestamp('not a time')).toThrow(RangeError)
+})
+
+test('exceeds compares decimal strings without rounding', () => {
+  expect(exceeds('1000.01', '1000')).toBe(true)
+  expect(exceeds('1000', '1000.00')).toBe(false)
+  expect(exceeds('999.9', '1000')).toBe(false)
+  expect(exceeds('10000', '9999.99')).toBe(true)
 })

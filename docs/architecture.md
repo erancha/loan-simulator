@@ -19,7 +19,7 @@ flowchart LR
   U((Person)) --> P["Page - frontend/<br/>React, Hebrew"]
   P -->|"HTTP API, event stream"| A
   subgraph AGENT["Agent - backend/"]
-    A["FastAPI and LangGraph loop:<br/>sign-in, profile, checks"] --> DB[(Postgres)]
+    A["FastAPI and LangGraph loop:<br/>sign-in, checks"] --> DB[(Postgres)]
   end
   A -->|"MCP over Streamable HTTP<br/>bearer token"| E
   subgraph ENGINE["Loan engine - mcp-server/"]
@@ -32,23 +32,25 @@ flowchart LR
 ```
 
 The model chooses what to ask and which tool to call; the engine returns the numbers and the
-bounds. The engine knows nothing about people and stores nothing personal: it takes a profile and
-loans and returns results.
+bounds. The engine knows nothing about people and stores nothing personal: it takes loans, and
+for the payment ceiling two monthly figures, and returns results.
 
 ## The loan engine
 
-An MCP server that takes a profile and loans and returns numbers. It stores nothing personal and
-receives no sign-in credentials. It serves Streamable HTTP at `/mcp`, stateless, with JSON
-responses. The agent is its only caller, and the person's Google token stays with the agent
-([sign-in.md](sign-in.md)). The engine is a service of its own so that every figure comes from
-code that any MCP client, MCP Inspector included, can call
-([ADR 0001](adr/0001-loan-engine-is-a-standalone-mcp-server.md)).
+An MCP server that takes loans and returns numbers. It stores nothing personal and receives no
+sign-in credentials. It serves Streamable HTTP at `/mcp`, stateless, with JSON responses. The agent
+is its only caller, and the person's Google token stays with the agent ([sign-in.md](sign-in.md)).
+The engine is a service of its own so that every figure comes from code that any MCP client, MCP
+Inspector included, can call ([ADR 0001](adr/0001-loan-engine-is-a-standalone-mcp-server.md)).
 
 One package, `loan_engine`, in layers whose imports point inwards only, enforced by
 import-linter:
 
-- `domain` holds the loan model, schedules, the historical replay and the policy as pure
-  calculations. Money is `Decimal`; values leave the server rounded to agorot.
+- `domain` holds the loan model, schedules, the historical replay and the term and loan searches
+  (`policy`) as pure calculations. The household ceiling formula sits apart in `affordability`,
+  and an import-linter contract keeps `policy`, `history` and `schedule` from importing it, so no
+  loan figure depends on the person's finances. Money is `Decimal`; values leave the server
+  rounded to agorot.
 - `market` fetches the Bank of Israel rate, the consumer price index and the Bank of Israel average
   consumer-loan rate, aligns them into a monthly history and keeps the last good copy on disk.
 - `service` is the MCP server, configuration, the bearer-token check and startup.
@@ -57,13 +59,19 @@ The tools:
 
 | Tool | Returns |
 |---|---|
-| `assess_affordability` | A monthly payment ceiling and a minimum savings cushion from a profile, with reason codes. |
-| `size_loan` | The loan amount for a goal price, savings and cushion. |
 | `simulate_loan` | A short text summary for the model; the full result, schedule included, as structured content. |
-| `shortest_comfortable_term` | The shortest term, in 6-month steps, at which the suggested tracks' worst-case payment stays within 90% of the ceiling. |
-| `shortest_comfortable_offer_term` | The same search for one real offer, up to the longest term it allows. |
 | `suggest_tracks` | A fixed and a prime track priced from the published average bank rate. |
 | `market_series` | Today's prime and, for the latest months, the prime and the CPI's monthly change. |
+| `propose_term` | The shortest term, in 6-month steps, at which both suggested tracks' first payment is below a limit, else 84 months, with that first payment. |
+| `propose_offer_term` | The same search for one real offer, up to the longest term it allows. |
+| `shortest_comfortable_term` | The shortest term, in 6-month steps up to 84, at which every suggested track's worst-case payment is at or below a ceiling, or with `any_track` at least one; null when none is. |
+| `shortest_comfortable_offer_term` | The same search for one real offer, up to the longest term it allows. |
+| `largest_comfortable_loan` | The largest loan, in whole thousands of shekels, on which at least one suggested track's worst-case payment fits a ceiling at a given term; null when none does. |
+| `assess_affordability` | The payment ceiling from net fixed income and fixed expenses, with reason codes. |
+
+The model calls the first three; the agent's own check code calls the rest, so the term card, the
+ceiling and the guardrail's remedies come from code rather than from the model's choice of tool
+([architecture/agent.md](architecture/agent.md#tools)).
 
 **Resources:** `rates://boi/history`, `rates://cpi/history` and `rates://current`.
 
@@ -82,8 +90,8 @@ A FastAPI service in `backend/`, package `loan_agent`, in layers whose imports p
 enforced by import-linter: `platform → application → ports → domain`, with `adapters`
 implementing the ports and never importing `application` or `platform`.
 
-- `domain` holds the profile, check, option and recommendation types and the errors; it imports no
-  framework.
+- `domain` holds the check (with its loan, term, ceiling and finances), option and recommendation
+  types and the errors; it imports no framework.
 - `ports` are the protocols the inner layers call: the engine, the repositories, the event sink
   and bus, token verification.
 - `application` holds the agent graph (the only inner-layer module that imports `langgraph`
@@ -99,7 +107,9 @@ resumes it days later: state the app must own. LangGraph gives the loop that sta
 conversation is a graph whose state is checkpointed to Postgres after every step, so a check
 resumes after a restart and a failed turn leaves the conversation where it was. The model leads
 the conversation instead of following a scripted flow, at a higher cost per conversation
-([ADR 0003](adr/0003-model-led-agent-with-a-code-guardrail.md)); the chat model is whichever
+([ADR 0003](adr/0003-model-led-agent-with-a-code-guardrail.md)). A check starts from the loan the
+person states, and the payment ceiling, the only household figure, is optional
+([ADR 0010](adr/0010-loan-first-with-an-optional-ceiling.md)). The chat model is whichever
 provider `LLM_MODEL` names, so the model changes without a code change
 ([ADR 0006](adr/0006-model-provider-is-a-setting.md)). People sign in with a Google ID token that
 the agent verifies on every request and never passes on
@@ -172,8 +182,8 @@ disk. That disk holds the database and outlives the instance.
 
 ## Storage
 
-- **Postgres** (the `db` service, volume `db-data`) holds the agent's tables, `profiles`,
-  `checks`, `options`, `recommendations`, `check_events` and `deleted_event_times`, beside
+- **Postgres** (the `db` service, volume `db-data`) holds the agent's tables, `checks`,
+  `options`, `recommendations`, `check_events` and `deleted_event_times`, beside
   LangGraph's checkpoint tables. Alembic migrates the agent's tables, and the same `migrate` run
   brings the checkpoint tables to the installed library's version
   ([ADR 0004](adr/0004-one-postgres-for-records-and-checkpoints.md)). What each table holds is in
@@ -191,7 +201,7 @@ disk. That disk holds the database and outlives the instance.
 |---|---|
 | `mcp-server/` | The loan engine: `src/loan_engine/` in `domain`, `market` and `service` layers, its tests and Dockerfile. |
 | `backend/` | The agent: `src/loan_agent/` in `domain`, `ports`, `application`, `adapters` and `platform` layers, `alembic/` migrations, its tests and the Dockerfile that also builds the page. |
-| `frontend/` | The page: `src/` with `api/`, `auth/`, `shell/`, `check/` and `profile/`, and its Vitest tests beside the components. |
+| `frontend/` | The page: `src/` with `api/`, `auth/`, `shell/`, `check/` and `demo/`, and its Vitest tests beside the components. |
 | `scripts/` | The operational scripts and `common.sh`, which they share ([Development & deployment](development.md#deployment-scripts-scripts)). |
 | `docs/` | This document, the topic documents, `architecture/` for the agent and the page, and `adr/`. |
 | `.github/workflows/` | The CI workflow that runs every target of `scripts/test.sh`. |

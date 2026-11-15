@@ -1,6 +1,6 @@
 -- Deletes every record of one person, or of everyone, so their next sign-in is a first visit:
 -- their checks with the options, recommendations, event logs and LangGraph checkpoints under
--- them, their profile, and the kept times of deleted checks, which the message limit counts.
+-- them, and the kept times of deleted checks, which the message limit counts.
 -- -v person=<account id> names the person; -v person='*' means everyone. One transaction, so a
 -- failure deletes nothing. sql-helper.sh --reset and --reset-all run this file.
 BEGIN;
@@ -13,6 +13,5 @@ DELETE FROM checkpoint_writes WHERE thread_id IN (SELECT id FROM gone);
 DELETE FROM checkpoint_blobs WHERE thread_id IN (SELECT id FROM gone);
 DELETE FROM checkpoints WHERE thread_id IN (SELECT id FROM gone);
 DELETE FROM checks WHERE id IN (SELECT id FROM gone);
-DELETE FROM profiles WHERE :'person' IN ('*', user_id);
 DELETE FROM deleted_event_times WHERE :'person' IN ('*', user_id);
 COMMIT;

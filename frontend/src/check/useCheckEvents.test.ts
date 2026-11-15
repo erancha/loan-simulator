@@ -95,10 +95,10 @@ test("a stored frame's time is lifted out of its data onto the entry", () => {
   act(() => {
     const source = FakeEventSource.last()
     source.emit('message.user', JSON.stringify({ text: 'שלום', at }), '1')
-    source.emit('goal.set', JSON.stringify({ purpose: 'רכב', price: '50000', at }), '2')
+    source.emit('loan.set', JSON.stringify({ purpose: 'רכב', amount: '50000', at }), '2')
   })
   expect(result.current.state.messages).toEqual([
     { id: 'u-1', role: 'user', text: 'שלום', complete: true, at },
   ])
-  expect(result.current.state.goal).toEqual({ purpose: 'רכב', price: '50000' })
+  expect(result.current.state.loan).toEqual({ purpose: 'רכב', amount: '50000' })
 })

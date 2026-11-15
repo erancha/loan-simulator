@@ -1,6 +1,6 @@
 # 0003. A model-led LangGraph agent, with a guardrail in code
 
-- Status: Accepted
+- Status: Superseded by 0010
 - Date: 2026-10-28
 
 ## Context

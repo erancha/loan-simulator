@@ -8,9 +8,10 @@
 import type {
   ChartShown,
   CheckArchived,
+  CeilingSource,
   CheckEvent,
-  CheckFollows,
-  Goal,
+  Finances,
+  LoanRequest,
   OptionSaved,
   Question,
   RecommendationPresented,
@@ -50,14 +51,14 @@ export interface ArchiveEntry {
   archive: CheckArchived
 }
 
-/** The note that opens a follow-up check, naming the archived check it replaces. */
-export interface FollowsEntry {
+/** The note that hands a check over to its copy, where the variant goes on. */
+export interface CloneEntry {
   id: string
-  role: 'follows'
-  follows: CheckFollows
+  role: 'cloned'
+  cloneId: string
 }
 
-export type ChatEntry = ChatMessage | QuestionEntry | ChartEntry | ArchiveEntry | FollowsEntry
+export type ChatEntry = ChatMessage | QuestionEntry | ChartEntry | ArchiveEntry | CloneEntry
 
 /** A user message or a reply; a question and a chart are entries of their own kinds. */
 export function isMessage(entry: ChatEntry): entry is ChatMessage {
@@ -77,9 +78,12 @@ export interface CheckState {
   recommendation: RecommendationPresented | null
   /** Ids of options saved after the latest recommendation, excluding the ones it names. */
   optionsSinceRecommendation: string[]
-  goal: Goal | null
-  /** How many `profile.updated` events were applied; each tells the profile panel to refetch. */
-  profileVersion: number
+  loan: LoanRequest | null
+  /** The term the person confirmed, in months. */
+  termMonths: number | null
+  /** The payment ceiling the check holds, with where it came from; null while it has none. */
+  ceiling: { amount: string; source: CeilingSource } | null
+  finances: Finances
   turn: 'idle' | 'running'
   /** How many times a running turn has gone idle in this stream, replay included. */
   turnsEnded: number
@@ -87,8 +91,6 @@ export interface CheckState {
   failure: string | null
   /** Highest stored seq applied. */
   lastSeq: number
-  /** The check an archived check's conversation went on in. */
-  continuedIn: string | null
 }
 
 export const initialState: CheckState = {
@@ -96,13 +98,14 @@ export const initialState: CheckState = {
   options: new Map(),
   recommendation: null,
   optionsSinceRecommendation: [],
-  goal: null,
-  profileVersion: 0,
+  loan: null,
+  termMonths: null,
+  ceiling: null,
+  finances: { net_fixed_income: null, fixed_expenses: null },
   turn: 'idle',
   turnsEnded: 0,
   failure: null,
   lastSeq: 0,
-  continuedIn: null,
 }
 
 function upsertAssistant(
@@ -157,13 +160,23 @@ function apply(state: CheckState, event: CheckEvent): CheckState {
           event.at,
         ),
       }
-    case 'profile.updated':
+    case 'loan.set':
+      return { ...state, loan: event.data }
+    case 'term.set':
+      return { ...state, termMonths: event.data.term_months }
+    case 'ceiling.set':
       return {
         ...state,
-        profileVersion: state.profileVersion + 1,
+        ceiling: { amount: event.data.payment_ceiling, source: event.data.ceiling_source },
       }
-    case 'goal.set':
-      return { ...state, goal: event.data }
+    case 'finances.updated': {
+      const { finances, payment_ceiling, ceiling_source } = event.data
+      const ceiling =
+        payment_ceiling === null || ceiling_source === null
+          ? null
+          : { amount: payment_ceiling, source: ceiling_source }
+      return { ...state, finances, ceiling }
+    }
     case 'option.saved': {
       const id = event.data.option_id
       const named = [state.recommendation?.preferred, state.recommendation?.alternative]
@@ -226,18 +239,16 @@ function apply(state: CheckState, event: CheckEvent): CheckState {
           { id: `x-${event.seq}`, role: 'archived', archive: event.data },
         ],
       }
-    case 'check.continued':
-      return { ...state, continuedIn: event.data.check_id }
-    case 'check.restored':
-      return { ...state, messages: state.messages.filter((entry) => entry.role !== 'archived') }
-    case 'check.follows':
+    case 'check.cloned':
       return {
         ...state,
         messages: [
           ...state.messages,
-          { id: `f-${event.seq}`, role: 'follows', follows: event.data },
+          { id: `c-${event.seq}`, role: 'cloned', cloneId: event.data.clone_id },
         ],
       }
+    case 'check.restored':
+      return { ...state, messages: state.messages.filter((entry) => entry.role !== 'archived') }
   }
 }
 

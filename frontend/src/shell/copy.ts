@@ -14,7 +14,6 @@ export const DELETE_WHILE_ANSWERING = 'אי אפשר למחוק בדיקה בז�
 export const ARCHIVE_WHILE_ANSWERING =
   'אי אפשר להעביר בדיקה לארכיון בזמן שהעוזר עונה. נסו שוב בעוד רגע.'
 export const RECOMMENDATION_READY = 'המלצה מוכנה'
-export const STALE_PROFILE = 'חושב לפי פרופיל קודם'
 export const ARCHIVED = 'בארכיון'
 export const CHECKS_HEADING = 'הבדיקות שלי'
 export const TABS_LABEL = 'חלקי העמוד'
@@ -22,7 +21,7 @@ export const TABS_LABEL = 'חלקי העמוד'
 export const TABS = [
   { pane: 'chat', label: 'שיחה' },
   { pane: 'card', label: 'המלצה' },
-  { pane: 'side', label: 'פרופיל' },
+  { pane: 'side', label: 'בדיקות' },
 ] as const
 
 export const loadFailed = (message: string) => `לא הצלחנו לטעון את הבדיקות: ${message}`

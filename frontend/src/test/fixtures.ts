@@ -5,10 +5,10 @@
 import type {
   ChartShown,
   CheckEvent,
-  Goal,
+  Finances,
+  LoanRequest,
   LoanSimulation,
   OptionSaved,
-  ProfileView,
   Question,
   RecommendationPresented,
   Track,
@@ -67,33 +67,38 @@ export function chartShown(seq: number, chart: ChartShown = cpiChart): EventOf<'
   return { type: 'chart.shown', data: chart, seq }
 }
 
-export const profileView: ProfileView = {
-  profile: {
-    net_fixed_income: '8300',
-    variable_income: '5000',
-    variable_income_minimum: '1000',
-    fixed_expenses: '4500',
-    existing_loan_payments: '0',
-    savings: '15000',
-  },
-  missing: [],
-}
-
-export const goal: Goal = {
+export const loan: LoanRequest = {
   purpose: 'רכב',
-  price: '55000',
+  amount: '29000',
 }
 
-export const profileUpdated: EventOf<'profile.updated'> = {
-  type: 'profile.updated',
-  data: profileView,
-  seq: 2,
+export const finances: Finances = {
+  net_fixed_income: '9300',
+  fixed_expenses: '4500',
 }
 
-export const goalSet: EventOf<'goal.set'> = {
-  type: 'goal.set',
-  data: goal,
+export const loanSet: EventOf<'loan.set'> = {
+  type: 'loan.set',
+  data: loan,
   seq: 3,
+}
+
+export const termSet: EventOf<'term.set'> = {
+  type: 'term.set',
+  data: { term_months: 36 },
+  seq: 3,
+}
+
+export const ceilingSet: EventOf<'ceiling.set'> = {
+  type: 'ceiling.set',
+  data: { payment_ceiling: '1900', ceiling_source: 'stated' },
+  seq: 3,
+}
+
+export const financesUpdated: EventOf<'finances.updated'> = {
+  type: 'finances.updated',
+  data: { finances, missing: [], payment_ceiling: '1900', ceiling_source: 'finances' },
+  seq: 2,
 }
 
 const RATES_AS_OF = '2026-10-28'
@@ -104,6 +109,7 @@ interface OptionSpec {
   source: OptionSaved['source']
   lender: string | null
   offer_date: string | null
+  max_term_months?: number
   track: Track
   simulation: Omit<TrackSimulation, 'schedule' | 'balloon_due'> & {
     balloon_due?: string | null
@@ -131,6 +137,7 @@ function savedOption(spec: OptionSpec): EventOf<'option.saved'> {
     source: spec.source,
     lender: spec.lender,
     offer_date: spec.offer_date,
+    max_term_months: spec.max_term_months ?? null,
     figures: {
       first_payment: track.first_payment,
       peak_payment: track.max_base_payment,
@@ -256,18 +263,10 @@ export const recommendationPrime: EventOf<'recommendation.presented'> = {
   type: 'recommendation.presented',
   seq: 6,
   data: {
-    bounds: {
-      payment_ceiling: '1900.00',
-      min_cushion: '9000.00',
-      counted_income: '9300',
-      reasons: ['variable_income_minimum_counted', 'ceiling_by_disposable_income'],
-    },
-    sizing: {
-      loan_amount: '29000.00',
-      savings_used: '6000.00',
-      cushion_kept: '9000.00',
-      spare_savings: '0.00',
-    },
+    loan_amount: '29000.00',
+    payment_ceiling: '1900.00',
+    ceiling_source: 'stated',
+    checked: true,
     preferred: optionPrime36.data,
     alternative: optionFixed36.data,
     reasoning: 'ריבית פריים עם מרווח שלילי זולה יותר, והתשלום הגרוע ביותר נשאר מתחת לתקרה.',
@@ -275,39 +274,12 @@ export const recommendationPrime: EventOf<'recommendation.presented'> = {
 }
 
 /** The card's decision sentence for `recommendationPrime`. */
-export const REFERENCE_DECISION =
-  'הלוואה של 29,000 ₪ ל-36 חודשים, כ-904 ₪ בחודש, ו-9,000 ₪ נשארים בצד לביטחון.'
-
-/** The profile an archived check of the tests was recommended from. */
-export const archivedProfile: ProfileView['profile'] = {
-  savings: '35000',
-  net_fixed_income: '8000',
-  variable_income: '5000',
-  variable_income_minimum: '2000',
-  fixed_expenses: '6000',
-  existing_loan_payments: '0',
-}
+export const REFERENCE_DECISION = 'הלוואה של 29,000 ₪ ל-36 חודשים, כ-904 ₪ בחודש.'
 
 export function checkArchived(seq: number): EventOf<'check.archived'> {
   return {
     type: 'check.archived',
-    data: {
-      previous_profile: archivedProfile,
-      changes: [{ field: 'savings', from: '35000', to: '23000' }],
-      archived_at: '2026-11-14T09:30:00+00:00',
-    },
-    seq,
-  }
-}
-
-export function checkContinued(seq: number, check_id: string): EventOf<'check.continued'> {
-  return { type: 'check.continued', data: { check_id }, seq }
-}
-
-export function checkFollows(seq: number, check_id: string): EventOf<'check.follows'> {
-  return {
-    type: 'check.follows',
-    data: { check_id, changes: [{ field: 'savings', from: '35000', to: '23000' }] },
+    data: { archived_at: '2026-11-14T09:30:00+00:00' },
     seq,
   }
 }

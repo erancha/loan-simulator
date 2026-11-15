@@ -8,11 +8,10 @@ from datetime import timedelta
 from decimal import Decimal
 from itertools import pairwise
 from typing import Any
-from unittest.mock import ANY
 
 import pytest
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.outputs import ChatGenerationChunk
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.checkpoint.memory import InMemorySaver
@@ -27,15 +26,17 @@ from fakes import (
     InMemoryCheckEventStore,
     InMemoryCheckRepository,
     InMemoryOptionRepository,
-    InMemoryProfileRepository,
     InMemoryRecommendationRepository,
     ScriptedChatModel,
 )
 from loan_agent.adapters.memory_bus import InMemoryEventBus
-from loan_agent.application.agent_graph import TURN_STEP_LIMIT, build_agent_graph
+from loan_agent.application.agent_graph import (
+    SAME_CALLS_LIMIT,
+    TURN_STEP_LIMIT,
+    build_agent_graph,
+)
 from loan_agent.application.check_tools import ToolDeps
 from loan_agent.application.event_sink import CheckEventSink, check_channel
-from loan_agent.application.profile_saving import save_profile
 from loan_agent.domain.errors import (
     CheckArchivedError,
     CheckNotFoundError,
@@ -43,9 +44,10 @@ from loan_agent.domain.errors import (
     TurnConflictError,
     TurnLimitError,
 )
-from loan_agent.domain.models import Check, Goal, Option, Profile, User
+from loan_agent.domain.models import Check, Finances, LoanRequest, Option, Recommendation, User
 from loan_agent.platform.check_runner import (
     FAILURE_MESSAGE,
+    TERM_CARD_FOR_CEILING,
     TOOL_CALL_OUTCOME_UNKNOWN,
     CheckRunner,
 )
@@ -57,14 +59,8 @@ OTHER_PERSON = User("2002", "omer@example.com", "Omer")
 TURN_LIMIT = 2
 WINDOW = timedelta(hours=24)
 REPLY = "שלום, נתחיל בהכנסה החודשית שלך"
-GOAL = Goal("רכב", Decimal(55000))
-COMPLETE_PROFILE = Profile(
-    savings=Decimal(35000),
-    net_fixed_income=Decimal(8000),
-    variable_income=Decimal(0),
-    fixed_expenses=Decimal(6000),
-    existing_loan_payments=Decimal(0),
-)
+LOAN = LoanRequest("רכב", Decimal(55000))
+FINANCES = Finances(Decimal(8000), Decimal(6000))
 
 
 @dataclass
@@ -89,7 +85,6 @@ def world() -> World:
     recommendations = InMemoryRecommendationRepository()
     checks.option_store, checks.recommendation_store = options, recommendations
     deps = ToolDeps(
-        profiles=InMemoryProfileRepository(clock),
         checks=checks,
         options=options,
         recommendations=recommendations,
@@ -116,9 +111,9 @@ def runner(
     return CheckRunner(
         graph,
         world.checks,
-        world.deps.profiles,
         world.store,
         world.deps.sink,
+        world.deps,
         turn_limit=TURN_LIMIT,
         turn_limit_overrides={} if turn_limit_overrides is None else turn_limit_overrides,
         window=WINDOW,
@@ -136,13 +131,9 @@ def engine_tool(run: Any) -> BaseTool:
     )
 
 
-def calls_size_loan(text: str = "", call_id: str = "call-size") -> AIMessage:
-    return AIMessage(
-        content=text,
-        tool_calls=[
-            {"name": "size_loan", "args": {"goal_price": "1"}, "id": call_id, "type": "tool_call"}
-        ],
-    )
+def calls_size_loan(text: str = "", call_id: str = "call-size", goal_price: str = "1") -> AIMessage:
+    call = {"name": "size_loan", "args": {"goal_price": goal_price}, "id": call_id}
+    return AIMessage(content=text, tool_calls=[{**call, "type": "tool_call"}])
 
 
 async def stored(world: World, check_id: str) -> list[tuple[str, dict[str, Any]]]:
@@ -164,7 +155,7 @@ async def test_send_emits_user_message_and_runs_turn(world: World) -> None:
     await checks.send(PERSON, check.id, "אני רוצה לקנות רכב")
     await checks.drain()
 
-    assert check == Check(check.id, PERSON.id, NOW, None, None)
+    assert check == Check(check.id, PERSON.id, NOW, None, None, None, None, Finances())
     assert await world.checks.get(PERSON.id, check.id) == check
     events = await stored(world, check.id)
     assert [type for type, _ in events] == [
@@ -399,13 +390,39 @@ async def test_engine_failure_mid_turn_emits_turn_failed_and_check_stays_usable(
     assert last == ("turn.status", {"status": "idle"})
 
 
+async def test_model_that_repeats_the_same_call_fails_the_turn_at_the_third(world: World) -> None:
+    ran = 0
+
+    async def sized() -> str:
+        nonlocal ran
+        ran += 1
+        return "loan_amount: 80000"
+
+    repeated = [calls_size_loan(call_id=f"call-{index}") for index in range(6)]
+    model = ScriptedChatModel(replies=repeated)
+    checks = runner(world, model, [engine_tool(sized)])
+    check = await checks.create(PERSON)
+
+    await checks.send(PERSON, check.id, "כמה ללוות?")
+    await checks.drain()
+
+    assert (len(model.received), ran) == (SAME_CALLS_LIMIT + 1, SAME_CALLS_LIMIT)
+    assert (await stored(world, check.id))[-2:] == [
+        ("turn.failed", {"message": FAILURE_MESSAGE}),
+        ("turn.status", {"status": "idle"}),
+    ]
+
+
 async def test_model_that_never_stops_calling_tools_fails_the_turn_at_the_step_limit(
     world: World,
 ) -> None:
     async def sized() -> str:
         return "loan_amount: 80000"
 
-    endless = [calls_size_loan(call_id=f"call-{index}") for index in range(TURN_STEP_LIMIT)]
+    endless = [
+        calls_size_loan(call_id=f"call-{index}", goal_price=str(index))
+        for index in range(TURN_STEP_LIMIT)
+    ]
     model = ScriptedChatModel(replies=endless)
     checks = runner(world, model, [engine_tool(sized)])
     check = await checks.create(PERSON)
@@ -510,6 +527,7 @@ async def test_saved_sibling_of_a_failed_call_is_reported_as_possibly_done(world
     checks = runner(world, model, [engine_tool(fails_after_the_save)])
     check = await checks.create(PERSON)
     check_ids.append(check.id)
+    await world.checks.set_loan(check.id, LoanRequest(None, Decimal(80000)))
     await checks.send(PERSON, check.id, "תשמור את המסלול")
     await checks.drain()
 
@@ -539,8 +557,8 @@ async def test_fail_interrupted_ends_turns_a_stopped_process_left_running(world:
     await world.store.append(finished.id, "turn.status", {"status": "idle"})
     await stopped.send(PERSON, interrupted.id, "כמה ללוות?")
     await started.wait()
-    # The turn stored an event after it started, as a profile save mid-turn does.
-    await world.store.append(interrupted.id, "profile.updated", {})
+    # The turn stored an event after it started, as a saved loan mid-turn does.
+    await world.store.append(interrupted.id, "loan.set", {})
     await stopped.aclose()
 
     restarted = runner(world, ScriptedChatModel(replies=[]))
@@ -606,30 +624,20 @@ async def test_aclose_cancels_running_turns(world: World) -> None:
     assert [type for type, _ in await stored(world, check.id)] == ["message.user", "turn.status"]
 
 
-def calls_update_profile(**fields: str) -> AIMessage:
-    return AIMessage(
-        content="",
-        tool_calls=[
-            {"name": "update_profile", "args": fields, "id": "call-profile", "type": "tool_call"}
-        ],
-    )
-
-
 async def recommended_check(world: World, checks: CheckRunner) -> Check:
-    """A check with a goal and one saved option, recommended from the person's profile as saved
-    at NOW."""
-    profiles = world.deps.profiles
-    assert isinstance(profiles, InMemoryProfileRepository)
-    profiles.rows[PERSON.id] = (COMPLETE_PROFILE, NOW)
+    """A check with a loan, a term, a derived ceiling, finances and one saved option."""
     check = await checks.create(PERSON)
-    await world.checks.set_goal(check.id, GOAL)
-    await world.checks.snapshot_profile(check.id, NOW)
+    await world.checks.set_loan(check.id, LOAN)
+    await world.checks.set_term(check.id, 48)
+    await world.checks.set_finances(check.id, FINANCES)
+    await world.checks.set_ceiling(check.id, Decimal("4700.00"), "finances")
     await world.options.add(
         Option(
             "option-1",
             check.id,
             {"tracks": [PRIME_TRACK]},
             "offer",
+            None,
             None,
             None,
             PRIME_SIMULATION.figures,
@@ -650,14 +658,33 @@ async def test_clone_copies_the_check_its_log_and_its_conversation(world: World)
     clone = await checks.clone(PERSON, source.id)
 
     assert clone.id != source.id
-    assert (clone.goal, clone.profile_snapshot_at, clone.archived_at) == (GOAL, NOW, None)
+    assert (clone.loan, clone.term_months, clone.payment_ceiling, clone.ceiling_source) == (
+        LOAN,
+        48,
+        Decimal("4700.00"),
+        "finances",
+    )
+    assert (clone.finances, clone.archived_at) == (FINANCES, None)
     assert clone.created_at == NOW + timedelta(minutes=1)
     assert [o.id for o in await world.options.list(clone.id)] == ["option-1"]
-    assert await stored(world, clone.id) == await stored(world, source.id)
+    assert await stored(world, source.id) == [
+        *await stored(world, clone.id),
+        ("check.cloned", {"clone_id": clone.id}),
+    ]
     await checks.send(PERSON, clone.id, "ממשיכים")
     await checks.drain()
     texts = [m.text for m in model.received[1] if isinstance(m, HumanMessage | AIMessage)]
     assert texts == ["שלום", REPLY, "ממשיכים"]
+
+
+async def test_a_clone_of_a_clones_source_does_not_copy_the_earlier_handoff(world: World) -> None:
+    checks = runner(world, ScriptedChatModel(replies=[]))
+    source = await recommended_check(world, checks)
+    await checks.clone(PERSON, source.id)
+
+    second = await checks.clone(PERSON, source.id)
+
+    assert "check.cloned" not in [type for type, _ in await stored(world, second.id)]
 
 
 async def test_a_clones_copied_messages_use_none_of_the_persons_cap(world: World) -> None:
@@ -681,51 +708,6 @@ async def test_a_message_to_an_archived_check_is_refused(world: World) -> None:
         await checks.send(PERSON, check.id, "שלום")
 
 
-async def test_a_profile_change_in_a_recommended_check_continues_in_a_new_check(
-    world: World,
-) -> None:
-    model = ScriptedChatModel(
-        replies=[calls_update_profile(savings="23000"), AIMessage("ההמלצה החדשה")]
-    )
-    checks = runner(world, model)
-    archived = await recommended_check(world, checks)
-    world.clock.value = NOW + timedelta(minutes=1)
-
-    await checks.send(PERSON, archived.id, "טעיתי, כסף זמין 23,000")
-    await checks.drain()
-
-    assert (await world.checks.get(PERSON.id, archived.id)).archived_at == world.clock.value
-    events = await stored(world, archived.id)
-    assert [type for type, _ in events][-4:] == [
-        "check.archived",
-        "profile.updated",
-        "check.continued",
-        "turn.status",
-    ]
-    continued_id = events[-2][1]["check_id"]
-    continued = await world.checks.get(PERSON.id, continued_id)
-    assert (continued.goal, continued.profile_snapshot_at, continued.archived_at) == (
-        GOAL,
-        None,
-        None,
-    )
-    assert await stored(world, continued_id) == [
-        (
-            "check.follows",
-            {
-                "check_id": archived.id,
-                "changes": [{"field": "savings", "from": "35000", "to": "23000"}],
-            },
-        ),
-        ("goal.set", {"purpose": GOAL.purpose, "price": str(GOAL.price)}),
-        ("message.user", {"text": "טעיתי, כסף זמין 23,000"}),
-        ("turn.status", {"status": "running"}),
-        ("message.assistant", {"message_id": ANY, "text": "ההמלצה החדשה"}),
-        ("turn.status", {"status": "idle"}),
-    ]
-    assert len(model.received) == 2
-
-
 async def test_the_person_archives_a_check_and_restores_it(world: World) -> None:
     checks = runner(world, ScriptedChatModel(replies=[AIMessage(REPLY)]))
     check = await recommended_check(world, checks)
@@ -737,7 +719,7 @@ async def test_the_person_archives_a_check_and_restores_it(world: World) -> None
     assert await stored(world, check.id) == [
         (
             "check.archived",
-            {"previous_profile": None, "changes": [], "archived_at": world.clock.value.isoformat()},
+            {"archived_at": world.clock.value.isoformat()},
         )
     ]
     with pytest.raises(CheckArchivedError):
@@ -751,21 +733,241 @@ async def test_the_person_archives_a_check_and_restores_it(world: World) -> None
     await checks.drain()
 
 
-async def test_a_check_archived_by_a_profile_change_is_not_restored(world: World) -> None:
+async def test_a_check_that_is_not_archived_is_not_restored(world: World) -> None:
     checks = runner(world, ScriptedChatModel(replies=[]))
-    check = await recommended_check(world, checks)
-    world.clock.value = NOW + timedelta(minutes=1)
-    await save_profile(
-        PERSON.id,
-        {"savings": "23000"},
-        world.deps.profiles,
-        world.checks,
-        world.deps.sink,
-        world.clock,
-    )
+    open_check = await checks.create(PERSON)
 
     with pytest.raises(CheckNotRestorableError):
-        await checks.restore(PERSON, check.id)
-    open_check = await checks.create(PERSON)
-    with pytest.raises(CheckNotRestorableError):
         await checks.restore(PERSON, open_check.id)
+
+
+async def test_save_finances_stores_the_figures_and_the_derived_ceiling(world: World) -> None:
+    checks = runner(world, ScriptedChatModel(replies=[]))
+    check = await checks.create(PERSON)
+
+    saved = await checks.save_finances(PERSON, check.id, {"net_fixed_income": "8000"})
+    assert (saved.finances, saved.payment_ceiling) == (Finances(Decimal(8000), None), None)
+    saved = await checks.save_finances(PERSON, check.id, {"fixed_expenses": "6000"})
+
+    assert (saved.finances, saved.payment_ceiling, saved.ceiling_source) == (
+        FINANCES,
+        Decimal("4700.00"),
+        "finances",
+    )
+    assert [type for type, _ in await stored(world, check.id)] == [
+        "finances.updated",
+        "finances.updated",
+    ]
+
+
+async def test_saves_from_the_page_are_refused_for_an_archived_or_busy_check(world: World) -> None:
+    started = asyncio.Event()
+
+    async def hangs() -> str:
+        started.set()
+        await asyncio.Event().wait()
+        return "never"
+
+    checks = runner(world, ScriptedChatModel(replies=[calls_size_loan()]), [engine_tool(hangs)])
+    archived = await checks.create(PERSON)
+    await world.checks.archive(archived.id, NOW)
+    busy = await checks.create(PERSON)
+    await checks.send(PERSON, busy.id, "כמה ללוות?")
+    await started.wait()
+
+    with pytest.raises(CheckArchivedError):
+        await checks.save_finances(PERSON, archived.id, {"fixed_expenses": "1"})
+    with pytest.raises(TurnConflictError):
+        await checks.save_finances(PERSON, busy.id, {"fixed_expenses": "1"})
+    with pytest.raises(CheckNotFoundError):
+        await checks.save_finances(OTHER_PERSON, busy.id, {"fixed_expenses": "1"})
+    with pytest.raises(CheckArchivedError):
+        await checks.save_term(PERSON, archived.id, 60, None)
+    with pytest.raises(TurnConflictError):
+        await checks.save_term(PERSON, busy.id, 60, None)
+    await checks.aclose()
+
+
+MARKET_SAMPLE = "מהי ריבית הפריים הנוכחית"
+
+
+async def test_the_market_sample_is_answered_from_the_data_with_no_model_call(world: World) -> None:
+    model = ScriptedChatModel(replies=[AIMessage(REPLY)])
+    checks = runner(world, model)
+    check = await checks.create(PERSON)
+
+    await checks.send_market_sample(PERSON, check.id, MARKET_SAMPLE)
+    await checks.drain()
+
+    events = await stored(world, check.id)
+    assert [type for type, _ in events] == [
+        "message.user",
+        "turn.status",
+        "message.assistant",
+        "chart.shown",
+        "chart.shown",
+        "turn.status",
+    ]
+    assert events[2][1]["text"].startswith("ריבית הפריים נכון ל-")
+    assert [data["series"] for type, data in events if type == "chart.shown"] == ["prime", "cpi"]
+    assert world.engine.calls == [("market_series", {"months": 60})]
+    assert model.received == []
+
+
+async def test_the_next_turn_reads_the_market_answer(world: World) -> None:
+    model = ScriptedChatModel(replies=[AIMessage(REPLY)])
+    checks = runner(world, model)
+    check = await checks.create(PERSON)
+    await checks.send_market_sample(PERSON, check.id, MARKET_SAMPLE)
+    await checks.drain()
+
+    await checks.send(PERSON, check.id, "ומה היה ב-2022?")
+    await checks.drain()
+
+    said = [message for message in model.received[0] if not isinstance(message, SystemMessage)]
+    assert [type(message) for message in said] == [HumanMessage, AIMessage, HumanMessage]
+    assert said[0].content == MARKET_SAMPLE
+    assert str(said[1].content).startswith("ריבית הפריים נכון ל-")
+
+
+async def test_the_market_sample_counts_as_a_message_and_keeps_the_send_guards(
+    world: World,
+) -> None:
+    checks = runner(world, ScriptedChatModel(replies=[]))
+    check = await checks.create(PERSON)
+    for _ in range(TURN_LIMIT):
+        await checks.send_market_sample(PERSON, check.id, MARKET_SAMPLE)
+        await checks.drain()
+
+    with pytest.raises(TurnLimitError):
+        await checks.send_market_sample(PERSON, check.id, MARKET_SAMPLE)
+    await world.checks.archive(check.id, NOW)
+    with pytest.raises(CheckArchivedError):
+        await checks.send_market_sample(PERSON, check.id, MARKET_SAMPLE)
+
+
+async def test_an_engine_failure_fails_the_market_answer(world: World) -> None:
+    world.engine.market_error = EngineError("engine unreachable")
+    checks = runner(world, ScriptedChatModel(replies=[]))
+    check = await checks.create(PERSON)
+
+    await checks.send_market_sample(PERSON, check.id, MARKET_SAMPLE)
+    await checks.drain()
+
+    assert (await stored(world, check.id))[-2:] == [
+        ("turn.failed", {"message": FAILURE_MESSAGE}),
+        ("turn.status", {"status": "idle"}),
+    ]
+
+
+CEILING_QUESTION_DATA = {
+    "question": {
+        "field": "payment_ceiling",
+        "offer_clone": False,
+        "text": None,
+        "choices": None,
+    },
+    "lead_in": None,
+}
+
+
+async def unchecked_check(world: World, checks: CheckRunner) -> Check:
+    """A check with a loan and a recommendation made without a ceiling."""
+    check = await checks.create(PERSON)
+    await world.checks.set_loan(check.id, LOAN)
+    await world.deps.recommendations.save(
+        Recommendation(check.id, "option-1", None, "זול יותר", LOAN.amount, None, NOW)
+    )
+    return check
+
+
+async def test_a_turn_leaving_a_recommendation_without_a_ceiling_ends_with_its_question(
+    world: World,
+) -> None:
+    model = ScriptedChatModel(replies=[AIMessage(REPLY), AIMessage(REPLY)])
+    checks = runner(world, model)
+    check = await unchecked_check(world, checks)
+
+    await checks.send(PERSON, check.id, "שלום")
+    await checks.drain()
+
+    events = await stored(world, check.id)
+    assert events[-2:] == [
+        ("question.asked", CEILING_QUESTION_DATA),
+        ("turn.status", {"status": "idle"}),
+    ]
+    await checks.send(PERSON, check.id, "2,000")
+    await checks.drain()
+    said = [m for m in model.received[1] if isinstance(m, AIMessage)]
+    assert "payment_ceiling" in str(said[-1].content)
+    asked = [e for e in await stored(world, check.id) if e[0] == "question.asked"]
+    assert len(asked) == 1
+
+
+async def test_no_ceiling_question_with_a_ceiling_or_without_a_recommendation(
+    world: World,
+) -> None:
+    checks = runner(world, ScriptedChatModel(replies=[AIMessage(REPLY), AIMessage(REPLY)]))
+    with_ceiling = await unchecked_check(world, checks)
+    await world.checks.set_ceiling(with_ceiling.id, Decimal(2000), "stated")
+    unrecommended = await checks.create(PERSON)
+
+    for check in (with_ceiling, unrecommended):
+        await checks.send(PERSON, check.id, "שלום")
+        await checks.drain()
+        assert "question.asked" not in [type for type, _ in await stored(world, check.id)]
+
+
+async def test_a_turn_ending_with_the_models_question_is_left_alone(world: World) -> None:
+    asks = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "ask",
+                "args": {"question": {"field": "net_fixed_income"}, "lead_in": None},
+                "id": "call-ask",
+                "type": "tool_call",
+            }
+        ],
+    )
+    checks = runner(world, ScriptedChatModel(replies=[asks]))
+    check = await unchecked_check(world, checks)
+
+    await checks.send(PERSON, check.id, "שלום")
+    await checks.drain()
+
+    asked = [data for type, data in await stored(world, check.id) if type == "question.asked"]
+    assert [question["question"]["field"] for question in asked] == ["net_fixed_income"]
+
+
+async def test_a_ceiling_on_the_term_card_is_saved_and_brings_a_card_for_it(world: World) -> None:
+    model = ScriptedChatModel(replies=[AIMessage(REPLY)])
+    checks = runner(world, model)
+    check = await checks.create(PERSON)
+    await world.checks.set_loan(check.id, LoanRequest(None, Decimal(60000)))
+    world.engine.comfortable_terms = 72
+    world.engine.simulations = [PRIME_SIMULATION, PRIME_SIMULATION]
+
+    await checks.send_term_ceiling(PERSON, check.id, "החזר חודשי מרבי: 1,000 ₪", Decimal(1000))
+    await checks.drain()
+
+    saved = await world.checks.get(PERSON.id, check.id)
+    assert (saved.payment_ceiling, saved.ceiling_source) == (Decimal(1000), "stated")
+    events = await stored(world, check.id)
+    assert [type for type, _ in events] == [
+        "message.user",
+        "turn.status",
+        "ceiling.set",
+        "question.asked",
+        "turn.status",
+    ]
+    assert events[3][1]["question"]["term_months"] == 72
+    assert model.received == []
+
+    await checks.send(PERSON, check.id, "אישור: 72 חודשים")
+    await checks.drain()
+    said = [m for m in model.received[0] if isinstance(m, HumanMessage | AIMessage)]
+    assert [str(m.content) for m in said][-3:-1] == [
+        "החזר חודשי מרבי: 1,000 ₪",
+        TERM_CARD_FOR_CEILING,
+    ]

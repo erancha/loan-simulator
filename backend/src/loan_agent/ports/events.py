@@ -17,16 +17,17 @@ MESSAGE_DELTA = "message.delta"
 MESSAGE_ASSISTANT = "message.assistant"
 TURN_STATUS = "turn.status"
 TURN_FAILED = "turn.failed"
-PROFILE_UPDATED = "profile.updated"
-GOAL_SET = "goal.set"
+LOAN_SET = "loan.set"
+TERM_SET = "term.set"
+CEILING_SET = "ceiling.set"
+FINANCES_UPDATED = "finances.updated"
 OPTION_SAVED = "option.saved"
 RECOMMENDATION_PRESENTED = "recommendation.presented"
 QUESTION_ASKED = "question.asked"
 CHART_SHOWN = "chart.shown"
 CHECK_ARCHIVED = "check.archived"
-CHECK_CONTINUED = "check.continued"
-CHECK_FOLLOWS = "check.follows"
 CHECK_RESTORED = "check.restored"
+CHECK_CLONED = "check.cloned"
 
 
 @runtime_checkable
@@ -37,6 +38,10 @@ class EventSink(Protocol):
 
     async def publish_live(self, check_id: str, type: str, data: Mapping[str, object]) -> None:
         """Publishes the event to open pages without storing it."""
+        ...
+
+    async def latest(self, check_id: str, type: str) -> Mapping[str, object] | None:
+        """The data of the check's latest stored event of this type; None when it has none."""
         ...
 
 

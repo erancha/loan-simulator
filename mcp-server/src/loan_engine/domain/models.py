@@ -2,7 +2,7 @@
 
 - Track: one slice of a loan with its own rate, term and repayment method
 - Loan: one or more tracks borrowed together
-- Profile: the borrower's monthly income and obligations
+- Profile: the borrower's monthly income and fixed expenses
 """
 
 from decimal import Decimal
@@ -95,16 +95,4 @@ class Loan(_Model):
 
 class Profile(_Model):
     net_fixed_income: Decimal = Field(ge=0)
-    variable_income: Decimal = Field(ge=0)
-    variable_income_minimum: Decimal = Field(ge=0)
     fixed_expenses: Decimal = Field(ge=0)
-    existing_loan_payments: Decimal = Field(ge=0)
-
-    @model_validator(mode="after")
-    def _check_minimum_within_variable_income(self) -> Self:
-        if self.variable_income_minimum > self.variable_income:
-            raise ValueError(
-                f"variable_income_minimum ({self.variable_income_minimum}) must not exceed "
-                f"variable_income ({self.variable_income})"
-            )
-        return self

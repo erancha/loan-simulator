@@ -4,7 +4,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.base import empty_checkpoint
 
-from loan_agent.domain.models import Profile
+from loan_agent.domain.models import Finances
 from loan_agent.platform import checkpointer
 from loan_agent.platform.checkpointer import checkpoint_serde, libpq_dsn, open_checkpointer
 
@@ -35,12 +35,12 @@ async def test_checkpoint_serde_restores_messages_and_decimals_through_postgres(
 
 def test_checkpoint_serde_blocks_unlisted_domain_types() -> None:
     serde = checkpoint_serde()
-    restored = serde.loads_typed(serde.dumps_typed(Profile(savings=Decimal(5))))
-    assert not isinstance(restored, Profile)
+    restored = serde.loads_typed(serde.dumps_typed(Finances(net_fixed_income=Decimal(5))))
+    assert not isinstance(restored, Finances)
 
 
 def test_checkpoint_serde_restores_listed_domain_types(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(checkpointer, "CHECKPOINTED_TYPES", (Profile,))
+    monkeypatch.setattr(checkpointer, "CHECKPOINTED_TYPES", (Finances,))
     serde = checkpoint_serde()
-    profile = Profile(savings=Decimal("5.50"))
-    assert serde.loads_typed(serde.dumps_typed(profile)) == profile
+    finances = Finances(net_fixed_income=Decimal("5.50"))
+    assert serde.loads_typed(serde.dumps_typed(finances)) == finances

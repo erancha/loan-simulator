@@ -7,8 +7,8 @@ interface Props {
 }
 
 /**
- * Contains a failure to build or render the recommendation card to the card pane, so the chat and
- * the profile keep working; the error is logged.
+ * Contains a failure to build or render the recommendation card to the card pane, so the chat
+ * keeps working; the error is logged.
  */
 export class CardBoundary extends Component<Props, { failed: boolean }> {
   state = { failed: false }

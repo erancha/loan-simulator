@@ -1,9 +1,14 @@
 /** Every Hebrew label and sentence on a check's page: the conversation and the card. */
-import type { ChartShown, ProfileChange, Question, QuestionField, Track } from '../api/types.ts'
+import type {
+  CeilingSource,
+  ChartShown,
+  LoanRequest,
+  Question,
+  QuestionField,
+  Track,
+} from '../api/types.ts'
 import { OFFER_SOURCES } from '../copy.ts'
-import { formatDate, formatDay, formatMonth, formatShekels } from '../money.ts'
-import { MONEY_FIELDS } from '../profile/copy.ts'
-import type { MoneyKey } from '../profile/copy.ts'
+import { formatAmount, formatDate, formatDay, formatMonth, formatShekels } from '../money.ts'
 
 export const RATE_KIND = {
   fixed: 'ריבית קבועה',
@@ -24,16 +29,6 @@ export const SPITZER_MOVING = {
   index: 'שפיצר (תשלום חודשי שווה כל עוד המדד לא זז)',
   both: 'שפיצר (תשלום חודשי שווה כל עוד הריבית והמדד לא זזים)',
 } as const satisfies Record<string, string>
-
-// The shares (מחצית, 30%) are the engine's, in mcp-server/src/loan_engine/domain/assumptions.py.
-export const REASON_SENTENCES: Record<string, string> = {
-  variable_income_minimum_counted: 'מההכנסה המשתנה נספר רק הסכום המינימלי שמגיע גם בחודש חלש',
-  ceiling_by_disposable_income:
-    'התקרה היא מחצית ממה שנשאר מההכנסה שהוזנה אחרי ההוצאות הקבועות; החצי השני נשאר להוצאות לא צפויות',
-  ceiling_by_income_share: 'התקרה היא 30% מההכנסה שהוזנה',
-  existing_loans_deducted: 'ההחזרים על הלוואות קיימות נוכו מהתקרה',
-  no_room_for_payment: 'לפי המספרים האלה לא נשאר מקום להחזר חודשי',
-}
 
 export const LABEL_PREFERRED = 'מומלצת'
 export const LABEL_ALTERNATIVE = 'חלופה'
@@ -81,16 +76,25 @@ export function termText(months: number): string {
 /** The title over the decision line: it sums up the loan being looked for. */
 export const DECISION_TITLE = 'מה מחפשים'
 
-/** `spareSavings` is null when no savings are left beyond the cushion. */
 export function decisionText(
   loanAmount: string,
   termMonths: number,
   monthlyPayment: string,
-  cushionKept: string,
-  spareSavings: string | null,
 ): string {
-  const spare = spareSavings === null ? '' : ` ועוד ${spareSavings} פנויים`
-  return `הלוואה של ${loanAmount} ל-${termText(termMonths)}, כ-${monthlyPayment} בחודש, ו-${cushionKept} נשארים בצד לביטחון${spare}.`
+  return `הלוואה של ${loanAmount} ל-${termText(termMonths)}, כ-${monthlyPayment} בחודש.`
+}
+
+/** Under the decision of a recommendation made without a payment ceiling. */
+export const UNCHECKED_NOTE = 'ההמלצה לפי ההלוואות עצמן; עוד לא נבדקה מול ההחזר שנוח לך'
+
+/** Under the decision of a recommendation whose worst-case payment passes the ceiling. */
+export function aboveCeilingText(worst: string, ceiling: string): string {
+  return `מעל התקרה שלך: ${formatShekels(worst)} מול ${formatShekels(ceiling)}`
+}
+
+/** A check's title in the checks list: its purpose, or the general label, and its amount. */
+export function checkTitle(loan: LoanRequest): string {
+  return `${loan.purpose ?? GENERAL_PURPOSE} - הלוואה בסך ${formatAmount(loan.amount)}₪`
 }
 
 export const OTHERS_TITLE = {
@@ -98,9 +102,6 @@ export const OTHERS_TITLE = {
   newSinceRecommendation: 'הצעות חדשות, עוד לא נכללו בהמלצה',
   further: 'אפשרויות נוספות',
 } as const satisfies Record<string, string>
-
-// The engine's CUSHION_MONTHS, in mcp-server/src/loan_engine/domain/assumptions.py.
-export const CUSHION_TEXT = 'הסכום שכדאי לא לגעת בו: הוצאות של חודשיים'
 
 export function dataDatesLine(rateDate: string, cpiMonth: string): string {
   return `ריבית בנק ישראל נכון ל-${rateDate}, מדד המחירים נכון ל-${cpiMonth}`
@@ -113,14 +114,6 @@ export const PUBLISHED_RATE_LINE =
 export const HISTORY_LINE = 'התרחישים חוזרים על שינויי הריבית והמדד של כל תקופה בעשר השנים האחרונות'
 
 export const FOLD_TITLE = 'למה המספרים האלה'
-
-export function ceilingLine(amount: string): string {
-  return `תקרת ההחזר החודשי: ${amount}`
-}
-
-export function cushionLine(amount: string): string {
-  return `כרית הביטחון: ${amount}`
-}
 
 export const TOTALS_HEADINGS = {
   option: 'אפשרות',
@@ -140,28 +133,28 @@ export const CARD_FAILED = 'לא הצלחנו להציג את ההמלצה.'
 /** The page's own opening line, the first bubble of every check, so the first reply has a question;
  * **marked** words show in bold. */
 export const CHAT_WELCOME =
-  'כדי להמליץ על הלוואה שמתאימה לך, צריך לדעת מה רוצים לקנות ובכמה, כמה כסף זמין יש, הכנסה' +
-  ' קבועה ומשתנה (נטו), הוצאות קבועות והחזרי הלוואות קיימות.\n\n' +
-  "**כתבו בתיבה למטה** את כל או חלק מהנתונים הנדרשים במלל חופשי, או ענו על השאלות בצ'אט אחת אחת."
+  'כדי להמליץ על הלוואה שמתאימה לך, **כתבו בתיבה למטה** את ההלוואה: כמה צריך ללוות, או מחיר' +
+  ' הקנייה וכמה כסף יש כבר.\n' +
+  'אפשר להוסיף גם את ההחזר החודשי הגבוה ביותר שנוח לך, אבל זה לא חובה.'
 
 /** Sample opening messages above the input; a tap only fills the input, the person sends. */
 export const SAMPLE_MESSAGES: { label: string; text: string }[] = [
-  { label: 'מכונית', text: 'אני רוצה לקנות מכונית.' },
+  { label: 'הלוואה', text: 'אני רוצה הלוואה בסך 60,000₪' },
+  { label: 'רכב', text: 'אני רוצה לקנות רכב ב-100,000₪ ויש לי 40,000₪' },
   {
-    label: 'מכונית + נתונים נוספים',
-    text:
-      'אני רוצה לקנות מכונית ב-55,000 ₪, כסף זמין 35,000 ₪, משכורת קבועה 8,000 ₪, משכורת' +
-      ' נוספת ממלצרות 5,000 ₪ (מינימום 2,000 ₪ בחודש), הוצאות קבועות 6,000 ₪ בחודש.',
+    label: 'רכב, החזר מרבי',
+    text: 'אני רוצה לקנות רכב ב-50,000₪ ויש לי 26,000₪. אוכל להחזיר עד 1,000₪ בחודש.',
   },
+  { label: 'שיפוץ', text: 'אני רוצה הלוואה בסך 80,000₪ לשיפוץ, בהחזר של עד 2,000₪ בחודש' },
 ]
 
-/** The market-data sample, offered at any point of a conversation until tapped that day. */
+/** The market-data sample, offered at any point of a conversation; the server answers it from
+ * the market data with no model call. */
 export const MARKET_SAMPLE = {
   label: 'פריים ומדדים',
   text:
-    'מהי ריבית הפריים הנוכחית, ומה היו השינויים ב-5 השנים האחרונות\n' +
-    'מה היו המדדים לצרכן ב-12 החודשים האחרונים\n' +
-    'הצג את הנתונים בשני גרפים.',
+    'מהי ריבית הפריים הנוכחית, ומה היו השינויים ב-5 השנים האחרונות?\n' +
+    'מה היו המדדים לצרכן ב-12 החודשים האחרונים?',
 }
 
 /** The real-offer sample, offered once a check has a recommendation; ?? marks each figure the
@@ -186,12 +179,7 @@ export const OFFER_DETAILS =
   'בכל הצעה כדאי לבקש: ריבית (או פריים ומרווח), הצמדה, מספר חודשים, שיטת החזר, עמלות, בלון, שם' +
   ' הגוף ותאריך.'
 
-export const EMPTY_CARD = 'ההמלצה תופיע כאן אחרי שנכיר את המטרה ואת המצב.'
-
-export const STALE_BANNER = 'ההמלצה חושבה לפי פרופיל קודם.'
-export const RECOMPUTE_BUTTON = 'לחשב מחדש'
-export const RECOMPUTE_MESSAGE =
-  'הפרופיל שלי השתנה. אפשר לחשב מחדש את ההמלצה לפי המספרים המעודכנים?'
+export const EMPTY_CARD = 'ההמלצה תופיע כאן אחרי שנכיר את ההלוואה.'
 
 export const THINKING = 'העוזר חושב…'
 export const INPUT_PLACEHOLDER = {
@@ -226,27 +214,33 @@ export function sendFailed(message: string): string {
   return `ההודעה לא נשלחה: ${message}`
 }
 
-type GoalField = 'purpose' | 'price'
-
-/** The goal fields the model can ask about; `hint` says what goes in the answer. */
-export const GOAL_QUESTIONS: Record<GoalField, { label: string; hint: string }> = {
-  purpose: {
-    label: 'מה רוצים לקנות?',
-    hint: 'להלוואה בלי מטרה מסוימת בוחרים "כללי". מטרה אחרת אפשר לכתוב בתיבה למטה.',
-  },
-  price: {
-    label: 'מה המחיר, בערך?',
-    hint: 'המחיר המלא של הקנייה, לפני שמורידים ממנו כסף זמין.',
-  },
-}
-
-export function isGoalField(field: QuestionField): field is GoalField {
-  return field in GOAL_QUESTIONS
-}
-
-export const PURPOSE_CHOICES = ['רכב', 'שיפוץ', 'כללי']
+/** The purpose a loan without one is titled by; also the last purpose choice. */
+export const GENERAL_PURPOSE = 'כללי'
+export const PURPOSE_CHOICES = ['רכב', 'שיפוץ', GENERAL_PURPOSE]
 export const SKIP = 'דילוג'
 export const ANSWER = 'אישור'
+/** Sent as the person's message, as it is, when they cannot name a comfortable payment. */
+export const DONT_KNOW = 'לא יודע/ת'
+
+export const TERM_MIN_MONTHS = 6
+export const TERM_MAX_MONTHS = 84
+export const TERM_BOX_LABEL = 'מספר חודשים'
+export const TERM_BOX_PLACEHOLDER = `${TERM_MIN_MONTHS}–${TERM_MAX_MONTHS}`
+export const CEILING_BOX_PLACEHOLDER = 'לא חובה'
+/** A ceiling the check holds cannot be removed from the term card, only replaced. */
+export const CEILING_CLEARED = 'אפשר להקליד החזר מרבי אחר, אך לא למחוק אותו'
+/** An offer priced at its lender's maximum, shorter than the check's term. */
+export const offerMaxNote = (months: number) => `הגוף המלווה מאפשר עד ${termText(months)}`
+/**
+ * The line a confirmed term sends, naming a ceiling typed beside it; the prompt reads its
+ * "אישור:" as a term and ceiling already saved.
+ */
+export function confirmedTermLine(months: number, ceiling: string | null): string {
+  const term = `אישור: ${termText(months)}`
+  return ceiling === null ? term : `${term}, ${CEILING_LABEL}: ${amountText(ceiling)}`
+}
+export const TERM_OUT_OF_RANGE =
+  `אפשר להקליד מספר חודשים שלם בין ${TERM_MIN_MONTHS} ל-${TERM_MAX_MONTHS}`
 
 /**
  * The person's message for an answered question; the agent's prompt quotes this form. A label
@@ -256,8 +250,8 @@ export function answerLine(label: string, value: string): string {
   return label.endsWith('?') ? `${label} ${value}` : `${label}: ${value}`
 }
 
-/** A profile amount as an answer or a panel note shows it. */
-export function profileValueText(value: string): string {
+/** An amount as an answer line shows it. */
+export function amountText(value: string): string {
   return formatShekels(value)
 }
 
@@ -266,64 +260,91 @@ export function skipLine(label: string): string {
   return `דילוג על: ${label}`
 }
 
-/** The person's message for a skipped amount that the page saved as 0. */
-export function skipAsZeroLine(label: string): string {
-  return `${skipLine(label)} (נשמר כ-0)`
+/** The income and expenses labels and hints, shared by the question bubble and the data panel. */
+export const INCOME_LABEL = 'הכנסה קבועה'
+export const INCOME_HINT =
+  'המשכורת שנכנסת לחשבון כל חודש, אחרי מסים וניכויים, ועוד ההכנסה המשתנה שנכנסת גם בחודש חלש.'
+export const EXPENSES_LABEL = 'הוצאות קבועות'
+export const EXPENSES_HINT =
+  'מה שיוצא ממך כל חודש: שכר דירה, מזון וקניות, חשבונות, ביטוחים, תחבורה, בילויים, וגם' +
+  ' החזרים על הלוואות קיימות. גרים עם עוד אנשים? רק החלק שלך.'
+
+/**
+ * What each asked field shows: `label` names it in the person's answer line, `text` is the
+ * question the bubble asks, and `hint` says what goes in the box.
+ */
+const FIELD_COPY: Record<QuestionField, { label: string; text: string; hint: string }> = {
+  purpose: {
+    label: 'מה רוצים לקנות?',
+    text: 'מה רוצים לקנות?',
+    hint: 'להלוואה בלי מטרה מסוימת בוחרים "כללי". מטרה אחרת אפשר לכתוב בתיבה למטה.',
+  },
+  amount: {
+    label: 'כמה צריך ללוות?',
+    text: 'כמה צריך ללוות?',
+    hint: 'סכום ההלוואה, בשקלים.',
+  },
+  own_capital: {
+    label: 'כמה מהמחיר משולם מכסף שכבר יש?',
+    text: 'כמה מהמחיר משולם מכסף שכבר יש?',
+    hint: 'הסכום שמשלמים מהכסף שלכם. אם הכול נלקח בהלוואה, כתבו 0.',
+  },
+  net_fixed_income: {
+    label: INCOME_LABEL,
+    text: 'מה ההכנסה הקבועה שלך בחודש, נטו?',
+    hint: INCOME_HINT,
+  },
+  fixed_expenses: {
+    label: EXPENSES_LABEL,
+    text: 'כמה יוצא כל חודש על הוצאות קבועות?',
+    hint: EXPENSES_HINT,
+  },
+  payment_ceiling: {
+    label: 'מה ההחזר החודשי הגבוה ביותר שנוח לך?',
+    text: 'מה ההחזר החודשי הגבוה ביותר שנוח לך?',
+    hint: 'הסכום החודשי שאפשר לעמוד בו גם בחודש קשה.',
+  },
 }
 
-function fieldCopy(field: QuestionField): { label: string; hint: string } {
-  if (isGoalField(field)) return GOAL_QUESTIONS[field]
-  const money = MONEY_FIELDS.find(({ key }) => key === field)
-  if (money === undefined) throw new Error(`no profile copy for ${field}`)
-  return money
-}
-
-/** The label a profile or goal field carries in a question and in a panel note. */
+/** The label a field carries in a question and in the answer line. */
 export function fieldLabel(field: QuestionField): string {
-  return fieldCopy(field).label
-}
-
-/** The conversation's line for a field the person saved in the profile panel. */
-export function panelNote(label: string, value: string): string {
-  return `עודכן בפרופיל: ${label} ${value}`
-}
-
-/** How the question bubble asks for each profile amount; the panel and the lines use the label. */
-const PROFILE_QUESTIONS: Record<MoneyKey, string> = {
-  savings: 'כמה כסף זמין יש לקנייה?',
-  net_fixed_income: 'מה ההכנסה הקבועה שלך בחודש, נטו?',
-  variable_income: 'מה ההכנסה המשתנה שלך בחודש, בממוצע ונטו?',
-  variable_income_minimum: 'ובחודש חלש, כמה מההכנסה המשתנה בכל זאת נכנס?',
-  fixed_expenses: 'כמה יוצא כל חודש על הוצאות קבועות?',
-  existing_loan_payments:
-    'האם יש הלוואות קיימות עם יותר מ-3 חודשים לסיום, ואם כן - מה ההחזר החודשי?',
+  return FIELD_COPY[field].label
 }
 
 /** The offer to clone a check before changing its recommendation; the prompt quotes the choices. */
 export const CLONE_QUESTION =
   'לשכפל את הבדיקה ולבצע סימולציה נפרדת? כך אפשר יהיה להשוות בין הבדיקות.'
 export const CLONE_CHOICE = 'לשכפל ולבדוק בנפרד'
+/** The clone's first line: the choice and the request that brought the offer, which the clone
+ * carries out; the prompt reads the request after the colon. */
+export const cloneLine = (request: string) => `${CLONE_CHOICE}: ${request}`
 export const STAY_CHOICE = 'לעדכן את הבדיקה הזאת'
 
-/** The question a bubble shows: a profile amount's question, a goal label, the clone offer, or
- * the model's own sentence. */
-export function questionText(question: Question): string {
-  if (question.offer_clone === true) return CLONE_QUESTION
-  const { field } = question
-  if (field === null) return question.text
-  if (isGoalField(field)) return fieldLabel(field)
-  return PROFILE_QUESTIONS[field]
+/** The term question's card line: the proposed term and the first payment it gives. */
+export function termLine(termMonths: number, firstPayment: string): string {
+  return `תקופה מוצעת: ${termText(termMonths)} · החזר ראשון כ-${formatShekels(firstPayment)}`
 }
 
-/** A field's label from the profile or goal copy, the clone offer, or the model's own sentence. */
+/** The question a bubble shows: a field's question, the term card, the clone offer, or the
+ * model's own sentence. */
+export function questionText(question: Question): string {
+  if (question.kind === 'term') return termLine(question.term_months, question.first_payment)
+  if (question.offer_clone === true) return CLONE_QUESTION
+  const { field } = question
+  return field === null ? question.text : FIELD_COPY[field].text
+}
+
+/** A field's label, the term card's line, the clone offer, or the model's own sentence. */
 export function questionLabel(question: Question): string {
+  if (question.kind === 'term') return questionText(question)
   if (question.offer_clone === true) return CLONE_QUESTION
   return question.field === null ? question.text : fieldLabel(question.field)
 }
 
-/** A field's hint; a free question has none. */
+/** A field's hint; a free question and the term card have none. */
 export function questionHint(question: Question): string | null {
-  return question.field === null ? null : fieldCopy(question.field).hint
+  if (question.kind === 'term' || question.field === null) return null
+  return FIELD_COPY[question.field].hint
 }
 
 /** A market chart's title, by series. */
@@ -347,52 +368,32 @@ export const CHART_VALUE: Record<ChartShown['series'], string> = { prime: 'פר�
 export const RESIZE_CARD = 'שינוי רוחב חלונית ההמלצה'
 
 export const ARCHIVED_TITLE = 'הבדיקה נסגרה והועברה לארכיון.'
-export const ARCHIVED_PROFILE_TITLE = 'הפרופיל שעליו התבססה הבדיקה'
-export const NOT_TOLD = 'לא נמסר'
-/** Opens the check that replaced an archived one, computed from the changed profile. */
-export const CONTINUED_LINK = 'מעבר לבדיקה המעודכנת'
+export const CLONED_TITLE = 'הבדיקה שוכפלה לבדיקה נפרדת.'
+export const OPEN_CLONE = 'מעבר לבדיקה החדשה'
 
-/** A profile amount in the closing note; an amount never told shows as such. */
-export function archivedFigure(value: string | null): string {
-  return value === null ? NOT_TOLD : formatShekels(value)
-}
-
-/** A profile field's full name, as the closing note lists it. */
-export function profileFieldName(field: MoneyKey): string {
-  const copy = MONEY_FIELDS.find(({ key }) => key === field)
-  if (copy === undefined) throw new Error(`no profile copy for ${field}`)
-  return copy.title ?? copy.label
-}
-
-/** Each changed figure, from its old value to its new one. */
-function changesText(changes: ProfileChange[]): string {
-  return changes
-    .map(
-      ({ field, from, to }) =>
-        `${profileFieldName(field)}: מ-${archivedFigure(from)} ל-${archivedFigure(to)}`,
-    )
-    .join('; ')
-}
-
-/** Why a profile change closed the check: the day and each changed figure. */
-export function archivedReason(at: Date, changes: ProfileChange[]): string {
-  const list = changesText(changes)
-  return `ב-${formatDay(at)} השתנה הפרופיל (${list}), ולכן ההמלצה כאן כבר לא מתאימה.`
-}
-
-/** The closing line of a check the person archived themselves. */
+/** The closing line of a check the person archived. */
 export function manualArchiveLine(at: Date): string {
   return `ב-${formatDay(at)} הבדיקה הועברה לארכיון ידנית.`
 }
 
-export const FOLLOWS_TITLE = 'בדיקת המשך'
-/** Opens the archived check a follow-up check replaces. */
-export const ORIGIN_LINK = 'מעבר לבדיקה הקודמת שבארכיון'
+/** Shown in an empty money field. */
+export const NOT_COUNTED_YET = 'עוד לא הוזן'
+/** The accessible name of the button that opens a field's hint. */
+export const HINT_LABEL = 'הסבר'
+export const NOT_A_NUMBER = 'אפשר להקליד רק מספר, למשל 12,500'
+export const refused = (reason: string) => `הערך לא התקבל: ${reason}`
+export const saveFailed = (message: string) => `השמירה לא הצליחה: ${message}`
 
-/** Why a follow-up check exists: the changed figures that archived the check it replaces. */
-export function followsReason(changes: ProfileChange[]): string {
-  return (
-    `הבדיקה הזאת מחליפה בדיקה קודמת שנסגרה כי הפרופיל השתנה (${changesText(changes)}).` +
-    ' כל החישובים כאן לפי הפרופיל המעודכן.'
-  )
+/** Opens the check's two finances figures for editing. */
+export const EDIT_FINANCES = 'עריכה'
+export const CEILING_LABEL = 'החזר חודשי מרבי'
+export const CEILING_NOT_SET = 'לא נקבע'
+export const CEILING_SOURCE = {
+  stated: 'לפי מה שאמרת',
+  finances: 'לפי ההכנסה וההוצאות',
+} as const satisfies Record<CeilingSource, string>
+
+/** The person's message for a figure edited in the data panel; the agent's prompt quotes it. */
+export function updateLine(label: string, amount: string): string {
+  return `עודכן: ${label} ${amountText(amount)}`
 }

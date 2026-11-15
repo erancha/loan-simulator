@@ -1,88 +1,24 @@
-"""Affordability bounds from the borrower's profile, loan sizing and typical tracks.
+"""Typical tracks and the terms and loan sizes at which they fit a payment ceiling.
 
-- assess_affordability(): payment ceiling and savings cushion from the borrower's profile
-- size_loan(): the amount to borrow after spendable savings
 - suggest_tracks(): fixed and prime tracks priced from the published average bank rate
 - shortest_comfortable_term(): the shortest term at which those tracks fit the payment ceiling
 - shortest_comfortable_offer_term(): the same search for one real offer, up to its longest term
-- largest_comfortable_loan(): the largest loan whose tracks fit the ceiling at the longest term
+- proposed_term(), proposed_offer_term(): the shortest term whose first payment is under a limit
+- largest_comfortable_loan(): the largest loan on which a track fits the ceiling at a given term
 """
 
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
 from decimal import Decimal
-from typing import Literal
 
 from loan_engine.domain.assumptions import (
-    COMFORT_SHARE,
-    CUSHION_MONTHS,
-    DISPOSABLE_SHARE_CAP,
-    INCOME_SHARE_CAP,
     LOAN_STEP,
     TERM_STEP,
 )
 from loan_engine.domain.history import MarketHistory, simulate
 from loan_engine.domain.limits import MAX_PRINCIPAL, MAX_TERM, MIN_PRINCIPAL
-from loan_engine.domain.models import Profile, Track
+from loan_engine.domain.models import Track
 
-Reason = Literal[
-    "variable_income_minimum_counted",
-    "ceiling_by_income_share",
-    "ceiling_by_disposable_income",
-    "existing_loans_deducted",
-    "no_room_for_payment",
-]
-
-
-@dataclass(frozen=True)
-class Bounds:
-    payment_ceiling: Decimal
-    min_cushion: Decimal
-    counted_income: Decimal
-    reasons: list[Reason]
-
-
-@dataclass(frozen=True)
-class Sizing:
-    """loan_amount may be 0 or below MIN_PRINCIPAL; the caller decides what to do with it."""
-
-    loan_amount: Decimal
-    savings_used: Decimal
-    cushion_kept: Decimal
-    spare_savings: Decimal
-
-
-def assess_affordability(profile: Profile) -> Bounds:
-    reasons: list[Reason] = []
-    counted = profile.net_fixed_income + profile.variable_income_minimum
-    if profile.variable_income_minimum > 0:
-        reasons.append("variable_income_minimum_counted")
-
-    by_share = INCOME_SHARE_CAP * counted
-    by_disposable = DISPOSABLE_SHARE_CAP * (counted - profile.fixed_expenses)
-    reasons.append(
-        "ceiling_by_income_share" if by_share <= by_disposable else "ceiling_by_disposable_income"
-    )
-
-    if profile.existing_loan_payments > 0:
-        reasons.append("existing_loans_deducted")
-    ceiling = max(min(by_share, by_disposable) - profile.existing_loan_payments, Decimal(0))
-    if ceiling == 0:
-        reasons.append("no_room_for_payment")
-
-    return Bounds(ceiling, CUSHION_MONTHS * profile.fixed_expenses, counted, reasons)
-
-
-def size_loan(goal_price: Decimal, savings: Decimal, min_cushion: Decimal) -> Sizing:
-    need = goal_price
-    available = max(savings - min_cushion, Decimal(0))
-    savings_used = min(available, need)
-    return Sizing(
-        loan_amount=need - savings_used,
-        savings_used=savings_used,
-        cushion_kept=savings - available,
-        spare_savings=available - savings_used,
-    )
+_TERMS = range(TERM_STEP, MAX_TERM + 1, TERM_STEP)
 
 
 def suggest_tracks(principal: Decimal, term_months: int, history: MarketHistory) -> list[Track]:
@@ -104,16 +40,20 @@ def suggest_tracks(principal: Decimal, term_months: int, history: MarketHistory)
 
 
 def shortest_comfortable_term(
-    principal: Decimal, payment_ceiling: Decimal, history: MarketHistory
+    principal: Decimal,
+    payment_ceiling: Decimal,
+    history: MarketHistory,
+    *,
+    any_track: bool = False,
 ) -> int | None:
     """The shortest term, in TERM_STEP-month steps up to MAX_TERM, at which every suggested
     track's highest recurring payment, in its worst historical window for a variable track, stays
-    within COMFORT_SHARE of the payment ceiling; None when no term does."""
-    return _first_comfortable_term(
-        range(TERM_STEP, MAX_TERM + 1, TERM_STEP),
+    within the payment ceiling, or with any_track at least one track's does; None when no term
+    does."""
+    return _first_term(
+        _TERMS,
         lambda term: suggest_tracks(principal, term, history),
-        payment_ceiling,
-        history,
+        _within_ceiling(payment_ceiling, history, any_track=any_track),
     )
 
 
@@ -122,47 +62,86 @@ def shortest_comfortable_offer_term(
 ) -> int | None:
     """The same search for a real offer whose term_months is the longest it allows: TERM_STEP-month
     steps below that term, then that term itself; None when no term fits."""
-    return _first_comfortable_term(
-        [*range(TERM_STEP, offer.term_months, TERM_STEP), offer.term_months],
-        lambda term: [offer.model_copy(update={"term_months": term})],
-        payment_ceiling,
-        history,
+    return _first_term(
+        _offer_terms(offer),
+        _offer_at(offer),
+        _within_ceiling(payment_ceiling, history, any_track=False),
     )
 
 
-def largest_comfortable_loan(payment_ceiling: Decimal, history: MarketHistory) -> Decimal | None:
-    """The largest loan, in whole LOAN_STEP shekels up to MAX_PRINCIPAL, whose suggested tracks at
-    MAX_TERM stay within COMFORT_SHARE of the payment ceiling; None when even MIN_PRINCIPAL does
-    not."""
+def proposed_term(principal: Decimal, payment_limit: Decimal, history: MarketHistory) -> int:
+    """The shortest term, in TERM_STEP-month steps up to MAX_TERM, at which every suggested
+    track's first payment is below the limit; MAX_TERM when none is."""
+    term = _first_term(
+        _TERMS,
+        lambda term: suggest_tracks(principal, term, history),
+        _first_payments_below(payment_limit, history),
+    )
+    return MAX_TERM if term is None else term
 
-    def peak(principal: Decimal) -> Decimal:
-        return _peak_payment(suggest_tracks(principal, MAX_TERM, history), history)
 
-    limit = payment_ceiling * COMFORT_SHARE
+def proposed_offer_term(offer: Track, payment_limit: Decimal, history: MarketHistory) -> int:
+    """The same over the terms shortest_comfortable_offer_term tries; the offer's own term_months
+    when none has a first payment below the limit."""
+    term = _first_term(
+        _offer_terms(offer), _offer_at(offer), _first_payments_below(payment_limit, history)
+    )
+    return offer.term_months if term is None else term
+
+
+def largest_comfortable_loan(
+    payment_ceiling: Decimal, term_months: int, history: MarketHistory
+) -> Decimal | None:
+    """The largest loan, in whole LOAN_STEP shekels up to MAX_PRINCIPAL, for which at least one
+    suggested track over term_months stays within the payment ceiling; None when even
+    MIN_PRINCIPAL does not."""
+
+    def best_peak(principal: Decimal) -> Decimal:
+        return min(_peak_payments(suggest_tracks(principal, term_months, history), history))
+
     # A suggested track carries no fee, so its payment grows in proportion to the principal and
     # the peak at MIN_PRINCIPAL places the answer; the loop absorbs the rounding of payments.
-    proportional = MIN_PRINCIPAL * limit / peak(Decimal(MIN_PRINCIPAL))
+    proportional = MIN_PRINCIPAL * payment_ceiling / best_peak(Decimal(MIN_PRINCIPAL))
     loan = min(proportional // LOAN_STEP * LOAN_STEP, Decimal(MAX_PRINCIPAL))
-    while loan >= MIN_PRINCIPAL and peak(loan) > limit:
+    while loan >= MIN_PRINCIPAL and best_peak(loan) > payment_ceiling:
         loan -= LOAN_STEP
     return loan if loan >= MIN_PRINCIPAL else None
 
 
-def _peak_payment(tracks: list[Track], history: MarketHistory) -> Decimal:
-    """The highest recurring payment among the tracks, in its worst historical window for a
-    variable track."""
+def _peak_payments(tracks: list[Track], history: MarketHistory) -> list[Decimal]:
+    """Each track's highest recurring payment, in its worst historical window for a variable
+    track."""
     outcomes = [simulate(track, history) for track in tracks]
-    return max(o.base.max_payment if o.worst is None else o.worst.max_payment for o in outcomes)
+    return [o.base.max_payment if o.worst is None else o.worst.max_payment for o in outcomes]
 
 
-def _first_comfortable_term(
+def _offer_terms(offer: Track) -> list[int]:
+    return [*range(TERM_STEP, offer.term_months, TERM_STEP), offer.term_months]
+
+
+def _offer_at(offer: Track) -> Callable[[int], list[Track]]:
+    return lambda term: [offer.model_copy(update={"term_months": term})]
+
+
+def _within_ceiling(
+    payment_ceiling: Decimal, history: MarketHistory, *, any_track: bool
+) -> Callable[[list[Track]], bool]:
+    fits = min if any_track else max
+    return lambda tracks: fits(_peak_payments(tracks, history)) <= payment_ceiling
+
+
+def _first_payments_below(
+    payment_limit: Decimal, history: MarketHistory
+) -> Callable[[list[Track]], bool]:
+    return lambda tracks: all(
+        simulate(track, history).base.first_payment < payment_limit for track in tracks
+    )
+
+
+def _first_term(
     terms: Iterable[int],
     tracks_at: Callable[[int], list[Track]],
-    payment_ceiling: Decimal,
-    history: MarketHistory,
+    accepts: Callable[[list[Track]], bool],
 ) -> int | None:
-    limit = payment_ceiling * COMFORT_SHARE
-    for term in terms:
-        if _peak_payment(tracks_at(term), history) <= limit:
-            return term
-    return None
+    """The first of the terms at which the tracks it gives are accepted; None when none is."""
+    return next((term for term in terms if accepts(tracks_at(term))), None)

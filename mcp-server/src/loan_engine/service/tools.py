@@ -1,8 +1,8 @@
 """The loan-engine tools, described for a language model, with money rounded to agorot
 (hundredths of a shekel).
 
-- Output models: Bounds, Sizing, LoanSimulation (TrackSimulation, MonthRow), ComfortableTerm,
-  OfferTerm, TrackSuggestions, MarketSeries (PrimeMonth, CpiMonth)
+- Output models: Bounds, LoanSimulation (TrackSimulation, MonthRow), ComfortableTerm,
+  OfferTerm, ProposedTerm, LargestLoan, TrackSuggestions, MarketSeries (PrimeMonth, CpiMonth)
 - register_tools(): adds the tools to a server; each reads market data from history_provider
 
 simulate_loan returns its LoanSimulation as structured content and only a short summary as text,
@@ -23,10 +23,9 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
-from loan_engine.domain import history, policy, schedule
+from loan_engine.domain import affordability, history, policy, schedule
 from loan_engine.domain.assumptions import (
     BASE_ANNUAL_INFLATION,
-    COMFORT_SHARE,
     HISTORY_MONTHS,
     PRIME_MARGIN,
 )
@@ -58,12 +57,9 @@ _BASE_PATH = (
 )
 
 _PROFILE = (
-    "The person's monthly finances, every amount in ₪ per month: net_fixed_income (salary after "
-    "tax), variable_income (bonuses, commissions, freelance work), variable_income_minimum (the "
-    "part of the variable income that arrives even in a weak month, at most variable_income; "
-    "only this part counts toward the payment limit), fixed_expenses (rent, "
-    "bills and other recurring spending), existing_loan_payments (payments on loans already "
-    "running)."
+    "The person's monthly finances, every amount in ₪ per month: net_fixed_income (income after "
+    "tax, including the variable income that arrives even in a weak month) and fixed_expenses "
+    "(rent, bills, other recurring spending and payments on existing loans)."
 )
 
 _LOAN = (
@@ -87,18 +83,8 @@ class Bounds(_Output):
     payment_ceiling: Money = Field(
         description="Highest monthly loan payment the person can carry, ₪ per month"
     )
-    min_cushion: Money = Field(description="Savings the person keeps untouched, ₪")
     counted_income: Money = Field(description="Monthly income the ceiling is based on, ₪ per month")
-    reasons: list[policy.Reason] = Field(description="How the ceiling was set, in order")
-
-
-class Sizing(_Output):
-    loan_amount: Money = Field(
-        description=f"Amount to borrow, ₪; may be 0 or below the {MIN_PRINCIPAL:,} ₪ minimum loan"
-    )
-    savings_used: Money = Field(description="Savings put toward the price, ₪")
-    cushion_kept: Money = Field(description="Savings kept as the cushion, ₪")
-    spare_savings: Money = Field(description="Savings left over after the price is covered, ₪")
+    reasons: list[affordability.Reason] = Field(description="How the ceiling was set, in order")
 
 
 class MonthRow(_Output):
@@ -184,9 +170,9 @@ class LoanSimulation(_Output):
 
 
 class ComfortableTerm(_Output):
-    term_months: int = Field(description="The shortest comfortable term, months")
-    payment_limit: Money = Field(
-        description="The most the payment may reach at that term: 90% of the ceiling, ₪ per month"
+    term_months: int | None = Field(
+        description="The shortest comfortable term, months; null when no term up to the longest "
+        "the simulator prices fits"
     )
 
 
@@ -196,8 +182,19 @@ class OfferTerm(_Output):
         "offer's longest term when none is comfortable"
     )
     comfortable: bool = Field(description="Whether term_months keeps the payment within the limit")
-    payment_limit: Money = Field(
-        description="The most a comfortable payment may reach: 90% of the ceiling, ₪ per month"
+
+
+class ProposedTerm(_Output):
+    term_months: int = Field(description="The shortest term whose first payment is under the limit")
+    first_payment: Money = Field(
+        description=f"The higher first payment of the two tracks at that term on {_BASE_PATH}, ₪"
+    )
+
+
+class LargestLoan(_Output):
+    loan_amount: Money | None = Field(
+        description="The largest loan on which at least one track fits the ceiling at the term, "
+        "₪; null when even the smallest loan does not fit"
     )
 
 
@@ -273,6 +270,11 @@ def _range(bounds: tuple[Decimal, Decimal] | None) -> MoneyRange | None:
     return None if bounds is None else MoneyRange(low=bounds[0], high=bounds[1])
 
 
+def _proposed(tracks: Sequence[Track], term: int, market: history.MarketHistory) -> ProposedTerm:
+    first = max(history.simulate(track, market).base.first_payment for track in tracks)
+    return ProposedTerm(term_months=term, first_payment=first)
+
+
 def _monthly_totals(schedules: Sequence[schedule.Schedule]) -> list[Decimal]:
     """Summed recurring payment of all tracks for each month until the longest track ends."""
     payments = [s.recurring_payments for s in schedules]
@@ -287,27 +289,9 @@ def register_tools(
     def assess_affordability(profile: Annotated[Profile, Field(description=_PROFILE)]) -> Bounds:
         """Call this once the person's monthly income and obligations are known, before any loan
         amount or payment is discussed. Returns the highest monthly payment the person can carry,
-        the savings cushion to keep, the income counted, and reason codes for how they were set.
+        the income counted, and reason codes for how the payment was set.
         """
-        return Bounds.model_validate(policy.assess_affordability(profile))
-
-    @server.tool()
-    def size_loan(
-        goal_price: Annotated[Decimal, Field(ge=0, description="Price of the purchase, ₪")],
-        savings: Annotated[
-            Decimal, Field(ge=0, description="The person's liquid money for the purchase, ₪")
-        ],
-        min_cushion: Annotated[
-            Decimal,
-            Field(
-                ge=0, description="Savings to keep untouched, ₪: assess_affordability's min_cushion"
-            ),
-        ],
-    ) -> Sizing:
-        """Call this when the person names a price, to find how much to borrow after the savings
-        above the cushion. Returns the loan amount and how the savings divide.
-        """
-        return Sizing.model_validate(policy.size_loan(goal_price, savings, min_cushion))
+        return Bounds.model_validate(affordability.assess_affordability(profile))
 
     @server.tool()
     def simulate_loan(
@@ -387,28 +371,22 @@ def register_tools(
             Decimal,
             Field(gt=0, description="assess_affordability's payment_ceiling, ₪ per month"),
         ],
+        any_track: Annotated[
+            bool,
+            Field(description="True to fit when at least one track does, not every track"),
+        ] = False,
     ) -> ComfortableTerm:
         """Call this to choose the term of the example tracks: the shortest term, in steps of
         6 months, at which suggest_tracks' fixed and prime tracks keep their highest payment, in
-        the worst historical window too, within 90% of the payment ceiling. Refused when no term
-        up to the longest the simulator prices fits; the refusal names the largest loan the
-        ceiling carries.
+        the worst historical window too, within the payment ceiling, or with any_track at
+        least one of them. term_months is null
+        when no term up to the longest the simulator prices fits.
         """
         market = history_provider()
-        term = policy.shortest_comfortable_term(principal, payment_ceiling, market)
-        if term is None:
-            largest = policy.largest_comfortable_loan(payment_ceiling, market)
-            carries = (
-                "it carries no loan the simulator prices"
-                if largest is None
-                else f"the largest loan it carries, over {MAX_TERM} months, is {largest} ₪"
-            )
-            raise ToolError(
-                f"no term up to {MAX_TERM} months keeps the payment of a {principal} ₪ loan "
-                f"within {COMFORT_SHARE:.0%} of a {payment_ceiling} ₪ ceiling; the loan is too "
-                f"large for this ceiling: {carries}"
-            )
-        return ComfortableTerm(term_months=term, payment_limit=payment_ceiling * COMFORT_SHARE)
+        term = policy.shortest_comfortable_term(
+            principal, payment_ceiling, market, any_track=any_track
+        )
+        return ComfortableTerm(term_months=term)
 
     @server.tool()
     def shortest_comfortable_offer_term(
@@ -427,7 +405,7 @@ def register_tools(
         """Call this when a real offer lets the person choose the term up to a maximum ("up to 84
         months"): a longer term only adds interest, so the offer is priced at the shortest term,
         in steps of 6 months up to its maximum, that keeps its highest payment, in the worst
-        historical window too, within 90% of the payment ceiling. When no term does, returns the
+        historical window too, within the payment ceiling. When no term does, returns the
         offer's maximum with comfortable false.
         """
         market = history_provider()
@@ -435,8 +413,63 @@ def register_tools(
         return OfferTerm(
             term_months=track.term_months if term is None else term,
             comfortable=term is not None,
-            payment_limit=payment_ceiling * COMFORT_SHARE,
         )
+
+    @server.tool()
+    def propose_term(
+        principal: Annotated[
+            Decimal, Field(ge=MIN_PRINCIPAL, le=MAX_PRINCIPAL, description="Loan amount, ₪")
+        ],
+        payment_limit: Annotated[
+            Decimal, Field(gt=0, description="The first payment must be below this, ₪ per month")
+        ],
+    ) -> ProposedTerm:
+        """Call this to choose the term of the example tracks from the first payment the person
+        wants to stay under: the shortest term, in steps of 6 months, at which suggest_tracks'
+        fixed and prime tracks both start below the limit, or the longest the simulator prices
+        when none does. Returns that term and the higher first payment of the two tracks.
+        """
+        market = history_provider()
+        term = policy.proposed_term(principal, payment_limit, market)
+        return _proposed(policy.suggest_tracks(principal, term, market), term, market)
+
+    @server.tool()
+    def propose_offer_term(
+        track: Annotated[
+            Track,
+            Field(
+                description="The real offer as one track, with term_months the longest term the "
+                "offer allows"
+            ),
+        ],
+        payment_limit: Annotated[
+            Decimal, Field(gt=0, description="The first payment must be below this, ₪ per month")
+        ],
+    ) -> ProposedTerm:
+        """Call this when a real offer lets the person choose the term up to a maximum and wants
+        to stay under a first payment: the shortest term, in steps of 6 months up to the
+        offer's maximum, at which the offer's first payment is below the limit, or the offer's
+        maximum when none is. Returns that term and the first payment at it.
+        """
+        market = history_provider()
+        term = policy.proposed_offer_term(track, payment_limit, market)
+        return _proposed([track.model_copy(update={"term_months": term})], term, market)
+
+    @server.tool()
+    def largest_comfortable_loan(
+        payment_ceiling: Annotated[
+            Decimal,
+            Field(gt=0, description="assess_affordability's payment_ceiling, ₪ per month"),
+        ],
+        term_months: Annotated[int, Field(ge=MIN_TERM, le=MAX_TERM, description="Term, months")],
+    ) -> LargestLoan:
+        """Call this to tell the person the largest loan their payment ceiling carries at a term:
+        the largest amount for which at least one of suggest_tracks' tracks keeps its highest
+        payment, in the worst historical window too, within the ceiling. loan_amount is null
+        when even the smallest loan the simulator prices does not fit.
+        """
+        loan = policy.largest_comfortable_loan(payment_ceiling, term_months, history_provider())
+        return LargestLoan(loan_amount=loan)
 
     @server.tool()
     def suggest_tracks(

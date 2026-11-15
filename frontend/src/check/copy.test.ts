@@ -2,8 +2,8 @@ import { expect, test } from 'vitest'
 import {
   answerLine,
   capNotice,
-  panelNote,
-  profileValueText,
+  amountText,
+  checkTitle,
   questionLabel,
   skipLine,
 } from './copy.ts'
@@ -28,23 +28,21 @@ test('the cap notice gives the date when sending resumes later than tomorrow', (
   )
 })
 
-test('a question is labelled from the profile copy, the goal copy or the model', () => {
-  expect(questionLabel({ field: 'savings', text: null, choices: null })).toBe('כסף זמין')
-  expect(questionLabel({ field: 'variable_income_minimum', text: null, choices: null })).toBe(
-    'מינימלית',
+test('a question is labelled from the field copy, the term card or the model', () => {
+  expect(questionLabel({ field: 'net_fixed_income', text: null, choices: null })).toBe(
+    'הכנסה קבועה',
   )
-  expect(questionLabel({ field: 'price', text: null, choices: null })).toBe('מה המחיר, בערך?')
+  expect(questionLabel({ field: 'amount', text: null, choices: null })).toBe('כמה צריך ללוות?')
   expect(questionLabel({ field: null, text: 'חדש או משומש?', choices: null })).toBe(
     'חדש או משומש?',
+  )
+  expect(questionLabel({ kind: 'term', term_months: 60, first_payment: '812.4' })).toBe(
+    'תקופה מוצעת: 60 חודשים · החזר ראשון כ-812 ₪',
   )
 })
 
 test('a skipped question names its label', () => {
   expect(skipLine('כסף זמין')).toBe('דילוג על: כסף זמין')
-})
-
-test('a panel edit is noted with its label and value', () => {
-  expect(panelNote('הוצאות קבועות', '3,000 ₪')).toBe('עודכן בפרופיל: הוצאות קבועות 3,000 ₪')
 })
 
 test('an answer follows its label after a colon, or after a space when the label asks', () => {
@@ -54,6 +52,14 @@ test('an answer follows its label after a colon, or after a space when the label
   )
 })
 
-test('a profile value reads as a shekel amount', () => {
-  expect(profileValueText('3000')).toBe('3,000 ₪')
+test('an amount reads as a shekel amount', () => {
+  expect(amountText('3000')).toBe('3,000 ₪')
+})
+
+test('checkTitle names the purpose and the amount', () => {
+  expect(checkTitle({ purpose: 'רכב', amount: '29000' })).toBe('רכב - הלוואה בסך 29,000₪')
+})
+
+test('a loan without a purpose is titled כללי', () => {
+  expect(checkTitle({ purpose: null, amount: '100000' })).toBe('כללי - הלוואה בסך 100,000₪')
 })

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { saveFinances } from './checks.ts'
 import { ApiException, SIGNED_OUT_EVENT, apiDelete, apiGet, apiPost, apiPut } from './client.ts'
 
 function respond(status: number, body: unknown) {
@@ -97,6 +98,31 @@ describe('client', () => {
         headers: { 'Content-Type': 'application/json' },
         body: '{"a":1}',
       }),
+    )
+  })
+})
+
+describe('saveFinances', () => {
+  it("saveFinances puts decimal strings to the check's finances", async () => {
+    const saved = { id: 'c1', finances: { net_fixed_income: '9300', fixed_expenses: '4500.50' } }
+    respond(200, saved)
+    await expect(saveFinances('c1', { net_fixed_income: '9300', fixed_expenses: '4500.50' })).resolves
+      .toEqual(saved)
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/checks/c1/finances',
+      expect.objectContaining({
+        method: 'PUT',
+        body: '{"net_fixed_income":"9300","fixed_expenses":"4500.50"}',
+      }),
+    )
+  })
+
+  it('sends only the figure named', async () => {
+    respond(200, {})
+    await saveFinances('c1', { fixed_expenses: '4000' })
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/checks/c1/finances',
+      expect.objectContaining({ body: '{"fixed_expenses":"4000"}' }),
     )
   })
 })

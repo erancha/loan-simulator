@@ -16,7 +16,7 @@ from loan_agent.adapters.postgres.repositories import (
     PostgresCheckEventStore,
     PostgresCheckRepository,
 )
-from loan_agent.domain.models import Check
+from loan_agent.domain.models import Check, Finances
 from loan_agent.platform import app as app_module
 from loan_agent.platform.api.auth import COOKIE
 from loan_agent.platform.app import EngineUnreachableError, create_app
@@ -83,7 +83,9 @@ def stubbed(monkeypatch: pytest.MonkeyPatch) -> ScriptedChatModel:
 async def seed_interrupted_turn(database_url: str, check_id: str) -> None:
     engine = build_engine(database_url)
     sessions = session_factory(engine)
-    await PostgresCheckRepository(sessions).add(Check(check_id, "1001", NOW, None, None))
+    await PostgresCheckRepository(sessions).add(
+        Check(check_id, "1001", NOW, None, None, None, None, Finances())
+    )
     events = PostgresCheckEventStore(sessions)
     await events.append(check_id, "message.user", {"text": "שלום"})
     await events.append(check_id, "turn.status", {"status": "running"})
@@ -107,9 +109,9 @@ def test_the_app_serves_a_turn_on_postgres(
                 content="",
                 tool_calls=[
                     {
-                        "name": "update_profile",
-                        "args": {"savings": "70000"},
-                        "id": "call-profile",
+                        "name": "set_loan",
+                        "args": {"purpose": "רכב", "amount": "70000"},
+                        "id": "call-loan",
                         "type": "tool_call",
                     }
                 ],
@@ -126,13 +128,13 @@ def test_the_app_serves_a_turn_on_postgres(
         assert sent.status_code == 202
         client.portal.call(client.app.state.runner.drain)  # type: ignore[attr-defined]
 
-        assert client.get("/api/profile").json()["profile"]["savings"] == "70000"
-        assert client.get(f"/api/checks/{check_id}").json()["id"] == check_id
+        view = client.get(f"/api/checks/{check_id}").json()
+        assert (view["id"], view["loan"]) == (check_id, {"purpose": "רכב", "amount": "70000"})
 
     assert [event for event, _ in asyncio.run(stored_types(pg_url, check_id))] == [
         "message.user",
         "turn.status",
-        "profile.updated",
+        "loan.set",
         "message.assistant",
         "turn.status",
     ]

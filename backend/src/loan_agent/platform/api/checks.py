@@ -1,17 +1,18 @@
-"""Check routes: create, list, read, clone and delete a person's checks, and send a message that
-starts a turn.
+"""Check routes: create, list, read, clone and delete a person's checks, save the figures of a
+check's panel, and send a message that starts a turn.
 
 Core building blocks:
 - router: POST/GET /api/checks, GET/DELETE /api/checks/{id}, POST /api/checks/{id}/clone,
-  /archive and /restore, POST /api/checks/{id}/messages
+  /archive and /restore, POST /api/checks/{id}/messages, /market-sample and /term-ceiling, PUT
+  /api/checks/{id}/finances and /term
 - register_error_handlers: another person's check answers 404 like an unknown one; a message, a
-  clone, an archive or a delete while a turn runs answers 409, as do a message to an archived
-  check, a second archive, and a restore of a check that is open or no longer matches the
-  profile; a message over the cap answers 429 with Retry-After
+  clone, an archive, a delete, a finances save or a term save while a turn runs answers 409, as do
+  a message, a finances save or a term save to an archived check, a second archive, and a restore
+  of a check that is open; figures or a term that cannot be saved answer 422 with the reason; a
+  message over the cap answers 429 with Retry-After
 """
 
 import math
-from datetime import datetime
 
 from fastapi import APIRouter, FastAPI, Request, status
 from fastapi.responses import JSONResponse
@@ -20,6 +21,7 @@ from loan_agent.domain.errors import (
     CheckArchivedError,
     CheckNotFoundError,
     CheckNotRestorableError,
+    FinancesError,
     TurnConflictError,
     TurnLimitError,
 )
@@ -30,11 +32,14 @@ from loan_agent.platform.api.schemas import (
     CheckSummary,
     CheckView,
     CreatedCheck,
+    FinancesUpdate,
     Message,
-    OptionView,
-    Recommendation,
+    TermCeiling,
+    TermConfirmation,
 )
 from loan_agent.platform.dependencies import AppDeps, Deps, Runner, get_deps
+from loan_agent.ports.engine import EngineError
+from loan_agent.ports.events import MESSAGE_USER
 
 router = APIRouter(prefix="/api/checks")
 
@@ -54,15 +59,16 @@ async def _recommends_examples_only(
     return True
 
 
-async def _summary(
-    deps: AppDeps, check: Check, profile_updated_at: datetime | None
-) -> CheckSummary:
+async def _summary(deps: AppDeps, check: Check, started: bool) -> CheckSummary:
     recommendation = await deps.recommendations.latest(check.id)
     return CheckSummary.of(
-        check,
-        recommendation,
-        await _recommends_examples_only(deps, recommendation),
-        profile_updated_at,
+        check, recommendation, await _recommends_examples_only(deps, recommendation), started
+    )
+
+
+async def _view(deps: AppDeps, check: Check) -> CheckView:
+    return CheckView.of(
+        check, await deps.options.list(check.id), await deps.recommendations.latest(check.id)
     )
 
 
@@ -75,26 +81,16 @@ async def create_check(user: CurrentUser, runner: Runner) -> CreatedCheck:
 @router.get("")
 async def list_checks(user: CurrentUser, deps: Deps) -> list[CheckSummary]:
     """Newest first."""
-    _, profile_updated_at = await deps.profiles.get(user.id)
+    started = set(await deps.events.checks_with(user.id, MESSAGE_USER))
     return [
-        await _summary(deps, check, profile_updated_at) for check in await deps.checks.list(user.id)
+        await _summary(deps, check, check.id in started)
+        for check in await deps.checks.list(user.id)
     ]
 
 
 @router.get("/{check_id}")
 async def get_check(check_id: str, user: CurrentUser, deps: Deps) -> CheckView:
-    check = await deps.checks.get(user.id, check_id)
-    _, profile_updated_at = await deps.profiles.get(user.id)
-    recommendation = await deps.recommendations.latest(check.id)
-    return CheckView(
-        id=check.id,
-        created_at=check.created_at,
-        goal=check.goal,
-        options=[OptionView.of(option) for option in await deps.options.list(check.id)],
-        recommendation=None if recommendation is None else Recommendation.of(recommendation),
-        profile_stale=check.is_stale(profile_updated_at),
-        archived=check.archived_at is not None,
-    )
+    return await _view(deps, await deps.checks.get(user.id, check_id))
 
 
 @router.post("/{check_id}/clone", status_code=status.HTTP_201_CREATED)
@@ -113,6 +109,33 @@ async def restore_check(check_id: str, user: CurrentUser, runner: Runner) -> Non
     await runner.restore(user, check_id)
 
 
+@router.put("/{check_id}/finances")
+async def save_check_finances(
+    check_id: str, body: FinancesUpdate, user: CurrentUser, runner: Runner, deps: Deps
+) -> CheckView:
+    """Saves through the same path as the model's tool, so the ceiling derived from complete
+    figures is stored with them."""
+    return await _view(deps, await runner.save_finances(user, check_id, body.sent()))
+
+
+@router.post("/{check_id}/term-ceiling", status_code=status.HTTP_202_ACCEPTED)
+async def send_term_ceiling(
+    check_id: str, body: TermCeiling, user: CurrentUser, runner: Runner
+) -> None:
+    """A ceiling typed on the term card: saved as stated, and a term card for it follows on the
+    event stream, with no model call; the errors are a message's."""
+    await runner.send_term_ceiling(user, check_id, body.text, body.payment_ceiling)
+
+
+@router.put("/{check_id}/term", status_code=status.HTTP_204_NO_CONTENT)
+async def confirm_term(
+    check_id: str, body: TermConfirmation, user: CurrentUser, runner: Runner
+) -> None:
+    """The term the person confirms on the term card, and a ceiling typed beside it, saved before
+    the line that tells the model, so the model reads them as set rather than judging the line."""
+    await runner.save_term(user, check_id, body.term_months, body.payment_ceiling)
+
+
 @router.delete("/{check_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_check(check_id: str, user: CurrentUser, runner: Runner) -> None:
     await runner.delete(user, check_id)
@@ -122,6 +145,15 @@ async def delete_check(check_id: str, user: CurrentUser, runner: Runner) -> None
 async def send_message(check_id: str, body: Message, user: CurrentUser, runner: Runner) -> None:
     """Accepted once the message is stored; the reply arrives on the check's event stream."""
     await runner.send(user, check_id, body.text)
+
+
+@router.post("/{check_id}/market-sample", status_code=status.HTTP_202_ACCEPTED)
+async def send_market_sample(
+    check_id: str, body: Message, user: CurrentUser, runner: Runner
+) -> None:
+    """The page's market-data sample, answered from the market data with no model call; the
+    answer arrives on the event stream as a reply does, and the errors are a message's."""
+    await runner.send_market_sample(user, check_id, body.text)
 
 
 def register_error_handlers(app: FastAPI) -> None:
@@ -134,6 +166,13 @@ def register_error_handlers(app: FastAPI) -> None:
         return JSONResponse(
             {"detail": str(error), "check_id": error.check_id},
             status_code=status.HTTP_409_CONFLICT,
+        )
+
+    async def unsavable(request: Request, error: Exception) -> JSONResponse:
+        """The message names the figure at fault, or what the engine refused."""
+        assert isinstance(error, FinancesError | EngineError)
+        return JSONResponse(
+            {"detail": str(error)}, status_code=status.HTTP_422_UNPROCESSABLE_CONTENT
         )
 
     async def over_limit(request: Request, error: Exception) -> JSONResponse:
@@ -149,4 +188,6 @@ def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(TurnConflictError, conflict)
     app.add_exception_handler(CheckArchivedError, conflict)
     app.add_exception_handler(CheckNotRestorableError, conflict)
+    app.add_exception_handler(FinancesError, unsavable)
+    app.add_exception_handler(EngineError, unsavable)
     app.add_exception_handler(TurnLimitError, over_limit)

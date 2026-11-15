@@ -3,10 +3,18 @@
 Core building blocks:
 - CheckRunner.create: a new, empty check for the signed-in person
 - CheckRunner.send: records the person's message and runs the turn as a background task
+- CheckRunner.send_term_ceiling: records the payment ceiling the person typed on the term card,
+  saves it and shows a term card for it, with no model call
+- CheckRunner.send_market_sample: records the page's market-data sample and answers it from the
+  engine's data with no model call, as a turn the conversation keeps
 - CheckRunner.delete: removes an idle check, its conversation and all it produced
-- CheckRunner.clone: copies an idle check, its conversation and all it produced into a new check
-- CheckRunner.archive and restore: the person closes an idle check, or reopens one whose
-  figures still match the profile
+- CheckRunner.clone: copies an idle check, its conversation and all it produced into a new check,
+  and leaves the source a check.cloned event naming the copy
+- CheckRunner.archive and restore: the person closes an idle check, or reopens an archived one
+- CheckRunner.save_finances: saves the figures the person types on a check's panel, refused while
+  the check runs a turn
+- CheckRunner.save_term: saves the term the person confirms on the term card, with a ceiling
+  typed beside it, before the line that tells the model, refused while the check runs a turn
 - CheckRunner.fail_interrupted: at startup, ends the turns a stopped process left running
 - CheckRunner.drain and aclose: wait for or cancel the turns in flight
 
@@ -15,6 +23,10 @@ costs model calls, so a person may send at most turn_limit messages, or their ov
 across all their checks, in any rolling window of the configured length, and deleting a check gives
 none of them back. Turns live in this process's memory, so the agent runs as one replica.
 
+A model turn that leaves the check with a recommendation and no payment ceiling ends with the
+ceiling question, asked once per check by the runner rather than left to the model, so the
+person always meets it after the first recommendation.
+
 A turn streams the model's text to open pages as live message.delta events, each carrying the
 whole text of its message so far, so a page that joins mid-reply catches up from the next one.
 It stores each complete model message with text as message.assistant under the same message id,
@@ -22,19 +34,14 @@ so a page that replays the log sees complete messages only. A turn ends with tur
 preceded by turn.failed when it raised or was cut short by a restart; the error itself goes to the
 log, never to the page. A cut-short turn leaves the thread at its last checkpoint, and the next
 turn continues from there.
-
-A turn that ends by archiving its check (a profile change replaced the figures its recommendation
-was computed from) continues in a new check with the same goal: the old check's log names the new
-one in check.continued, the new one's log opens with check.follows, naming the old one and the
-changes that archived it, and the new check runs a turn on the person's same message. The new
-check's turn skips the cap check, but its copy of the message is logged like any other, so the
-person's count holds the message twice.
 """
 
 import asyncio
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Coroutine, Mapping
 from datetime import datetime, timedelta
+from decimal import Decimal
+from typing import cast
 
 import structlog
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
@@ -43,34 +50,35 @@ from langgraph.graph import MessagesState
 
 from loan_agent.application.agent_graph import (
     AgentGraph,
-    archived_the_check,
     check_config,
     copy_conversation,
     delete_conversation,
-    last_message,
+    record_exchange,
 )
-from loan_agent.application.profile_saving import manual_archive_data
+from loan_agent.application.check_tools import CheckTools, ToolDeps
+from loan_agent.application.finances_saving import save_finances
+from loan_agent.application.market_answer import PRIME_MONTHS, market_answer
 from loan_agent.domain.errors import (
     CheckArchivedError,
     CheckNotRestorableError,
     TurnConflictError,
     TurnLimitError,
 )
-from loan_agent.domain.models import Check, User
+from loan_agent.domain.models import Check, Finances, User
 from loan_agent.ports.events import (
+    CHART_SHOWN,
     CHECK_ARCHIVED,
-    CHECK_CONTINUED,
-    CHECK_FOLLOWS,
+    CHECK_CLONED,
     CHECK_RESTORED,
-    GOAL_SET,
     MESSAGE_ASSISTANT,
     MESSAGE_DELTA,
     MESSAGE_USER,
+    QUESTION_ASKED,
     TURN_FAILED,
     TURN_STATUS,
     EventSink,
 )
-from loan_agent.ports.repositories import CheckEventStore, CheckRepository, ProfileRepository
+from loan_agent.ports.repositories import CheckEventStore, CheckRepository
 
 log = structlog.get_logger(__name__)
 
@@ -78,12 +86,28 @@ RUNNING = {"status": "running"}
 IDLE = {"status": "idle"}
 
 FAILURE_MESSAGE = "לא הצלחתי להשלים את התשובה. אפשר לנסות שוב."
+CEILING_FIELD = "payment_ceiling"
+CEILING_QUESTION = {
+    "question": {"field": CEILING_FIELD, "offer_clone": False, "text": None, "choices": None},
+    "lead_in": None,
+}
+# What the model's conversation records of a ceiling typed on the term card.
+TERM_CARD_FOR_CEILING = (
+    "The screen saved that payment ceiling as stated and showed a new term card for it: the "
+    "shortest term at which every example track's worst-case payment fits the ceiling, or 84 "
+    "months when none does. The person's answer to that card arrives as the next message."
+)
+# What the model's conversation records of the runner's question: the page words it itself.
+CEILING_ASKED = (
+    "The screen asked the person for their payment ceiling (field payment_ceiling), with a skip "
+    "and a 'לא יודע/ת' choice; their answer arrives as the next message."
+)
 # The model reads this as the result of each unanswered tool call. The tool node runs one model
 # message's calls concurrently, so another call from that message may have saved before one failed.
 TOOL_CALL_OUTCOME_UNKNOWN = (
     "The outcome of this tool call is unknown: the previous turn ended with an error before its "
     "results were recorded, and the call may have completed. Before repeating a call that saves "
-    "something (a profile, a goal, an option), ask the person whether it already appears on "
+    "something (finances, a loan, an option), ask the person whether it already appears on "
     "their page."
 )
 
@@ -93,9 +117,9 @@ class CheckRunner:
         self,
         graph: AgentGraph,
         checks: CheckRepository,
-        profiles: ProfileRepository,
         events: CheckEventStore,
         sink: EventSink,
+        tool_deps: ToolDeps,
         turn_limit: int,
         turn_limit_overrides: Mapping[str, int],
         window: timedelta,
@@ -103,9 +127,9 @@ class CheckRunner:
     ) -> None:
         self._graph = graph
         self._checks = checks
-        self._profiles = profiles
         self._events = events
         self._sink = sink
+        self._tool_deps = tool_deps
         self._turn_limit = turn_limit
         self._turn_limit_overrides = turn_limit_overrides
         self._window = window
@@ -118,7 +142,7 @@ class CheckRunner:
         self._send_lock = asyncio.Lock()
 
     async def create(self, user: User) -> Check:
-        check = Check(str(uuid.uuid4()), user.id, self._clock(), None, None)
+        check = Check(str(uuid.uuid4()), user.id, self._clock(), None, None, None, None, Finances())
         await self._checks.add(check)
         return check
 
@@ -126,29 +150,45 @@ class CheckRunner:
         """Raises CheckNotFoundError for an unknown check or another person's, CheckArchivedError
         for an archived one, TurnConflictError while the check runs a turn, and TurnLimitError
         when the person's messages are used up."""
-        async with self._send_lock:
-            check = await self._checks.get(user.id, check_id)
-            if check.archived_at is not None:
-                raise CheckArchivedError(check_id)
-            if check_id in self._turns:
-                raise TurnConflictError(check_id)
-            await self._require_message_left(user)
-            await self._start(user.id, check_id, text)
+        await self._start(user, check_id, text, self._run)
+
+    async def send_term_ceiling(
+        self, user: User, check_id: str, text: str, payment_ceiling: Decimal
+    ) -> None:
+        """The term card's own ceiling: it counts as a message and raises as send does."""
+
+        async def answer(user_id: str, check_id: str, text: str) -> None:
+            await self._answer_term_ceiling(user_id, check_id, text, payment_ceiling)
+
+        await self._start(user, check_id, text, answer)
+
+    async def send_market_sample(self, user: User, check_id: str, text: str) -> None:
+        """The page sends the market-data sample here, the person's own wording of it included;
+        it counts as a message and raises as send does."""
+        await self._start(user, check_id, text, self._answer_market)
 
     async def clone(self, user: User, check_id: str) -> Check:
         """Raises CheckNotFoundError for an unknown check or another person's, and
         TurnConflictError while the check runs a turn. The clone is open even when its source is
-        archived; it then reads as stale, recommended from an older profile."""
+        archived."""
         async with self._send_lock:
             source = await self._checks.get(user.id, check_id)
             if check_id in self._turns:
                 raise TurnConflictError(check_id)
             clone = Check(
-                str(uuid.uuid4()), user.id, self._clock(), source.goal, source.profile_snapshot_at
+                str(uuid.uuid4()),
+                user.id,
+                self._clock(),
+                source.loan,
+                source.term_months,
+                source.payment_ceiling,
+                source.ceiling_source,
+                source.finances,
             )
-            left_out = (CHECK_ARCHIVED, CHECK_CONTINUED, CHECK_RESTORED)
+            left_out = (CHECK_ARCHIVED, CHECK_RESTORED, CHECK_CLONED)
             await self._checks.clone(source.id, clone, left_out)
             await copy_conversation(self._graph, source.id, clone.id)
+            await self._sink.emit(source.id, CHECK_CLONED, {"clone_id": clone.id})
             return clone
 
     async def delete(self, user: User, check_id: str) -> None:
@@ -200,55 +240,71 @@ class CheckRunner:
             freeing = times[count - limit]
             raise TurnLimitError(limit, freeing + self._window)
 
+    async def save_finances(self, user: User, check_id: str, update: Mapping[str, object]) -> Check:
+        """Raises CheckNotFoundError for an unknown check or another person's, CheckArchivedError
+        for an archived one, TurnConflictError while the check runs a turn, and FinancesError or
+        EngineError when the figures cannot be saved; nothing is saved then."""
+        async with self._send_lock:
+            await self._idle_open_check(user, check_id)
+            return await save_finances(check_id, user.id, update, self._tool_deps)
+
+    async def save_term(
+        self, user: User, check_id: str, term_months: int, payment_ceiling: Decimal | None
+    ) -> None:
+        """Saves the term, and the ceiling as stated when one is given. Raises as save_finances
+        does for an unknown, archived or busy check, and EngineError when an offer cannot be
+        priced at the term; nothing is saved then, since the term's save is the one that can
+        fail and it runs first."""
+        async with self._send_lock:
+            await self._idle_open_check(user, check_id)
+            tools = CheckTools(user.id, check_id, self._tool_deps)
+            await tools.save_term(term_months)
+            if payment_ceiling is not None:
+                await tools.set_ceiling(str(payment_ceiling))
+
+    async def _idle_open_check(self, user: User, check_id: str) -> Check:
+        check = await self._checks.get(user.id, check_id)
+        if check.archived_at is not None:
+            raise CheckArchivedError(check_id)
+        if check_id in self._turns:
+            raise TurnConflictError(check_id)
+        return check
+
     async def archive(self, user: User, check_id: str) -> None:
         """Raises CheckNotFoundError for an unknown check or another person's, CheckArchivedError
         for an archived one, and TurnConflictError while the check runs a turn."""
         async with self._send_lock:
-            check = await self._checks.get(user.id, check_id)
-            if check.archived_at is not None:
-                raise CheckArchivedError(check_id)
-            if check_id in self._turns:
-                raise TurnConflictError(check_id)
+            await self._idle_open_check(user, check_id)
             now = self._clock()
             await self._checks.archive(check_id, now)
-            await self._sink.emit(check_id, CHECK_ARCHIVED, manual_archive_data(now))
+            await self._sink.emit(check_id, CHECK_ARCHIVED, {"archived_at": now.isoformat()})
 
     async def restore(self, user: User, check_id: str) -> None:
         """Raises CheckNotFoundError for an unknown check or another person's, and
-        CheckNotRestorableError for an open check or one whose figures the profile no longer
-        has."""
+        CheckNotRestorableError for a check that is not archived."""
         async with self._send_lock:
             check = await self._checks.get(user.id, check_id)
-            _, profile_updated_at = await self._profiles.get(user.id)
-            if not check.is_restorable(profile_updated_at):
+            if check.archived_at is None:
                 raise CheckNotRestorableError(check_id)
             await self._checks.restore(check_id)
             await self._sink.emit(check_id, CHECK_RESTORED, {})
 
-    async def _start(self, user_id: str, check_id: str, text: str) -> None:
-        """Runs a turn on a check with no turn in flight."""
-        await self._sink.emit(check_id, MESSAGE_USER, {"text": text})
-        await self._sink.emit(check_id, TURN_STATUS, RUNNING)
-        turn = asyncio.create_task(self._run(user_id, check_id, text))
-        self._turns[check_id] = turn
-        turn.add_done_callback(lambda done: self._forget(check_id, done))
-
-    async def _continue_in_new_check(self, user_id: str, archived_id: str, text: str) -> None:
-        archived = await self._checks.get(user_id, archived_id)
-        check = Check(str(uuid.uuid4()), user_id, self._clock(), archived.goal, None)
-        await self._checks.add(check)
-        archive = next(
-            event
-            for event in reversed(await self._events.list(archived_id, 0))
-            if event.type == CHECK_ARCHIVED
-        )
-        follows = {"check_id": archived_id, "changes": archive.data["changes"]}
-        await self._sink.emit(check.id, CHECK_FOLLOWS, follows)
-        if check.goal is not None:
-            goal = {"purpose": check.goal.purpose, "price": str(check.goal.price)}
-            await self._sink.emit(check.id, GOAL_SET, goal)
-        await self._sink.emit(archived_id, CHECK_CONTINUED, {"check_id": check.id})
-        await self._start(user_id, check.id, text)
+    async def _start(
+        self,
+        user: User,
+        check_id: str,
+        text: str,
+        answer: Callable[[str, str, str], Coroutine[None, None, None]],
+    ) -> None:
+        """Records the message and runs answer as the check's turn in the background."""
+        async with self._send_lock:
+            await self._idle_open_check(user, check_id)
+            await self._require_message_left(user)
+            await self._sink.emit(check_id, MESSAGE_USER, {"text": text})
+            await self._sink.emit(check_id, TURN_STATUS, RUNNING)
+            turn = asyncio.create_task(answer(user.id, check_id, text))
+            self._turns[check_id] = turn
+            turn.add_done_callback(lambda done: self._forget(check_id, done))
 
     async def _run(self, user_id: str, check_id: str, text: str) -> None:
         config = check_config(user_id, check_id)
@@ -267,10 +323,69 @@ class CheckRunner:
                     await self._store_replies(check_id, part["data"])
                 else:
                     raise AssertionError(f"unrequested stream part {part['type']!r}")
-            if archived_the_check(await last_message(self._graph, check_id)):
-                await self._continue_in_new_check(user_id, check_id, text)
+            await self._ask_ceiling_when_due(user_id, check_id, config)
         except Exception:
             log.exception("turn failed", check_id=check_id)
+            await self._report_failure(check_id)
+            return
+        await self._sink.emit(check_id, TURN_STATUS, IDLE)
+
+    async def _ask_ceiling_when_due(
+        self, user_id: str, check_id: str, config: RunnableConfig
+    ) -> None:
+        """Asks for the payment ceiling once a check has a recommendation and no ceiling, unless
+        the check was asked before (a clone keeps its source's asking) or the turn already ends
+        with a question of the model's. The conversation records the question, so the model
+        reads the next message as its answer."""
+        check = await self._checks.get(user_id, check_id)
+        if check.payment_ceiling is not None:
+            return
+        if await self._tool_deps.recommendations.latest(check_id) is None:
+            return
+        events = await self._events.list(check_id, 0)
+        if events[-1].type == QUESTION_ASKED:
+            return
+        if any(
+            event.type == QUESTION_ASKED
+            and cast(Mapping[str, object], event.data["question"]).get("field") == CEILING_FIELD
+            for event in events
+        ):
+            return
+        await self._sink.emit(check_id, QUESTION_ASKED, CEILING_QUESTION)
+        await record_exchange(self._graph, config, [AIMessage(CEILING_ASKED)])
+
+    async def _answer_term_ceiling(
+        self, user_id: str, check_id: str, text: str, payment_ceiling: Decimal
+    ) -> None:
+        config = check_config(user_id, check_id)
+        try:
+            unfinished = await self._close_unfinished_tool_calls(config)
+            tools = CheckTools(user_id, check_id, self._tool_deps)
+            await tools.set_ceiling(str(payment_ceiling))
+            await tools.ask_term(None)
+            exchange = [*unfinished, HumanMessage(text), AIMessage(TERM_CARD_FOR_CEILING)]
+            await record_exchange(self._graph, config, exchange)
+        except Exception:
+            log.exception("term ceiling failed", check_id=check_id)
+            await self._report_failure(check_id)
+            return
+        await self._sink.emit(check_id, TURN_STATUS, IDLE)
+
+    async def _answer_market(self, user_id: str, check_id: str, text: str) -> None:
+        config = check_config(user_id, check_id)
+        try:
+            unfinished = await self._close_unfinished_tool_calls(config)
+            reply, charts = market_answer(await self._tool_deps.engine.market_series(PRIME_MONTHS))
+            message_id = str(uuid.uuid4())
+            await self._sink.emit(
+                check_id, MESSAGE_ASSISTANT, {"message_id": message_id, "text": reply}
+            )
+            for chart in charts:
+                await self._sink.emit(check_id, CHART_SHOWN, chart)
+            exchange = [*unfinished, HumanMessage(text), AIMessage(reply, id=message_id)]
+            await record_exchange(self._graph, config, exchange)
+        except Exception:
+            log.exception("market answer failed", check_id=check_id)
             await self._report_failure(check_id)
             return
         await self._sink.emit(check_id, TURN_STATUS, IDLE)

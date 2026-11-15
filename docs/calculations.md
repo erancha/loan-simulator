@@ -110,44 +110,39 @@ Both series reach back to 1994, but the risk figure has to be one a person belie
 case named after a period the person lived through, such as the 2022 rate rise, is taken
 seriously; one named after the early 2000s reads as a story about a different economy and is
 dismissed. Ten years also keep out the 1990s, when inflation ran near 10% a year under a
-different monetary regime. A 96-month track still has 25 windows.
+different monetary regime. An 84-month track, the longest the engine prices, still has 37
+windows.
 
 ## Policy
 
-The bounds below are the limits the language-model agent has to respect when it talks to a
-person. Their values are constants in `domain/assumptions.py`.
+The limits and searches below are what the agent's term card, ceiling check and remedies rest
+on. Their values are constants in `domain/assumptions.py`. The engine prices a principal of
+10,000 to 10,000,000 ₪ and a term of 6 to 84 months, for every purpose; a car loan may run past
+the usual 60 months, as a bridging loan does.
 
-### Affordability
+### The payment ceiling
 
-Counted income is the net fixed income plus the minimum of the variable income, in full. The
-minimum is the part of the variable income that arrives even in a weak month; the average
-variable income is kept in the profile but never counted, because a payment that depends on it
-cannot be relied on in a lean month. The minimum is at least 0 and never above the average
-variable income; a profile that breaks this is refused with an error naming both fields.
+The payment ceiling is the only figure the engine derives from the person's finances, and it is
+optional: a person may state a ceiling instead, or give none. `domain/affordability.py` holds the
+formula, and an import-linter contract keeps the loan arithmetic (`policy`, `history`,
+`schedule`) from importing it. It takes two monthly figures: net fixed income, which includes
+the variable income that arrives even in a weak month, and fixed expenses, which include the
+payments on existing loans. The ceiling is the lower of two caps, never below 0:
 
-The monthly payment ceiling is the lower of two caps, minus the payments on existing loans, and
-never below 0. An existing loan with 3 months or fewer left is not counted, since its payment
-frees up for the new loan; the agent applies this when it saves the profile, and the profile
-panel's hint states it for a figure the person enters:
+- 30% of the net fixed income: the share of income a single loan payment may take.
+- 50% of the net fixed income minus the fixed expenses: half of what remains after the fixed
+  costs, so the other half stays for variable spending and shocks.
 
-- 30% of counted income: the share of income a single loan payment may take.
-- 50% of counted income minus fixed expenses: half of what remains after the fixed costs, so the
-  other half stays for variable spending and shocks.
+The result names which cap applied (income share on a tie) and whether nothing is left. For
+12,000 ₪ of income and 6,000 ₪ of expenses the caps are 3,600 and 3,000, so the ceiling is
+3,000 ₪.
 
-The result names which cap applied (income share on a tie), whether a variable income
-minimum above 0 was counted, whether existing loans were deducted, and whether nothing is left.
+### Fits the ceiling
 
-The minimum savings cushion is 2 months of fixed expenses; savings below it are never proposed for
-the purchase.
-
-### Loan sizing
-
-The amount to finance is the goal price minus the savings above the cushion that are applied to
-it. Savings below the cushion are untouched, and savings beyond what the goal needs are reported
-as spare. Savings mean all liquid money, so money from selling an old car is part of them: it
-fills the cushion before any of it goes to the purchase. The sizing does not enforce the minimum
-loan amount: a small result is returned as is so the agent will be able to discuss it with the
-person.
+An option fits a ceiling when its highest recurring payment, in its worst historical window for a
+variable track, is at or below the ceiling itself: there is no safety margin. A balloon is paid
+once at the end, so it is not counted. Each option is judged on its own, so a fixed track may fit
+a ceiling that the prime track, at its worst window's payment, passes.
 
 ### Typical tracks
 
@@ -163,17 +158,41 @@ and has no split between them, so the same average prices both kinds. No publish
 CPI-linked consumer loans, so there is no typical linked track; a linked track enters only as a
 real offer.
 
-### Comfortable term
+### Proposed term
 
-The term of the typical tracks is the shortest, in 6-month steps up to the longest term priced,
-at which both tracks' highest recurring payment stays within 90% of the payment ceiling. For the
-prime track that is the payment in its worst historical window, so a past rate rise lengthens the
-term. The 10% left over is room the worst path does not take. When no term fits, the loan is too
-large for the ceiling, and the refusal names the largest loan the ceiling carries at the longest
-term, to a whole 1,000 ₪, so the model can tell the person a concrete amount. The model asks the
-engine for this term and passes it to the tracks.
+The term card's term is chosen by the agent from two constants of its own
+(`backend/src/loan_agent/domain/models.py`) and the engine's searches, all in 6-month steps up
+to 84 months:
 
-An offer that leaves the term open ("up to 84 months") goes through the same search with its own
-rate: 6-month steps below its maximum, then the maximum itself. A longer term only adds interest,
-so the offer is kept at the first term that fits, or at its maximum when none does, and
-`save_option` refuses it at any other term.
+- A car loan gets 60 months, the usual dealer maximum.
+- Another purpose, while the check has no ceiling, gets the shortest term at which both typical
+  tracks' first payment is under 1,000 ₪ (`propose_term`), else 84 months. The first payment is
+  a starting point the person adjusts on the card.
+- Another purpose, once the check has a ceiling, gets the shortest term at which both typical
+  tracks fit it (`shortest_comfortable_term`), else 84 months.
+
+The first payment shown on the card is the higher of the two tracks' first payments at that term.
+
+### Remedies above the ceiling
+
+When the recommended options do not fit the ceiling and no saved option for the term does, the
+recommendation stands above the ceiling, and two searches give the person something concrete:
+
+- The shortest term up to 84 months at which at least one typical track fits
+  (`shortest_comfortable_term` with `any_track`). For a prime track that is the payment in its
+  worst historical window, so a past rate rise lengthens the term.
+- When no term fits, the largest loan (`largest_comfortable_loan`), in whole 1,000 ₪ up to the
+  largest principal, on which at least one typical track fits at the confirmed term, or at 84
+  months while the person has confirmed none; none when even 10,000 ₪ does not. A typical track
+  has no fees, so its payment grows in proportion to the principal: the search scales the
+  payment at 10,000 ₪ to the ceiling, then steps down by 1,000 ₪ until a track fits, which
+  absorbs the rounding of payments.
+
+### Offers with an open term
+
+An offer that leaves the term open ("up to 84 months") goes through the same searches with its
+own rate: 6-month steps below its maximum, then the maximum itself. Without a ceiling it is the
+first term whose first payment is under 1,000 ₪ (`propose_offer_term`); with one, the first that
+fits it (`shortest_comfortable_offer_term`); in either case the maximum when none does. A longer
+term only adds interest, so the offer is kept at that term, and `save_option` refuses it at any
+other.

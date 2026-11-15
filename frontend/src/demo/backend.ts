@@ -1,8 +1,6 @@
 import type {
   CheckEvent,
   CheckSummary,
-  ProfileFields,
-  ProfileView,
   Question,
   RecommendationPresented,
   User,
@@ -12,9 +10,14 @@ import { answerLine, INPUT_LABEL, questionLabel } from '../check/copy.ts'
 /** Every event the server stores for a check; deltas are live only, so a recording has none. */
 export type StoredEvent = Exclude<CheckEvent, { type: 'message.delta' }>
 
-/** One check's stored events in seq order, as scripts/tools/export-demo-check.sh writes them. */
+/**
+ * One check's stored events in seq order, as sql-helper.sh --demo-check writes them. A recorded
+ * clone names its source: the source's events are the clone's copied ones, up to and including
+ * the event at sharedThroughSeq, followed by the note that it was cloned.
+ */
 export interface Recording {
   events: StoredEvent[]
+  source: { sharedThroughSeq: number } | null
 }
 
 /** How the replay paces a recording: the pause before each event, how a reply is typed, and how
@@ -36,22 +39,69 @@ export interface Entry {
 export type ShowEntry = (entry: Entry) => () => void
 
 const DEMO_CHECK_ID = 'demo'
+const SOURCE_CHECK_ID = 'demo-source'
 const DEMO_USER: User = { id: 'demo', email: 'demo@example.com', name: 'הדגמה' }
-// A first visit's profile: every field unset, so missing lists all of them in the panel's order.
-const PROFILE_KEYS: (keyof ProfileFields)[] = [
-  'savings',
-  'net_fixed_income',
-  'variable_income',
-  'variable_income_minimum',
-  'fixed_expenses',
-  'existing_loan_payments',
-]
-const EMPTY_PROFILE: ProfileView = {
-  profile: Object.fromEntries(PROFILE_KEYS.map((key) => [key, null])) as unknown as ProfileFields,
-  missing: PROFILE_KEYS,
-}
-// The checks list's created_at, which the list shows; the replay starts the check now.
+// The checks list's created_at, which the list shows; the replay starts the check now, and a clone
+// is listed a moment after its source, so the list puts it first, as it does the newest check.
 const STARTED_AT = new Date().toISOString()
+const CLONED_AT = new Date(Date.parse(STARTED_AT) + 1000).toISOString()
+
+/** A stored event's seq, which only a live delta lacks. */
+function seqOf(event: StoredEvent): number {
+  if (event.seq === null) throw new Error(`a stored ${event.type} event has no seq`)
+  return event.seq
+}
+
+/** The recorded clone's source: its shared events and the note that it was cloned to the demo. */
+function sourceEvents(recording: Recording): StoredEvent[] | null {
+  if (recording.source === null) return null
+  const { sharedThroughSeq } = recording.source
+  const shared = recording.events.filter((event) => seqOf(event) <= sharedThroughSeq)
+  const last = shared.at(-1)
+  if (last === undefined || seqOf(last) !== sharedThroughSeq) {
+    throw new Error(`the recording has no event ${sharedThroughSeq} for its source to end at`)
+  }
+  return [
+    ...shared,
+    { type: 'check.cloned', data: { clone_id: DEMO_CHECK_ID }, seq: sharedThroughSeq + 1 },
+  ]
+}
+
+function latestOf<Type extends StoredEvent['type']>(events: StoredEvent[], type: Type) {
+  return events.findLast(
+    (event): event is Extract<StoredEvent, { type: Type }> => event.type === type,
+  )
+}
+
+/** A check as the checks list shows it, from the events it holds so far. */
+function summaryOf(id: string, createdAt: string, events: StoredEvent[]): CheckSummary {
+  const recommendation = latestOf(events, 'recommendation.presented')
+  const loan = latestOf(events, 'loan.set')
+  const term = latestOf(events, 'term.set')
+  return {
+    id,
+    created_at: createdAt,
+    loan: loan === undefined ? null : loan.data,
+    recommendation:
+      recommendation === undefined
+        ? null
+        : {
+            preferred_option_id: recommendation.data.preferred.option_id,
+            alternative_option_id:
+              recommendation.data.alternative === null
+                ? null
+                : recommendation.data.alternative.option_id,
+            loan_amount: recommendation.data.loan_amount,
+            payment_ceiling: recommendation.data.payment_ceiling,
+            checked: recommendation.data.checked,
+            created_at: createdAt,
+          },
+    recommends_examples_only: recommendation !== undefined && examplesOnly(recommendation.data),
+    term_months: term === undefined ? null : term.data.term_months,
+    archived: false,
+    started: true,
+  }
+}
 
 type Listener = (frame: MessageEvent<string>) => void
 
@@ -78,6 +128,7 @@ function examplesOnly({ preferred, alternative }: RecommendationPresented): bool
  */
 function entryOf(text: string, live: Question | null): Entry | null {
   if (live === null) return { box: INPUT_LABEL, value: text }
+  if (live.kind === 'term') return null
   const label = questionLabel(live)
   const prefix = answerLine(label, '')
   if (!text.startsWith(prefix)) return null
@@ -95,7 +146,8 @@ function entryOf(text: string, live: Question | null): Entry | null {
  *   events already played, as the server's replay does, then the rest as they play.
  * - A recorded reply is stored whole, so the timeline types it out as cumulative deltas first.
  * - Before a message the person typed, showEntry puts the typed value in its box for a moment.
- * - The profile and the checks list answer what the events played so far imply.
+ * - The checks list answers what the events played so far imply. A recorded clone's source joins
+ *   it once the replay passes the clone, whole, with its own stream.
  * - A message sent from the page is accepted and answered by nothing; a request the page is not
  *   known to make is refused, so a new call surfaces instead of hanging the demo.
  */
@@ -135,48 +187,26 @@ export function createDemoBackend(recording: Recording, pace: Pace, showEntry: S
   }
   void play()
 
-  const latest = <Type extends StoredEvent['type']>(type: Type) =>
-    played.findLast((event): event is Extract<StoredEvent, { type: Type }> => event.type === type)
+  const source = sourceEvents(recording)
 
-  function summary(): CheckSummary {
-    const recommendation = latest('recommendation.presented')
-    const goal = latest('goal.set')
-    return {
-      id: DEMO_CHECK_ID,
-      created_at: STARTED_AT,
-      goal: goal === undefined ? null : goal.data,
-      recommendation:
-        recommendation === undefined
-          ? null
-          : {
-              preferred_option_id: recommendation.data.preferred.option_id,
-              alternative_option_id:
-                recommendation.data.alternative === null
-                  ? null
-                  : recommendation.data.alternative.option_id,
-              loan_amount: recommendation.data.sizing.loan_amount,
-              payment_ceiling: recommendation.data.bounds.payment_ceiling,
-              created_at: STARTED_AT,
-            },
-      recommends_examples_only:
-        recommendation !== undefined && examplesOnly(recommendation.data),
-      profile_stale: false,
-      archived: false,
-      restorable: false,
+  /** The list: the replayed check, and its source once the replay has passed the clone. */
+  function checks(): CheckSummary[] {
+    const last = played.at(-1)
+    const shared = recording.source?.sharedThroughSeq
+    if (source === null || last === undefined || shared === undefined || seqOf(last) <= shared) {
+      return [summaryOf(DEMO_CHECK_ID, STARTED_AT, played)]
     }
-  }
-
-  const profile = () => {
-    const updated = latest('profile.updated')
-    return updated === undefined ? EMPTY_PROFILE : updated.data
+    return [
+      summaryOf(DEMO_CHECK_ID, CLONED_AT, played),
+      summaryOf(SOURCE_CHECK_ID, STARTED_AT, source),
+    ]
   }
 
   const routes: Record<string, () => Response> = {
     'GET /api/auth/me': () => json(DEMO_USER),
-    'GET /api/checks': () => json([summary()]),
-    'GET /api/profile': () => json(profile()),
-    'PUT /api/profile': () => json(profile()),
+    'GET /api/checks': () => json(checks()),
     [`POST /api/checks/${DEMO_CHECK_ID}/messages`]: () => new Response(null, { status: 202 }),
+    [`POST /api/checks/${DEMO_CHECK_ID}/market-sample`]: () => new Response(null, { status: 202 }),
   }
 
   async function fetch(path: string, init?: RequestInit): Promise<Response> {
@@ -201,11 +231,19 @@ export function createDemoBackend(recording: Recording, pace: Pace, showEntry: S
     }
 
     constructor(url: string) {
+      // The hook adds its listeners right after constructing the source, so the catch-up waits a
+      // microtask for them, as a real stream's first frame arrives after its connection opens.
+      // The clone's source is finished, so its stream is its whole history and nothing live.
+      if (source !== null && url === `/api/checks/${SOURCE_CHECK_ID}/events`) {
+        queueMicrotask(() => {
+          if (this.readyState === DemoEventSource.CLOSED) return
+          for (const event of source) this.forward(event)
+        })
+        return
+      }
       if (url !== `/api/checks/${DEMO_CHECK_ID}/events`) {
         throw new Error(`the demo streams no ${url}`)
       }
-      // The hook adds its listeners right after constructing the source, so the catch-up waits a
-      // microtask for them, as a real stream's first frame arrives after its connection opens.
       queueMicrotask(() => {
         if (this.readyState === DemoEventSource.CLOSED) return
         for (const event of played) this.forward(event)

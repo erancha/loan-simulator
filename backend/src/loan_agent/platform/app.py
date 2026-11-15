@@ -1,7 +1,7 @@
 """The FastAPI application and the composition of its production dependencies.
 
 Core building blocks:
-- create_app: routes (sign-in, checks, profile, events), error mapping and probes; its lifespan
+- create_app: routes (sign-in, checks, events), error mapping and probes; its lifespan
   opens the infrastructure, builds the event sink, the agent graph and the CheckRunner, and ends
   the turns a stopped process left running before the app serves
 - production_infrastructure: the engine adapter (which must list its tools), the chat model, the
@@ -43,13 +43,12 @@ from loan_agent.adapters.postgres.repositories import (
     PostgresCheckEventStore,
     PostgresCheckRepository,
     PostgresOptionRepository,
-    PostgresProfileRepository,
     PostgresRecommendationRepository,
 )
 from loan_agent.application.agent_graph import build_agent_graph
 from loan_agent.application.check_tools import ToolDeps
 from loan_agent.application.event_sink import CheckEventSink
-from loan_agent.platform.api import auth, checks, events, profile
+from loan_agent.platform.api import auth, checks, events
 from loan_agent.platform.check_runner import CheckRunner
 from loan_agent.platform.checkpointer import libpq_dsn, open_checkpointer
 from loan_agent.platform.config import Settings, get_settings
@@ -105,7 +104,6 @@ async def production_infrastructure(settings: Settings) -> AsyncIterator[Infrast
                 await session.execute(text("SELECT 1"))
 
         yield Infrastructure(
-            profiles=PostgresProfileRepository(sessions, utc_now),
             checks=PostgresCheckRepository(sessions),
             options=PostgresOptionRepository(sessions),
             recommendations=PostgresRecommendationRepository(sessions),
@@ -182,7 +180,6 @@ def create_app(
             bus = InMemoryEventBus()
             sink = CheckEventSink(opened.events, bus)
             tool_deps = ToolDeps(
-                profiles=opened.profiles,
                 checks=opened.checks,
                 options=opened.options,
                 recommendations=opened.recommendations,
@@ -197,9 +194,9 @@ def create_app(
             runner = CheckRunner(
                 graph,
                 opened.checks,
-                opened.profiles,
                 opened.events,
                 sink,
+                tool_deps,
                 turn_limit=settings.agent_turn_limit,
                 turn_limit_overrides=settings.agent_turn_limit_overrides,
                 window=timedelta(hours=settings.agent_turn_window_hours),
@@ -209,7 +206,6 @@ def create_app(
             await runner.fail_interrupted()
             shutdown = asyncio.Event()
             app.state.deps = AppDeps(
-                profiles=opened.profiles,
                 checks=opened.checks,
                 options=opened.options,
                 recommendations=opened.recommendations,
@@ -233,10 +229,8 @@ def create_app(
     app = FastAPI(title="Loan agent", lifespan=lifespan)
     auth.register_error_handlers(app)
     checks.register_error_handlers(app)
-    profile.register_error_handlers(app)
     app.include_router(auth.router)
     app.include_router(checks.router)
-    app.include_router(profile.router)
     app.include_router(events.router)
 
     @app.get("/health")

@@ -1,7 +1,7 @@
 """In-memory test doubles for the application's ports.
 
 Core building blocks:
-- InMemoryProfileRepository, InMemoryCheckRepository, InMemoryOptionRepository,
+- InMemoryCheckRepository, InMemoryOptionRepository,
   InMemoryRecommendationRepository: dict-backed storage
 - FakeLoanEngine: answers with values captured from the real engine (adapters/fixtures/engine),
   overridable per test, and records its calls
@@ -28,14 +28,22 @@ from pydantic import Field
 
 from loan_agent.adapters.engine_mcp import market_series_of
 from loan_agent.domain.errors import CheckNotFoundError
-from loan_agent.domain.models import Check, Goal, Option, OptionFigures, Profile, Recommendation
+from loan_agent.domain.models import (
+    CeilingSource,
+    Check,
+    Finances,
+    LoanRequest,
+    Option,
+    OptionFigures,
+    Recommendation,
+)
 from loan_agent.ports.engine import (
     Bounds,
     EngineError,
     MarketSeries,
     OfferTerm,
+    ProposedTerm,
     Simulation,
-    Sizing,
 )
 from loan_agent.ports.repositories import CheckIds, EventTimes, StoredEvent
 
@@ -50,14 +58,17 @@ PRIME_TRACK = {
 # The tools the engine in mcp-server/ lists.
 ENGINE_TOOL_NAMES = {
     "assess_affordability",
-    "size_loan",
     "simulate_loan",
     "shortest_comfortable_term",
     "shortest_comfortable_offer_term",
+    "propose_term",
+    "propose_offer_term",
+    "largest_comfortable_loan",
     "suggest_tracks",
     "market_series",
 }
 COMFORTABLE_OFFER_TERM = OfferTerm(term_months=24, comfortable=True)
+PROPOSED_TERM = ProposedTerm(term_months=24, first_payment=Decimal("1750.00"))
 ENGINE_FIXTURES = Path(__file__).parent / "adapters" / "fixtures" / "engine"
 NOW = datetime(2026, 10, 27, 9, 0, tzinfo=UTC)
 
@@ -69,18 +80,11 @@ def engine_fixture(name: str) -> dict[str, Any]:
 
 ASSESSED_BOUNDS = Bounds(
     payment_ceiling=Decimal("4700.00"),
-    min_cushion=Decimal("18000.00"),
     reasons=(
         "variable_income_minimum_counted",
         "ceiling_by_disposable_income",
         "existing_loans_deducted",
     ),
-)
-SIZED_LOAN = Sizing(
-    loan_amount=Decimal("80000.00"),
-    savings_used=Decimal("40000.00"),
-    cushion_kept=Decimal("30000.00"),
-    spare_savings=Decimal("0.00"),
 )
 PRIME_SIMULATION = Simulation(
     figures=OptionFigures(
@@ -130,24 +134,6 @@ class Ids:
         return f"{self._prefix}-{self._count}"
 
 
-class InMemoryProfileRepository:
-    def __init__(self, clock: Callable[[], datetime]) -> None:
-        self._clock = clock
-        self.rows: dict[str, tuple[Profile, datetime]] = {}
-
-    async def get(self, user_id: str) -> tuple[Profile, datetime | None]:
-        if user_id not in self.rows:
-            return Profile(), None
-        return self.rows[user_id]
-
-    async def save(self, user_id: str, profile: Profile) -> datetime:
-        if user_id in self.rows and self.rows[user_id][0] == profile:
-            return self.rows[user_id][1]
-        saved_at = self._clock()
-        self.rows[user_id] = (profile, saved_at)
-        return saved_at
-
-
 class InMemoryCheckRepository:
     """clone copies options and the recommendation only when option_store and
     recommendation_store are set."""
@@ -178,11 +164,27 @@ class InMemoryCheckRepository:
         assert self.event_store is not None
         self.event_store.forget(check, kept_type, kept_since)
 
-    async def set_goal(self, check_id: str, goal: Goal) -> None:
-        self.rows[check_id] = replace(self.rows[check_id], goal=goal)
+    async def set_loan(self, check_id: str, loan: LoanRequest) -> None:
+        self.rows[check_id] = replace(self.rows[check_id], loan=loan)
 
-    async def snapshot_profile(self, check_id: str, at: datetime) -> None:
-        self.rows[check_id] = replace(self.rows[check_id], profile_snapshot_at=at)
+    async def set_term(self, check_id: str, term_months: int) -> None:
+        self.rows[check_id] = replace(self.rows[check_id], term_months=term_months)
+
+    async def set_ceiling(self, check_id: str, ceiling: Decimal, source: CeilingSource) -> None:
+        self.rows[check_id] = replace(
+            self.rows[check_id], payment_ceiling=ceiling, ceiling_source=source
+        )
+
+    async def set_finances(self, check_id: str, finances: Finances) -> None:
+        self.rows[check_id] = replace(self.rows[check_id], finances=finances)
+
+    async def latest_finances(self, user_id: str, other_than: str) -> Finances | None:
+        others = [
+            check
+            for check in await self.list(user_id)
+            if check.id != other_than and not check.finances.missing()
+        ]
+        return others[0].finances if others else None
 
     async def archive(self, check_id: str, at: datetime) -> None:
         if check_id not in self.rows:
@@ -215,6 +217,11 @@ class InMemoryOptionRepository:
 
     async def add(self, option: Option) -> None:
         self.rows.setdefault(option.check_id, []).append(option)
+
+    async def replace(self, option: Option) -> None:
+        options = self.rows[option.check_id]
+        (index,) = [i for i, kept in enumerate(options) if kept.id == option.id]
+        options[index] = option
 
     async def list(self, check_id: str) -> list[Option]:
         return list(self.rows.get(check_id, []))
@@ -288,6 +295,14 @@ class InMemoryCheckEventStore:
             ),
         ]
 
+    async def checks_with(self, user_id: str, type: str) -> CheckIds:
+        return sorted(
+            check_id
+            for check_id, log in self.rows.items()
+            if self._checks.rows[check_id].user_id == user_id
+            and any(event.type == type for event in log)
+        )
+
     async def checks_whose_latest(self, type: str, data: Mapping[str, object]) -> CheckIds:
         latest = {}
         for check_id, log in self.rows.items():
@@ -299,34 +314,29 @@ class InMemoryCheckEventStore:
 
 @dataclass
 class FakeLoanEngine:
-    """simulations are answered in order; simulate_error and market_error, when set, are raised
-    instead; market_series answers from the captured engine result."""
+    """simulations are answered in order; simulate_error, suggest_error, assess_error and
+    market_error, when set, are raised instead; suggest answers the captured tracks at the
+    principal and term asked for; market_series answers from the captured engine result.
+    comfortable_terms and largest_loans answer the ceiling searches, None meaning nothing fits."""
 
     bounds: Bounds = ASSESSED_BOUNDS
-    sizing: Sizing = SIZED_LOAN
     simulations: list[Simulation] = field(default_factory=list)
     simulate_error: EngineError | None = None
+    suggest_error: EngineError | None = None
+    assess_error: EngineError | None = None
     market_error: EngineError | None = None
     offer_terms: OfferTerm = COMFORTABLE_OFFER_TERM
     offer_term_error: EngineError | None = None
+    proposed: ProposedTerm = PROPOSED_TERM
+    comfortable_terms: int | None = 24
+    largest_loans: Decimal | None = Decimal("90000.00")
     calls: list[tuple[str, Mapping[str, object]]] = field(default_factory=list)
 
     async def assess(self, profile: Mapping[str, object]) -> Bounds:
         self.calls.append(("assess", profile))
+        if self.assess_error is not None:
+            raise self.assess_error
         return self.bounds
-
-    async def size(self, goal_price: Decimal, savings: Decimal, min_cushion: Decimal) -> Sizing:
-        self.calls.append(
-            (
-                "size",
-                {
-                    "goal_price": goal_price,
-                    "savings": savings,
-                    "min_cushion": min_cushion,
-                },
-            )
-        )
-        return self.sizing
 
     async def simulate(self, loan: Mapping[str, object]) -> Simulation:
         self.calls.append(("simulate", loan))
@@ -335,14 +345,52 @@ class FakeLoanEngine:
         return self.simulations.pop(0)
 
     async def suggest(self, principal: Decimal, term_months: int) -> list[Mapping[str, object]]:
+        self.calls.append(("suggest", {"principal": principal, "term_months": term_months}))
+        if self.suggest_error is not None:
+            raise self.suggest_error
         tracks: list[Mapping[str, object]] = engine_fixture("suggest_tracks")["tracks"]
-        return tracks
+        return [
+            {**track, "principal": str(principal), "term_months": term_months} for track in tracks
+        ]
 
     async def offer_term(self, track: Mapping[str, object], payment_ceiling: Decimal) -> OfferTerm:
         self.calls.append(("offer_term", {"track": track, "payment_ceiling": payment_ceiling}))
         if self.offer_term_error is not None:
             raise self.offer_term_error
         return self.offer_terms
+
+    async def propose_term(self, principal: Decimal, payment_limit: Decimal) -> ProposedTerm:
+        self.calls.append(
+            ("propose_term", {"principal": principal, "payment_limit": payment_limit})
+        )
+        return self.proposed
+
+    async def propose_offer_term(
+        self, track: Mapping[str, object], payment_limit: Decimal
+    ) -> ProposedTerm:
+        self.calls.append(("propose_offer_term", {"track": track, "payment_limit": payment_limit}))
+        return self.proposed
+
+    async def comfortable_term(
+        self, principal: Decimal, payment_ceiling: Decimal, *, any_track: bool
+    ) -> int | None:
+        self.calls.append(
+            (
+                "comfortable_term",
+                {
+                    "principal": principal,
+                    "payment_ceiling": payment_ceiling,
+                    "any_track": any_track,
+                },
+            )
+        )
+        return self.comfortable_terms
+
+    async def largest_loan(self, payment_ceiling: Decimal, term_months: int) -> Decimal | None:
+        self.calls.append(
+            ("largest_loan", {"payment_ceiling": payment_ceiling, "term_months": term_months})
+        )
+        return self.largest_loans
 
     async def market_series(self, months: int) -> MarketSeries:
         self.calls.append(("market_series", {"months": months}))
@@ -369,6 +417,10 @@ class RecordingSink:
 
     async def publish_live(self, check_id: str, type: str, data: Mapping[str, object]) -> None:
         self.live.append(RecordedEvent(check_id, type, data))
+
+    async def latest(self, check_id: str, type: str) -> Mapping[str, object] | None:
+        of_type = [e for e in self.events if e.check_id == check_id and e.type == type]
+        return of_type[-1].data if of_type else None
 
 
 class ScriptedChatModel(BaseChatModel):

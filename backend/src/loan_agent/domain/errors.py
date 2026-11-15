@@ -1,14 +1,14 @@
-"""Domain errors; profile and goal errors carry a person-readable message naming the field."""
+"""Domain errors; finances and loan errors carry a person-readable message naming the field."""
 
 from datetime import datetime
 
 
-class ProfileError(ValueError):
-    """A profile update or read broke the profile contract."""
+class FinancesError(ValueError):
+    """A finances update or read broke the finances contract."""
 
 
-class GoalError(ValueError):
-    """A loan goal has an amount outside its legal range."""
+class LoanError(ValueError):
+    """A loan request has an amount outside its legal range."""
 
 
 class CheckNotFoundError(Exception):
@@ -24,8 +24,7 @@ class TurnConflictError(Exception):
 
 
 class CheckArchivedError(Exception):
-    """The check was archived when the profile it was recommended from changed; it takes no more
-    messages."""
+    """The check is archived; it takes no more messages."""
 
     def __init__(self, check_id: str) -> None:
         super().__init__(f"check {check_id!r} is archived")
@@ -33,7 +32,7 @@ class CheckArchivedError(Exception):
 
 
 class CheckNotRestorableError(Exception):
-    """The check is open, or was archived with figures the profile no longer has."""
+    """The check is not archived."""
 
     def __init__(self, check_id: str) -> None:
         super().__init__(f"check {check_id!r} cannot be restored")

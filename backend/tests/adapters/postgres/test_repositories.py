@@ -6,17 +6,25 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from loan_agent.adapters.postgres.orm import CheckRow
 from loan_agent.adapters.postgres.repositories import (
     PostgresCheckEventStore,
     PostgresCheckRepository,
     PostgresOptionRepository,
-    PostgresProfileRepository,
     PostgresRecommendationRepository,
 )
 from loan_agent.domain.errors import CheckNotFoundError
-from loan_agent.domain.models import Check, Goal, Option, OptionFigures, Profile, Recommendation
+from loan_agent.domain.models import (
+    Check,
+    Finances,
+    LoanRequest,
+    Option,
+    OptionFigures,
+    Recommendation,
+)
 from loan_agent.platform.db import build_engine, session_factory
 
 T0 = datetime(2026, 10, 1, 8, 0, tzinfo=UTC)
@@ -35,7 +43,6 @@ class Clock:
 @dataclass
 class Repos:
     clock: Clock
-    profiles: PostgresProfileRepository
     checks: PostgresCheckRepository
     options: PostgresOptionRepository
     recommendations: PostgresRecommendationRepository
@@ -54,7 +61,6 @@ def repos(sessions: async_sessionmaker[AsyncSession]) -> Repos:
     clock = Clock()
     return Repos(
         clock,
-        PostgresProfileRepository(sessions, clock),
         PostgresCheckRepository(sessions),
         PostgresOptionRepository(sessions),
         PostgresRecommendationRepository(sessions),
@@ -63,7 +69,7 @@ def repos(sessions: async_sessionmaker[AsyncSession]) -> Repos:
 
 
 def make_check(check_id: str, user_id: str = PERSON, created_at: datetime = T0) -> Check:
-    return Check(check_id, user_id, created_at, None, None)
+    return Check(check_id, user_id, created_at, None, None, None, None, Finances())
 
 
 def make_figures() -> OptionFigures:
@@ -78,24 +84,6 @@ def make_figures() -> OptionFigures:
         rate_as_of=date(2026, 9, 1),
         cpi_as_of=date(2026, 8, 1),
     )
-
-
-async def test_profile_round_trip_keeps_decimals(repos: Repos) -> None:
-    assert await repos.profiles.get("fresh") == (Profile(), None)
-    profile = Profile(
-        net_fixed_income=Decimal("12500.50"),
-        variable_income=Decimal(0),
-        variable_income_minimum=None,
-        fixed_expenses=Decimal("4200.00"),
-        existing_loan_payments=None,
-        savings=Decimal("80000.10"),
-    )
-    saved_at = await repos.profiles.save(PERSON, profile)
-    restored, updated_at = await repos.profiles.get(PERSON)
-    assert restored == profile
-    assert isinstance(restored.net_fixed_income, Decimal)
-    assert str(restored.net_fixed_income) == "12500.50"
-    assert updated_at == saved_at == T0
 
 
 async def test_check_of_another_person_is_not_found(repos: Repos) -> None:
@@ -115,25 +103,80 @@ async def test_checks_list_newest_first(repos: Repos) -> None:
     assert [c.id for c in await repos.checks.list("lister")] == [newer, older]
 
 
-async def test_check_goal_and_snapshot_round_trip(repos: Repos) -> None:
-    await repos.checks.add(make_check("c-goal"))
-    goal = Goal("car", Decimal("150000.00"))
-    await repos.checks.set_goal("c-goal", goal)
-    snapshot_at = T0 + timedelta(minutes=5)
-    await repos.checks.snapshot_profile("c-goal", snapshot_at)
-    check = await repos.checks.get(PERSON, "c-goal")
-    assert check.goal == goal
-    assert check.profile_snapshot_at == snapshot_at
-    with pytest.raises(CheckNotFoundError):
-        await repos.checks.set_goal("c-missing", goal)
-    with pytest.raises(CheckNotFoundError):
-        await repos.checks.snapshot_profile("c-missing", snapshot_at)
+async def test_a_check_round_trips_its_loan_term_ceiling_and_finances(repos: Repos) -> None:
+    await repos.checks.add(make_check("c-fields"))
+    fresh = await repos.checks.get(PERSON, "c-fields")
+    assert (fresh.loan, fresh.term_months, fresh.payment_ceiling, fresh.ceiling_source) == (
+        None,
+        None,
+        None,
+        None,
+    )
+    assert fresh.finances == Finances()
+
+    await repos.checks.set_loan("c-fields", LoanRequest(None, Decimal("150000.00")))
+    await repos.checks.set_term("c-fields", 48)
+    await repos.checks.set_ceiling("c-fields", Decimal("2500.50"), "finances")
+    await repos.checks.set_finances("c-fields", Finances(Decimal("12500.50"), None))
+
+    check = await repos.checks.get(PERSON, "c-fields")
+    assert check.loan == LoanRequest(None, Decimal("150000.00"))
+    assert str(check.loan.amount if check.loan else None) == "150000.00"
+    assert check.term_months == 48
+    assert check.payment_ceiling == Decimal("2500.50")
+    assert check.ceiling_source == "finances"
+    assert check.finances == Finances(Decimal("12500.50"), None)
+    for call in (
+        repos.checks.set_loan("c-missing", LoanRequest("רכב", Decimal(1))),
+        repos.checks.set_term("c-missing", 12),
+        repos.checks.set_ceiling("c-missing", Decimal(1), "stated"),
+        repos.checks.set_finances("c-missing", Finances()),
+    ):
+        with pytest.raises(CheckNotFoundError):
+            await call
+
+
+async def test_latest_finances_skips_the_current_check_and_incomplete_ones(repos: Repos) -> None:
+    person = "reuser"
+    complete_old = Finances(Decimal("10000.00"), Decimal("4000.00"))
+    complete_new = Finances(Decimal("11000.00"), Decimal("4500.00"))
+    for check_id, hours in (("c-fin-old", 0), ("c-fin-new", 1), ("c-fin-partial", 2)):
+        await repos.checks.add(make_check(check_id, person, T0 + timedelta(hours=hours)))
+    await repos.checks.add(make_check("c-fin-current", person, T0 + timedelta(hours=3)))
+    await repos.checks.add(make_check("c-fin-foreign", "someone-else", T0 + timedelta(hours=4)))
+    await repos.checks.set_finances("c-fin-old", complete_old)
+    await repos.checks.set_finances("c-fin-new", complete_new)
+    await repos.checks.set_finances("c-fin-partial", Finances(Decimal("1.00"), None))
+    await repos.checks.set_finances("c-fin-current", Finances(Decimal("9.00"), Decimal("9.00")))
+    await repos.checks.set_finances("c-fin-foreign", Finances(Decimal("8.00"), Decimal("8.00")))
+
+    assert await repos.checks.latest_finances(person, "c-fin-current") == complete_new
+    assert await repos.checks.latest_finances("nobody", "c-x") is None
+    await repos.checks.delete("c-fin-new", "message.user", T0)
+    assert await repos.checks.latest_finances(person, "c-fin-current") == complete_old
+
+
+async def test_a_stored_finances_object_with_a_missing_figure_is_refused(
+    repos: Repos, sessions: async_sessionmaker[AsyncSession]
+) -> None:
+    await repos.checks.add(make_check("c-partial"))
+    async with sessions.begin() as session:
+        await session.execute(
+            update(CheckRow)
+            .where(CheckRow.id == "c-partial")
+            .values(finances={"net_fixed_income": "1"})
+        )
+
+    with pytest.raises(KeyError):
+        await repos.checks.get(PERSON, "c-partial")
 
 
 async def test_option_round_trip(repos: Repos) -> None:
     await repos.checks.add(make_check("c-opt"))
     loan = {"principal": "100000.00", "tracks": [{"rate": "4.5", "months": 60}]}
-    option = Option("o-1", "c-opt", loan, "offer", "Bank X", date(2026, 10, 2), make_figures(), T0)
+    option = Option(
+        "o-1", "c-opt", loan, "offer", "Bank X", date(2026, 10, 2), None, make_figures(), T0
+    )
     await repos.options.add(option)
     assert await repos.options.get("c-opt", "o-1") == option
     assert await repos.options.list("c-opt") == [option]
@@ -155,8 +198,6 @@ async def test_recommendation_replaced_per_check(repos: Repos) -> None:
             reasoning,
             Decimal("90000.00"),
             Decimal("2000.00"),
-            Decimal("5000.00"),
-            Decimal("7000.55"),
             T0,
         )
 
@@ -205,20 +246,11 @@ async def test_count_since_counts_one_persons_messages_across_checks(repos: Repo
     assert await repos.events.count_since("counter", "message.user", future) == (0, [])
 
 
-async def test_a_save_that_changes_nothing_keeps_the_save_time(repos: Repos) -> None:
-    first = await repos.profiles.save("unchanged", Profile(savings=Decimal(35000)))
-    repos.clock.value = T0 + timedelta(hours=1)
-
-    assert await repos.profiles.save("unchanged", Profile(savings=Decimal("35000.00"))) == first
-    assert (await repos.profiles.get("unchanged"))[1] == first
-
-    later = await repos.profiles.save("unchanged", Profile(savings=Decimal(36000)))
-    assert later == T0 + timedelta(hours=1)
-
-
 async def test_delete_removes_the_check_and_everything_it_produced(repos: Repos) -> None:
     await repos.checks.add(make_check("c-del"))
-    option = Option("o-del", "c-del", {}, "offer", "Bank X", date(2026, 10, 2), make_figures(), T0)
+    option = Option(
+        "o-del", "c-del", {}, "offer", "Bank X", date(2026, 10, 2), None, make_figures(), T0
+    )
     await repos.options.add(option)
     await repos.recommendations.save(
         Recommendation(
@@ -228,8 +260,6 @@ async def test_delete_removes_the_check_and_everything_it_produced(repos: Repos)
             "why",
             Decimal("90000.00"),
             Decimal("2000.00"),
-            Decimal("5000.00"),
-            Decimal("7000.55"),
             T0,
         )
     )
@@ -266,6 +296,17 @@ async def test_delete_keeps_the_recent_times_of_one_event_type_until_they_expire
     assert (await repos.events.count_since("keeper", "message.user", before))[0] == 1
 
 
+async def test_checks_with_lists_the_persons_checks_holding_that_event(repos: Repos) -> None:
+    for check_id, user_id in (("c-with-a", "with"), ("c-with-b", "with"), ("c-with-o", "other")):
+        await repos.checks.add(make_check(check_id, user_id=user_id))
+    await repos.events.append("c-with-a", "message.user", {"text": "a"})
+    await repos.events.append("c-with-a", "message.user", {"text": "b"})
+    await repos.events.append("c-with-b", "turn.status", {"status": "idle"})
+    await repos.events.append("c-with-o", "message.user", {"text": "c"})
+
+    assert await repos.events.checks_with("with", "message.user") == ["c-with-a"]
+
+
 async def test_checks_whose_latest_matches_the_latest_event_of_that_type(repos: Repos) -> None:
     running = {"status": "running"}
     for check_id in ("c-end-running", "c-end-idle", "c-end-other", "c-end-empty"):
@@ -285,21 +326,6 @@ async def test_checks_whose_latest_matches_the_latest_event_of_that_type(repos: 
     ]
 
 
-async def test_profile_saved_after_snapshot_marks_check_stale(repos: Repos) -> None:
-    await repos.checks.add(make_check("c-stale", "stale-person"))
-    await repos.profiles.save("stale-person", Profile(savings=Decimal(1)))
-    _, updated_at = await repos.profiles.get("stale-person")
-    assert updated_at is not None
-    await repos.checks.snapshot_profile("c-stale", updated_at)
-
-    check = await repos.checks.get("stale-person", "c-stale")
-    assert not check.is_stale(updated_at)
-    repos.clock.value = T0 + timedelta(minutes=1)
-    await repos.profiles.save("stale-person", Profile(savings=Decimal(2)))
-    _, later = await repos.profiles.get("stale-person")
-    assert check.is_stale(later)
-
-
 async def test_archive_stamps_the_check_and_restore_clears_it(repos: Repos) -> None:
     await repos.checks.add(make_check("c-arch"))
 
@@ -314,12 +340,17 @@ async def test_archive_stamps_the_check_and_restore_clears_it(repos: Repos) -> N
     assert (await repos.checks.get(PERSON, "c-arch")).archived_at is None
 
 
-async def test_clone_copies_options_recommendation_and_events_but_the_left_out_types(
+async def test_clone_copies_the_loan_term_ceiling_and_finances_options_recommendation_and_events(
     repos: Repos,
 ) -> None:
     await repos.checks.add(make_check("c-src", "cloner"))
-    await repos.checks.set_goal("c-src", Goal("car", Decimal("150000.00")))
-    option = Option("o-1", "c-src", {}, "offer", "Bank X", date(2026, 10, 2), make_figures(), T0)
+    await repos.checks.set_loan("c-src", LoanRequest("רכב", Decimal("150000.00")))
+    await repos.checks.set_term("c-src", 60)
+    await repos.checks.set_ceiling("c-src", Decimal("2500.50"), "stated")
+    await repos.checks.set_finances("c-src", Finances(Decimal("15000.00"), Decimal("6000.00")))
+    option = Option(
+        "o-1", "c-src", {}, "offer", "Bank X", date(2026, 10, 2), None, make_figures(), T0
+    )
     await repos.options.add(option)
     recommendation = Recommendation(
         "c-src",
@@ -328,8 +359,6 @@ async def test_clone_copies_options_recommendation_and_events_but_the_left_out_t
         "why",
         Decimal("90000.00"),
         Decimal("2000.00"),
-        Decimal("5000.00"),
-        Decimal("7000.55"),
         T0,
     )
     await repos.recommendations.save(recommendation)
@@ -338,11 +367,19 @@ async def test_clone_copies_options_recommendation_and_events_but_the_left_out_t
     await repos.events.append("c-src", "check.archived", {})
     await repos.events.append("c-src", "message.assistant", {"text": "b"})
     source = await repos.checks.get("cloner", "c-src")
-    clone = Check("c-copy", "cloner", T0 + timedelta(hours=1), source.goal, T0)
+    clone = replace(source, id="c-copy", created_at=T0 + timedelta(hours=1))
 
     await repos.checks.clone("c-src", clone, ("check.archived",))
 
-    assert await repos.checks.get("cloner", "c-copy") == clone
+    stored = await repos.checks.get("cloner", "c-copy")
+    assert stored == clone
+    assert stored.loan == LoanRequest("רכב", Decimal("150000.00"))
+    assert (stored.term_months, stored.payment_ceiling, stored.ceiling_source) == (
+        60,
+        Decimal("2500.50"),
+        "stated",
+    )
+    assert stored.finances == Finances(Decimal("15000.00"), Decimal("6000.00"))
     assert await repos.options.list("c-copy") == [replace(option, check_id="c-copy")]
     assert await repos.recommendations.latest("c-copy") == replace(
         recommendation, check_id="c-copy"

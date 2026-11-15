@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import type { CheckSummary } from '../api/types.ts'
-import { CHIP_EXAMPLE } from '../check/copy.ts'
-import { formatShekels } from '../money.ts'
+import { CHIP_EXAMPLE, checkTitle, termText } from '../check/copy.ts'
 import {
   ARCHIVED,
   ARCHIVED_GROUP,
@@ -11,7 +10,6 @@ import {
   DELETE_CONFIRMED,
   NEW_CHECK,
   RECOMMENDATION_READY,
-  STALE_PROFILE,
   UNTITLED_CHECK,
   archiveLabel,
   cloneLabel,
@@ -20,6 +18,11 @@ import {
 } from './copy.ts'
 import { Icon } from './Icon.tsx'
 import type { IconName } from './Icon.tsx'
+
+/** A check's title: built from its loan, or the new-check title until it has one. */
+function titleOf(check: CheckSummary): string {
+  return check.loan === null ? UNTITLED_CHECK : checkTitle(check.loan)
+}
 
 interface Props {
   checks: CheckSummary[]
@@ -39,10 +42,11 @@ interface Props {
  * The person's checks, newest first, with the one open marked and the button for a new one. The
  * archived checks follow the live ones in their own group, folded until the person opens it or
  * jumps to one of them, or unfolded on load when every check is archived, so they neither mix with
- * the live checks nor fill the sidebar. Every check has a duplicate icon. A live check also has an
- * archive icon; an archived one has a restore icon while its figures still match the profile, and
- * a delete icon. Only an archived check can be deleted, so a delete is always a second step. It
- * cannot be undone, so its icon first asks beside the check, with focus on the cancel button.
+ * the live checks nor fill the sidebar. A check the person has written to has a duplicate icon,
+ * and when live an archive icon; one holding only the opening line has neither, since it has
+ * nothing to copy or keep. An archived check has a restore icon and a delete icon. Only an
+ * archived check can be deleted, so a delete is always a second step. It cannot be undone, so its
+ * icon first asks beside the check, with focus on the cancel button.
  */
 export function ChecksList({
   checks,
@@ -68,7 +72,7 @@ export function ChecksList({
     run: () => void,
     check: CheckSummary,
   ) => {
-    const name = label(check.goal?.purpose ?? UNTITLED_CHECK)
+    const name = label(titleOf(check))
     return (
       <button
         type="button"
@@ -91,8 +95,10 @@ export function ChecksList({
           aria-current={check.id === selectedId ? 'true' : undefined}
           onClick={() => onSelect(check.id)}
         >
-          <span className="check-title">{check.goal?.purpose ?? UNTITLED_CHECK}</span>
-          {check.goal !== null && <span>{formatShekels(check.goal.price)}</span>}
+          <span className="check-title">{titleOf(check)}</span>
+          {check.term_months !== null && (
+            <span className="check-term">{termText(check.term_months)}</span>
+          )}
           {check.recommendation !== null && !check.archived && (
             <span className="check-chips">
               <span className="chip chip-green">{RECOMMENDATION_READY}</span>
@@ -101,18 +107,16 @@ export function ChecksList({
               )}
             </span>
           )}
-          {check.archived ? (
-            <span className="chip chip-gray">{ARCHIVED}</span>
-          ) : (
-            check.profile_stale && <span className="chip chip-amber">{STALE_PROFILE}</span>
-          )}
+          {check.archived && <span className="chip chip-gray">{ARCHIVED}</span>}
         </button>
         <div className="check-actions">
-          {action('copy', 'check-clone', cloneLabel, () => onClone(check.id), check)}
-          {check.archived
-            ? check.restorable &&
-              action('restore', 'check-clone', restoreLabel, () => onRestore(check.id), check)
-            : action('archive', 'check-clone', archiveLabel, () => onArchive(check.id), check)}
+          {check.started &&
+            action('copy', 'check-clone', cloneLabel, () => onClone(check.id), check)}
+          {check.archived &&
+            action('restore', 'check-clone', restoreLabel, () => onRestore(check.id), check)}
+          {!check.archived &&
+            check.started &&
+            action('archive', 'check-clone', archiveLabel, () => onArchive(check.id), check)}
           {check.archived &&
             action('trash', 'check-delete', deleteLabel, () => setConfirmingId(check.id), check)}
         </div>

@@ -1,9 +1,9 @@
 """Postgres implementations of the persistence ports.
 
 Core building blocks:
-- PostgresProfileRepository: one profile row per person, stamped with the repository's clock
-- PostgresCheckRepository: check rows, always read through the owning person; deleting or
-  cloning one takes everything it produced in one transaction
+- PostgresCheckRepository: check rows with their loan, term, ceiling and finances, always read
+  through the owning person; deleting or cloning one takes everything it produced in one
+  transaction
 - PostgresOptionRepository, PostgresRecommendationRepository: what a check produced; a check
   keeps one recommendation
 - PostgresCheckEventStore: per-check event log; each append locks the check's row, so sequence
@@ -13,11 +13,10 @@ Core building blocks:
 Each call runs in its own session; a write commits before the call returns.
 """
 
-from collections.abc import Callable, Collection, Mapping
-from dataclasses import fields
+from collections.abc import Collection, Mapping
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any, cast
+from typing import cast
 
 from sqlalchemy import delete, false, func, literal, select, union_all, update
 from sqlalchemy.dialects.postgresql import insert
@@ -28,17 +27,17 @@ from loan_agent.adapters.postgres.orm import (
     CheckRow,
     DeletedEventTimeRow,
     OptionRow,
-    ProfileRow,
     RecommendationRow,
 )
 from loan_agent.domain.errors import CheckNotFoundError
 from loan_agent.domain.models import (
+    CeilingSource,
     Check,
-    Goal,
+    Finances,
+    LoanRequest,
     Option,
     OptionFigures,
     OptionSource,
-    Profile,
     Recommendation,
 )
 from loan_agent.ports.repositories import CheckIds, EventTimes, StoredEvent
@@ -54,55 +53,39 @@ def _optional_utc(value: datetime | None) -> datetime | None:
     return None if value is None else _utc(value)
 
 
-def _profile_data(profile: Profile) -> dict[str, Any]:
-    data: dict[str, Any] = {}
-    for field in fields(profile):
-        value = getattr(profile, field.name)
-        data[field.name] = str(value) if isinstance(value, Decimal) else value
-    return data
+def _text_or_none(value: Decimal | None) -> str | None:
+    return None if value is None else str(value)
 
 
-def _profile(data: Mapping[str, Any]) -> Profile:
-    values: dict[str, Any] = {}
-    for field in fields(Profile):
-        value = data[field.name]
-        values[field.name] = Decimal(value) if isinstance(value, str) else value
-    return Profile(**values)
+def _decimal_or_none(value: str | None) -> Decimal | None:
+    return None if value is None else Decimal(value)
 
 
-def _goal_data(goal: Goal) -> dict[str, str]:
-    return {"purpose": goal.purpose, "price": str(goal.price)}
+def _loan_data(loan: LoanRequest) -> dict[str, str | None]:
+    return {"purpose": loan.purpose, "amount": str(loan.amount)}
 
 
-def _goal(data: Mapping[str, str]) -> Goal:
-    return Goal(data["purpose"], Decimal(data["price"]))
+def _loan(data: Mapping[str, str | None]) -> LoanRequest:
+    amount = data["amount"]
+    assert amount is not None, "a stored loan always has an amount"
+    return LoanRequest(data["purpose"], Decimal(amount))
 
 
-class PostgresProfileRepository:
-    def __init__(self, sessions: Sessions, now: Callable[[], datetime]) -> None:
-        self._sessions = sessions
-        self._now = now
+def _finances_data(finances: Finances) -> dict[str, str | None]:
+    return {
+        "net_fixed_income": _text_or_none(finances.net_fixed_income),
+        "fixed_expenses": _text_or_none(finances.fixed_expenses),
+    }
 
-    async def get(self, user_id: str) -> tuple[Profile, datetime | None]:
-        async with self._sessions() as session:
-            row = await session.get(ProfileRow, user_id)
-        if row is None:
-            return Profile(), None
-        return _profile(row.data), _utc(row.updated_at)
 
-    async def save(self, user_id: str, profile: Profile) -> datetime:
-        saved_at = self._now()
-        data = _profile_data(profile)
-        statement = insert(ProfileRow).values(user_id=user_id, data=data, updated_at=saved_at)
-        statement = statement.on_conflict_do_update(
-            index_elements=[ProfileRow.user_id], set_={"data": data, "updated_at": saved_at}
-        )
-        async with self._sessions.begin() as session:
-            row = await session.get(ProfileRow, user_id, with_for_update=True)
-            if row is not None and _profile(row.data) == profile:
-                return _utc(row.updated_at)
-            await session.execute(statement)
-        return saved_at
+def _finances(data: Mapping[str, str | None]) -> Finances:
+    """An empty object reads as no figure told; any other object names both figures."""
+    if not data:
+        return Finances()
+    return Finances(
+        net_fixed_income=_decimal_or_none(data["net_fixed_income"]),
+        fixed_expenses=_decimal_or_none(data["fixed_expenses"]),
+    )
 
 
 class PostgresCheckRepository:
@@ -153,11 +136,30 @@ class PostgresCheckRepository:
                 await session.execute(delete(row).where(row.check_id == check_id))
             await session.execute(delete(CheckRow).where(CheckRow.id == check_id))
 
-    async def set_goal(self, check_id: str, goal: Goal) -> None:
-        await self._update(check_id, goal=_goal_data(goal))
+    async def set_loan(self, check_id: str, loan: LoanRequest) -> None:
+        await self._update(check_id, loan=_loan_data(loan))
 
-    async def snapshot_profile(self, check_id: str, at: datetime) -> None:
-        await self._update(check_id, profile_snapshot_at=at)
+    async def set_term(self, check_id: str, term_months: int) -> None:
+        await self._update(check_id, term_months=term_months)
+
+    async def set_ceiling(self, check_id: str, ceiling: Decimal, source: CeilingSource) -> None:
+        await self._update(check_id, payment_ceiling=ceiling, ceiling_source=source)
+
+    async def set_finances(self, check_id: str, finances: Finances) -> None:
+        await self._update(check_id, finances=_finances_data(finances))
+
+    async def latest_finances(self, user_id: str, other_than: str) -> Finances | None:
+        async with self._sessions() as session:
+            rows = await session.scalars(
+                select(CheckRow.finances)
+                .where(CheckRow.user_id == user_id, CheckRow.id != other_than)
+                .order_by(CheckRow.created_at.desc())
+            )
+            for data in rows:
+                finances = _finances(data)
+                if not finances.missing():
+                    return finances
+        return None
 
     async def archive(self, check_id: str, at: datetime) -> None:
         await self._update(check_id, archived_at=at)
@@ -186,6 +188,7 @@ class PostgresCheckRepository:
                         "source",
                         "lender",
                         "offer_date",
+                        "max_term_months",
                         "figures",
                         "created_at",
                     ],
@@ -196,6 +199,7 @@ class PostgresCheckRepository:
                         OptionRow.source,
                         OptionRow.lender,
                         OptionRow.offer_date,
+                        OptionRow.max_term_months,
                         OptionRow.figures,
                         OptionRow.created_at,
                     ).where(OptionRow.check_id == source_id),
@@ -237,8 +241,11 @@ def _check_row(check: Check) -> CheckRow:
     return CheckRow(
         id=check.id,
         user_id=check.user_id,
-        goal=None if check.goal is None else _goal_data(check.goal),
-        profile_snapshot_at=check.profile_snapshot_at,
+        loan=None if check.loan is None else _loan_data(check.loan),
+        term_months=check.term_months,
+        payment_ceiling=check.payment_ceiling,
+        ceiling_source=check.ceiling_source,
+        finances=_finances_data(check.finances),
         created_at=check.created_at,
         archived_at=check.archived_at,
     )
@@ -249,8 +256,11 @@ def _check(row: CheckRow) -> Check:
         id=row.id,
         user_id=row.user_id,
         created_at=_utc(row.created_at),
-        goal=None if row.goal is None else _goal(row.goal),
-        profile_snapshot_at=_optional_utc(row.profile_snapshot_at),
+        loan=None if row.loan is None else _loan(row.loan),
+        term_months=row.term_months,
+        payment_ceiling=row.payment_ceiling,
+        ceiling_source=cast(CeilingSource | None, row.ceiling_source),
+        finances=_finances(row.finances),
         archived_at=_optional_utc(row.archived_at),
     )
 
@@ -261,18 +271,14 @@ class PostgresOptionRepository:
 
     async def add(self, option: Option) -> None:
         async with self._sessions.begin() as session:
-            session.add(
-                OptionRow(
-                    id=option.id,
-                    check_id=option.check_id,
-                    loan=dict(option.loan),
-                    source=option.source,
-                    lender=option.lender,
-                    offer_date=option.offer_date,
-                    figures=option.summary.to_json(),
-                    created_at=option.created_at,
-                )
-            )
+            session.add(_option_row(option))
+
+    async def replace(self, option: Option) -> None:
+        async with self._sessions.begin() as session:
+            existing = await session.get(OptionRow, (option.check_id, option.id))
+            if existing is None:
+                raise KeyError(option.id)
+            await session.merge(_option_row(option))
 
     async def list(self, check_id: str) -> list[Option]:
         async with self._sessions() as session:
@@ -293,6 +299,20 @@ class PostgresOptionRepository:
         return _option(row)
 
 
+def _option_row(option: Option) -> OptionRow:
+    return OptionRow(
+        id=option.id,
+        check_id=option.check_id,
+        loan=dict(option.loan),
+        source=option.source,
+        lender=option.lender,
+        offer_date=option.offer_date,
+        max_term_months=option.max_term_months,
+        figures=option.summary.to_json(),
+        created_at=option.created_at,
+    )
+
+
 def _option(row: OptionRow) -> Option:
     return Option(
         id=row.id,
@@ -301,6 +321,7 @@ def _option(row: OptionRow) -> Option:
         source=cast(OptionSource, row.source),
         lender=row.lender,
         offer_date=row.offer_date,
+        max_term_months=row.max_term_months,
         summary=OptionFigures.from_json(row.figures),
         created_at=_utc(row.created_at),
     )
@@ -316,9 +337,7 @@ class PostgresRecommendationRepository:
             "alternative_option_id": recommendation.alternative_option_id,
             "reasoning": recommendation.reasoning,
             "loan_amount": str(recommendation.loan_amount),
-            "payment_ceiling": str(recommendation.payment_ceiling),
-            "min_cushion": str(recommendation.min_cushion),
-            "cushion_kept": str(recommendation.cushion_kept),
+            "payment_ceiling": _text_or_none(recommendation.payment_ceiling),
         }
         statement = insert(RecommendationRow).values(
             check_id=recommendation.check_id, data=data, created_at=recommendation.created_at
@@ -342,9 +361,7 @@ class PostgresRecommendationRepository:
             alternative_option_id=data["alternative_option_id"],
             reasoning=data["reasoning"],
             loan_amount=Decimal(data["loan_amount"]),
-            payment_ceiling=Decimal(data["payment_ceiling"]),
-            min_cushion=Decimal(data["min_cushion"]),
-            cushion_kept=Decimal(data["cushion_kept"]),
+            payment_ceiling=_decimal_or_none(data["payment_ceiling"]),
             created_at=_utc(row.created_at),
         )
 
@@ -403,6 +420,16 @@ class PostgresCheckEventStore:
             )
             created = [_utc(t) for t in times]
         return len(created), created
+
+    async def checks_with(self, user_id: str, type: str) -> CheckIds:
+        async with self._sessions() as session:
+            ids = await session.scalars(
+                select(CheckEventRow.check_id)
+                .where(CheckEventRow.user_id == user_id, CheckEventRow.type == type)
+                .distinct()
+                .order_by(CheckEventRow.check_id)
+            )
+            return list(ids)
 
     async def checks_whose_latest(self, type: str, data: Mapping[str, object]) -> CheckIds:
         latest = (

@@ -24,11 +24,10 @@ from fakes import (
     InMemoryCheckEventStore,
     InMemoryCheckRepository,
     InMemoryOptionRepository,
-    InMemoryProfileRepository,
     InMemoryRecommendationRepository,
     ScriptedChatModel,
 )
-from loan_agent.domain.models import Check, Goal, Option, Profile, Recommendation, User
+from loan_agent.domain.models import Check, Finances, LoanRequest, Option, Recommendation, User
 from loan_agent.platform.api.auth import COOKIE
 from loan_agent.platform.app import create_app
 from loan_agent.platform.checkpointer import checkpoint_serde
@@ -40,15 +39,8 @@ OMER = User("2002", "omer@example.com", "Omer")
 DANA_TOKEN = sign()
 OMER_TOKEN = sign(sub=OMER.id, email=OMER.email, name=OMER.name)
 
-GOAL = Goal("רכב משפחתי", Decimal(120000))
-FULL_PROFILE = Profile(
-    net_fixed_income=Decimal(14000),
-    variable_income=Decimal(2000),
-    variable_income_minimum=Decimal(0),
-    fixed_expenses=Decimal(6500),
-    existing_loan_payments=Decimal(800),
-    savings=Decimal(70000),
-)
+LOAN = LoanRequest("רכב משפחתי", Decimal(120000))
+FINANCES = Finances(net_fixed_income=Decimal(14000), fixed_expenses=Decimal(6500))
 
 
 def app_settings(public_key: Path, **overrides: Any) -> Settings:
@@ -80,7 +72,6 @@ class World:
     """Raised by the readiness probe when set."""
 
     def __post_init__(self) -> None:
-        self.profiles = InMemoryProfileRepository(self.clock)
         self.events = InMemoryCheckEventStore(self.checks, self.clock)
         self.checks.option_store = self.options
         self.checks.recommendation_store = self.recommendations
@@ -91,7 +82,6 @@ class World:
     @asynccontextmanager
     async def infrastructure(self, settings: Settings) -> AsyncIterator[Infrastructure]:
         yield Infrastructure(
-            profiles=self.profiles,
             checks=self.checks,
             options=self.options,
             recommendations=self.recommendations,
@@ -129,10 +119,11 @@ class World:
 
 
 def seed_recommended_check(world: World, check_id: str = "c-rec") -> None:
-    """Dana's check with a goal, one priced option and a recommendation computed from her
-    profile as saved at NOW."""
-    world.profiles.rows[DANA.id] = (FULL_PROFILE, NOW)
-    world.checks.rows[check_id] = Check(check_id, DANA.id, NOW, GOAL, NOW)
+    """Dana's check with a loan, a term, a derived ceiling, her finances, one priced option and
+    a recommendation checked against the ceiling."""
+    world.checks.rows[check_id] = Check(
+        check_id, DANA.id, NOW, LOAN, 60, Decimal("4700.00"), "finances", FINANCES
+    )
     world.options.rows[check_id] = [
         Option(
             id="o1",
@@ -141,6 +132,7 @@ def seed_recommended_check(world: World, check_id: str = "c-rec") -> None:
             source="offer",
             lender="בנק הפועלים",
             offer_date=NOW.date(),
+            max_term_months=None,
             summary=PRIME_SIMULATION.figures,
             created_at=NOW,
         )
@@ -152,7 +144,5 @@ def seed_recommended_check(world: World, check_id: str = "c-rec") -> None:
         reasoning="ההחזר החודשי נמוך מהתקרה",
         loan_amount=Decimal("80000.00"),
         payment_ceiling=Decimal("4700.00"),
-        min_cushion=Decimal("18000.00"),
-        cushion_kept=Decimal("30000.00"),
         created_at=NOW,
     )

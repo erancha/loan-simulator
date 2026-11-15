@@ -1,7 +1,7 @@
 """LoanEngine over the loan engine's MCP tools, reached over HTTP with a bearer token.
 
 - McpLoanEngine: typed calls that parse each tool's structured content, and model_tools() for
-  the model
+  the model, which gets MODEL_ENGINE_TOOLS only
 - Parsing helpers that turn the engine's decimal strings and ISO dates into Decimal and date;
   market_series_of() parses a market_series result
 
@@ -24,11 +24,14 @@ from loan_agent.ports.engine import (
     MarketPoint,
     MarketSeries,
     OfferTerm,
+    ProposedTerm,
     Simulation,
-    Sizing,
 )
 
 _SERVER = "engine"
+# The loan-side tools. The ceiling, the term proposals and the searches for a term or a loan are
+# called by the check tools, so the model never builds a profile, a ceiling or a term rule.
+MODEL_ENGINE_TOOLS = frozenset({"simulate_loan", "suggest_tracks", "market_series"})
 
 
 class McpLoanEngine:
@@ -45,34 +48,18 @@ class McpLoanEngine:
         )
 
     async def model_tools(self) -> list[BaseTool]:
-        """The engine's tools for the model. Each tool message carries the engine's text as its
-        content (a summary for simulate_loan, the result's JSON for the others) and the
-        structured content, schedules included, as its artifact under the key
+        """The engine's MODEL_ENGINE_TOOLS for the model. Each tool message carries the engine's
+        text as its content (a summary for simulate_loan, the result's JSON for the others) and
+        the structured content, schedules included, as its artifact under the key
         structured_content."""
-        return await self._client.get_tools(server_name=_SERVER)
+        tools = await self._client.get_tools(server_name=_SERVER)
+        return [tool for tool in tools if tool.name in MODEL_ENGINE_TOOLS]
 
     async def assess(self, profile: Mapping[str, object]) -> Bounds:
         result = await self._call("assess_affordability", {"profile": dict(profile)})
         return Bounds(
             payment_ceiling=_money(result, "payment_ceiling"),
-            min_cushion=_money(result, "min_cushion"),
             reasons=tuple(result["reasons"]),
-        )
-
-    async def size(self, goal_price: Decimal, savings: Decimal, min_cushion: Decimal) -> Sizing:
-        result = await self._call(
-            "size_loan",
-            {
-                "goal_price": str(goal_price),
-                "savings": str(savings),
-                "min_cushion": str(min_cushion),
-            },
-        )
-        return Sizing(
-            loan_amount=_money(result, "loan_amount"),
-            savings_used=_money(result, "savings_used"),
-            cushion_kept=_money(result, "cushion_kept"),
-            spare_savings=_money(result, "spare_savings"),
         )
 
     async def simulate(self, loan: Mapping[str, object]) -> Simulation:
@@ -93,6 +80,41 @@ class McpLoanEngine:
         )
         return OfferTerm(term_months=result["term_months"], comfortable=result["comfortable"])
 
+    async def propose_term(self, principal: Decimal, payment_limit: Decimal) -> ProposedTerm:
+        result = await self._call(
+            "propose_term", {"principal": str(principal), "payment_limit": str(payment_limit)}
+        )
+        return _proposed(result)
+
+    async def propose_offer_term(
+        self, track: Mapping[str, object], payment_limit: Decimal
+    ) -> ProposedTerm:
+        result = await self._call(
+            "propose_offer_term", {"track": dict(track), "payment_limit": str(payment_limit)}
+        )
+        return _proposed(result)
+
+    async def comfortable_term(
+        self, principal: Decimal, payment_ceiling: Decimal, *, any_track: bool
+    ) -> int | None:
+        result = await self._call(
+            "shortest_comfortable_term",
+            {
+                "principal": str(principal),
+                "payment_ceiling": str(payment_ceiling),
+                "any_track": any_track,
+            },
+        )
+        term: int | None = result["term_months"]
+        return term
+
+    async def largest_loan(self, payment_ceiling: Decimal, term_months: int) -> Decimal | None:
+        result = await self._call(
+            "largest_comfortable_loan",
+            {"payment_ceiling": str(payment_ceiling), "term_months": term_months},
+        )
+        return _optional_money(result, "loan_amount")
+
     async def market_series(self, months: int) -> MarketSeries:
         result = await self._call("market_series", {"prime_months": months, "cpi_months": months})
         return market_series_of(result)
@@ -105,6 +127,12 @@ class McpLoanEngine:
         if result.structuredContent is None:
             raise ValueError(f"The engine's {tool} returned no structured content")
         return result.structuredContent
+
+
+def _proposed(result: Mapping[str, Any]) -> ProposedTerm:
+    return ProposedTerm(
+        term_months=result["term_months"], first_payment=_money(result, "first_payment")
+    )
 
 
 def _text(result: CallToolResult) -> str:

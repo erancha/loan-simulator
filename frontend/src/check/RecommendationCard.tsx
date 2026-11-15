@@ -1,8 +1,6 @@
 import { useId } from 'react'
 import type { CardModel, OptionCard } from './card.ts'
 import {
-  ceilingLine,
-  cushionLine,
   DECISION_TITLE,
   EMPTY_CARD,
   EXAMPLES_NOTE,
@@ -39,14 +37,6 @@ function Fold({ fold, options }: FoldProps) {
   return (
     <details className="fold" open>
       <summary>{FOLD_TITLE}</summary>
-      <h4>{ceilingLine(fold.ceiling.amount)}</h4>
-      <ul>
-        {fold.ceiling.reasons.map((reason) => (
-          <li key={reason}>{reason}</li>
-        ))}
-      </ul>
-      <h4>{cushionLine(fold.cushion.amount)}</h4>
-      <p>{fold.cushion.text}</p>
       <table className="totals">
         <thead>
           <tr>
@@ -79,11 +69,11 @@ function Fold({ fold, options }: FoldProps) {
 }
 
 /**
- * The recommendation card: the decision, the options grouped by the latest recommendation, the
- * model's reasoning and the fold with the figures behind them.
+ * The recommendation card: the decision with its ceiling check, the options grouped by the latest
+ * recommendation, the model's reasoning and the fold with the figures behind them.
  */
 export function RecommendationCard({ model }: { model: CardModel }) {
-  const { decision, recommended, others, reasoning, fold } = model
+  const { decision, checkNote, ceiling, recommended, others, reasoning, fold } = model
   if (recommended.length === 0 && others === null) {
     return <p className="card-empty">{EMPTY_CARD}</p>
   }
@@ -94,6 +84,11 @@ export function RecommendationCard({ model }: { model: CardModel }) {
         <section className="decision">
           <h3 className="decision-title">{DECISION_TITLE}</h3>
           <p>{decision}</p>
+          {checkNote !== null && <p className="check-note">{checkNote}</p>}
+          <p className="ceiling-line">
+            {ceiling.label}: {ceiling.amount}
+            {ceiling.source !== null && ` · ${ceiling.source}`}
+          </p>
         </section>
       )}
       {shown.some((option) => option.isExample) && <p className="examples-note">{EXAMPLES_NOTE}</p>}

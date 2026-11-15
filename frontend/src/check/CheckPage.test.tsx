@@ -1,21 +1,19 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
-import type { CheckEvent, ProfileView } from '../api/types.ts'
+import type { CheckEvent, CheckSummary } from '../api/types.ts'
 import { FakeEventSource } from '../test/fakeEventSource.ts'
 import {
   assistantMessage,
   checkArchived,
-  checkContinued,
-  delta,
-  goalSet,
+  financesUpdated,
+  loanSet,
   optionFixed36,
   optionPrime36,
-  profileUpdated,
-  profileView,
   questionAsked,
   recommendationPrime,
   REFERENCE_DECISION,
+  termSet,
   turnStatus,
   userMessage,
   withSeq,
@@ -23,19 +21,26 @@ import {
 import { CheckPage } from './CheckPage.tsx'
 
 const MESSAGES = '/api/checks/c1/messages'
-const RECOMPUTE = 'הפרופיל שלי השתנה. אפשר לחשב מחדש את ההמלצה לפי המספרים המעודכנים?'
+const FINANCES = '/api/checks/c1/finances'
+const MARKET = '/api/checks/c1/market-sample'
+const TERM = '/api/checks/c1/term'
+const TERM_CEILING = '/api/checks/c1/term-ceiling'
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status })
 }
 
-/** Stubs fetch: a profile GET or PUT answers the reference profile; a message POST `onMessage`. */
+/** Stubs fetch: a finances PUT answers `onFinances`; a message POST answers `onMessage`. */
 function stubApi(
   onMessage: () => Response | Promise<Response> = () => new Response(null, { status: 202 }),
+  onFinances: () => Response | Promise<Response> = () => jsonResponse(200, {}),
 ) {
   const fetchStub = vi.fn((path: string, init?: RequestInit) => {
-    if (path === '/api/profile') return Promise.resolve(jsonResponse(200, profileView))
+    if (path === FINANCES && init?.method === 'PUT') return Promise.resolve(onFinances())
     if (path === MESSAGES && init?.method === 'POST') return Promise.resolve(onMessage())
+    if (path === MARKET && init?.method === 'POST') return Promise.resolve(onMessage())
+    if (path === TERM_CEILING && init?.method === 'POST') return Promise.resolve(onMessage())
+    if (path === TERM && init?.method === 'PUT') return Promise.resolve(new Response(null, { status: 204 }))
     return Promise.reject(new Error(`unexpected request ${init?.method ?? 'GET'} ${path}`))
   })
   vi.stubGlobal('fetch', fetchStub)
@@ -48,10 +53,10 @@ function sentTexts(fetchStub: ReturnType<typeof stubApi>): string[] {
     .map(([, init]) => (JSON.parse(String(init?.body)) as { text: string }).text)
 }
 
-/** The bodies of the profile PUTs, in order. */
-function profilePuts(fetchStub: ReturnType<typeof stubApi>): unknown[] {
+/** The bodies of the finances PUTs, in order. */
+function financesPuts(fetchStub: ReturnType<typeof stubApi>): unknown[] {
   return fetchStub.mock.calls
-    .filter(([path, init]) => path === '/api/profile' && init?.method === 'PUT')
+    .filter(([path, init]) => path === FINANCES && init?.method === 'PUT')
     .map(([, init]) => JSON.parse(String(init?.body)))
 }
 
@@ -65,24 +70,35 @@ function emit(...events: CheckEvent[]) {
   })
 }
 
+/** A new check as the checks list shows it: no loan, no term, no recommendation. */
+const NEW_CHECK: CheckSummary = {
+  id: 'c1',
+  created_at: '2026-11-15T10:00:00Z',
+  loan: null,
+  recommendation: null,
+  recommends_examples_only: false,
+  term_months: null,
+  archived: false,
+  started: true,
+}
+
 function renderPage(
-  stale = false,
   onChecksChanged = vi.fn(),
   onClone = vi.fn(() => Promise.resolve()),
-  onOpenCheck = vi.fn(),
+  listed: CheckSummary = NEW_CHECK,
 ) {
   render(
     <CheckPage
       checkId="c1"
-      stale={stale}
+      listed={listed}
       sidebar={<nav>הבדיקות שלי</nav>}
       activePane="chat"
       onChecksChanged={onChecksChanged}
       onClone={onClone}
-      onOpenCheck={onOpenCheck}
+      onOpenCheck={vi.fn()}
     />,
   )
-  return { onChecksChanged, onClone, onOpenCheck }
+  return { onChecksChanged, onClone }
 }
 
 beforeEach(() => {
@@ -91,14 +107,13 @@ beforeEach(() => {
 })
 afterEach(() => vi.unstubAllGlobals())
 
-test('replaying the reference events fills the three panes', async () => {
+test('replaying the reference events fills the panes', () => {
   stubApi()
   renderPage()
   expect(FakeEventSource.last().url).toBe('/api/checks/c1/events')
   emit(
     userMessage(1, 'רוצה לקנות רכב'),
-    profileUpdated,
-    goalSet,
+    loanSet,
     optionPrime36,
     optionFixed36,
     recommendationPrime,
@@ -109,7 +124,6 @@ test('replaying the reference events fills the three panes', async () => {
   const page = document.querySelector('.check-page')!
   expect(page).toHaveAttribute('data-active-pane', 'chat')
   expect(page.querySelector('.pane-side')).toHaveTextContent('הבדיקות שלי')
-  expect(await screen.findByLabelText('כסף זמין')).toHaveValue('15,000')
   expect(page.querySelector('.pane-chat')).toHaveTextContent('הנה ההמלצה')
   expect(screen.getByText(REFERENCE_DECISION)).toBeInTheDocument()
   expect(screen.getByText('מומלצת')).toBeInTheDocument()
@@ -123,6 +137,17 @@ test('sending posts the text to the check and clears the input', async () => {
 
   await waitFor(() => expect(input).toHaveValue(''))
   expect(sentTexts(fetchStub)).toEqual(['שלום'])
+})
+
+test('the market sample goes to its own route, any other text to the model', async () => {
+  const fetchStub = stubApi()
+  renderPage()
+  await userEvent.click(screen.getByRole('button', { name: 'פריים ומדדים' }))
+  await userEvent.click(screen.getByRole('button', { name: 'שליחה' }))
+
+  await waitFor(() => expect(screen.getByRole('textbox')).toHaveValue(''))
+  expect(fetchStub.mock.calls.map(([path]) => path)).toEqual([MARKET])
+  expect(sentTexts(fetchStub)).toEqual([])
 })
 
 test('a 429 shows when sending resumes and keeps the text', async () => {
@@ -168,39 +193,9 @@ test('a 409 shows nothing', async () => {
   expect(screen.queryByText(/ההודעה לא נשלחה/)).not.toBeInTheDocument()
 })
 
-test('the stale banner recomputes with the fixed message', async () => {
-  const fetchStub = stubApi()
-  renderPage(true)
-  expect(screen.getByText('ההמלצה חושבה לפי פרופיל קודם.')).toBeInTheDocument()
-  await userEvent.click(screen.getByRole('button', { name: 'לחשב מחדש' }))
-
-  await waitFor(() => expect(sentTexts(fetchStub)).toEqual([RECOMPUTE]))
-})
-
-test('the recompute button waits for its send and shows why it was refused', async () => {
-  let refuse: (response: Response) => void = () => undefined
-  stubApi(() => new Promise<Response>((resolve) => (refuse = resolve)))
-  renderPage(true)
-  const button = screen.getByRole('button', { name: 'לחשב מחדש' })
-  await userEvent.click(button)
-  expect(button).toBeDisabled()
-
-  await act(async () => refuse(jsonResponse(500, { detail: 'boom' })))
-  expect(button).toBeEnabled()
-  const banner = screen.getByText('ההמלצה חושבה לפי פרופיל קודם.').closest('.stale-banner')!
-  expect(banner).toHaveTextContent('ההודעה לא נשלחה: boom')
-})
-
-test('no stale banner on a current check', () => {
-  stubApi()
-  renderPage(false)
-  expect(screen.queryByText('ההמלצה חושבה לפי פרופיל קודם.')).not.toBeInTheDocument()
-})
-
 test('replayed turns do not change the checks', async () => {
   stubApi()
   const { onChecksChanged } = renderPage()
-  await screen.findByLabelText('כסף זמין')
   emit(
     turnStatus(1, 'running'),
     turnStatus(2, 'idle'),
@@ -219,7 +214,6 @@ async function sendHello() {
 test('the checks change once when the turn a send started ends', async () => {
   stubApi()
   const { onChecksChanged } = renderPage()
-  await screen.findByLabelText('כסף זמין')
   await sendHello()
   emit(userMessage(1, 'שלום'), turnStatus(2, 'running'))
   expect(onChecksChanged).not.toHaveBeenCalled()
@@ -232,74 +226,12 @@ test('the checks change once when the turn a send started ends', async () => {
 test('a turn that runs and ends in one batch after a send still counts', async () => {
   stubApi()
   const { onChecksChanged } = renderPage()
-  await screen.findByLabelText('כסף זמין')
   await sendHello()
   emit(userMessage(1, 'שלום'), turnStatus(2, 'running'), turnStatus(3, 'idle'))
   expect(onChecksChanged).toHaveBeenCalledTimes(1)
 })
 
-test('a profile save changes the checks', async () => {
-  stubApi()
-  const { onChecksChanged } = renderPage()
-  const savings = await screen.findByLabelText('כסף זמין')
-  await userEvent.clear(savings)
-  await userEvent.type(savings, '20000')
-  await userEvent.tab()
-  await waitFor(() => expect(onChecksChanged).toHaveBeenCalledTimes(1))
-})
-
-function withSavings(savings: string): ProfileView {
-  return { ...profileView, profile: { ...profileView.profile, savings } }
-}
-
-/** Stubs fetch: each profile GET answers the next of `answers`, the last one repeating. */
-function stubProfileGets(...answers: ProfileView[]) {
-  const fetchStub = vi.fn((path: string) => {
-    if (path !== '/api/profile') return Promise.reject(new Error(`unexpected request ${path}`))
-    const gets = fetchStub.mock.calls.filter(([called]) => called === '/api/profile').length
-    return Promise.resolve(jsonResponse(200, answers[Math.min(gets, answers.length) - 1]))
-  })
-  vi.stubGlobal('fetch', fetchStub)
-  return fetchStub
-}
-
-function profileGets(fetchStub: ReturnType<typeof stubProfileGets>): number {
-  return fetchStub.mock.calls.filter(([path]) => path === '/api/profile').length
-}
-
-test('a replayed older profile never replaces the current one the panel fetched', async () => {
-  stubProfileGets(withSavings('20000'))
-  renderPage()
-  const savings = await screen.findByLabelText('כסף זמין')
-  emit({ ...profileUpdated, data: withSavings('1') })
-  await new Promise((resolve) => setTimeout(resolve, 20))
-  expect(savings).toHaveValue('20,000')
-})
-
-test('replaying several profile updates on open fetches the profile once', async () => {
-  const fetchStub = stubProfileGets(profileView)
-  renderPage()
-  emit(
-    withSeq(profileUpdated, 1),
-    withSeq(profileUpdated, 2),
-    withSeq(profileUpdated, 3),
-  )
-  await screen.findByLabelText('כסף זמין')
-  await new Promise((resolve) => setTimeout(resolve, 20))
-  expect(profileGets(fetchStub)).toBe(1)
-})
-
-test('a live profile update after the panel loaded fetches the profile again', async () => {
-  const fetchStub = stubProfileGets(profileView, withSavings('20000'))
-  renderPage()
-  const savings = await screen.findByLabelText('כסף זמין')
-  expect(savings).toHaveValue('15,000')
-  emit({ ...profileUpdated, data: withSavings('1') })
-  await waitFor(() => expect(savings).toHaveValue('20,000'))
-  expect(profileGets(fetchStub)).toBe(2)
-})
-
-test('a card that cannot be built shows a notice; the chat and profile keep working', async () => {
+test('a card that cannot be built shows a notice; the chat keeps working', async () => {
   const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
   const fetchStub = stubApi()
   renderPage()
@@ -316,47 +248,128 @@ test('a card that cannot be built shows a notice; the chat and profile keep work
     expect.any(Error),
     expect.anything(),
   )
-  expect(await screen.findByLabelText('כסף זמין')).toHaveValue('15,000')
   await userEvent.type(screen.getByLabelText('הודעה לעוזר'), 'שלום{Enter}')
   await waitFor(() => expect(sentTexts(fetchStub)).toEqual(['שלום']))
   logged.mockRestore()
 })
 
-const SAVINGS_QUESTION = questionAsked(3, { field: 'savings', text: null, choices: null })
+const EXPENSES_QUESTION = questionAsked(3, {
+  field: 'fixed_expenses',
+  text: null,
+  choices: null,
+})
 
-/** Renders the page with a live question for savings, once the profile has loaded. */
-async function askSavings(onChecksChanged = vi.fn()) {
-  renderPage(false, onChecksChanged)
-  await screen.findByLabelText('כסף זמין')
-  emit(userMessage(1, 'רוצה לקנות רכב'), turnStatus(2, 'running'), SAVINGS_QUESTION)
+/** Renders the page with a live term card proposing 78 months. */
+function askTerm() {
+  renderPage()
+  emit(
+    userMessage(1, 'אני רוצה הלוואה בסך 60,000₪'),
+    turnStatus(2, 'running'),
+    questionAsked(3, { kind: 'term', term_months: 78, first_payment: '986.03' }),
+  )
+  emit(turnStatus(4, 'idle'))
+}
+
+/** The calls the page made, as "METHOD path", with each body that has one. */
+function requests(fetchStub: ReturnType<typeof stubApi>): string[] {
+  return fetchStub.mock.calls.map(
+    ([path, init]) => `${init?.method ?? 'GET'} ${path} ${String(init?.body ?? '')}`.trim(),
+  )
+}
+
+const CONFIRMED = [
+  `PUT ${TERM} {"term_months":78,"payment_ceiling":null}`,
+  `POST ${MESSAGES} {"text":"אישור: 78 חודשים"}`,
+]
+
+test('the card\'s confirm saves the term, then sends the confirmation', async () => {
+  const fetchStub = stubApi()
+  askTerm()
+  await userEvent.click(screen.getByRole('button', { name: 'אישור' }))
+  await waitFor(() => expect(requests(fetchStub)).toEqual(CONFIRMED))
+})
+
+test('the card\'s term typed in the chat confirms it too', async () => {
+  for (const typed of ['78', '78 חודשים']) {
+    const fetchStub = stubApi()
+    askTerm()
+    await userEvent.type(screen.getByPlaceholderText(/אפשר לכתוב כאן/), `${typed}{Enter}`)
+    await waitFor(() => expect(requests(fetchStub)).toEqual(CONFIRMED))
+    cleanup()
+  }
+})
+
+test('a new ceiling alone on the term card is one request with its line', async () => {
+  const fetchStub = stubApi()
+  askTerm()
+  await userEvent.type(screen.getByRole('textbox', { name: 'החזר חודשי מרבי' }), '1000')
+  await userEvent.click(screen.getByRole('button', { name: 'אישור' }))
+  await waitFor(() =>
+    expect(requests(fetchStub)).toEqual([
+      `POST ${TERM_CEILING} {"text":"החזר חודשי מרבי: 1,000 ₪","payment_ceiling":"1000"}`,
+    ]),
+  )
+})
+
+test('another term with a new ceiling saves both, then sends the confirmation', async () => {
+  const fetchStub = stubApi()
+  askTerm()
+  const term = screen.getByRole('textbox', { name: 'מספר חודשים' })
+  await userEvent.clear(term)
+  await userEvent.type(term, '48')
+  await userEvent.type(screen.getByRole('textbox', { name: 'החזר חודשי מרבי' }), '1000')
+  await userEvent.click(screen.getByRole('button', { name: 'אישור' }))
+  await waitFor(() =>
+    expect(requests(fetchStub)).toEqual([
+      `PUT ${TERM} {"term_months":48,"payment_ceiling":"1000"}`,
+      `POST ${MESSAGES} {"text":"אישור: 48 חודשים, החזר חודשי מרבי: 1,000 ₪"}`,
+    ]),
+  )
+})
+
+test('another term typed in the chat goes to the model as text', async () => {
+  const fetchStub = stubApi()
+  askTerm()
+  await userEvent.type(screen.getByPlaceholderText(/אפשר לכתוב כאן/), '48{Enter}')
+  await waitFor(() => expect(requests(fetchStub)).toEqual([`POST ${MESSAGES} {"text":"48"}`]))
+})
+
+/** Renders the page with a live question for the fixed expenses. */
+function askExpenses(onChecksChanged = vi.fn()) {
+  renderPage(onChecksChanged)
+  emit(userMessage(1, 'רוצה לקנות רכב'), turnStatus(2, 'running'), EXPENSES_QUESTION)
   emit(turnStatus(4, 'idle'))
   return document.querySelector<HTMLElement>('.bubble-question')!
 }
 
-async function answerSavings(bubble: HTMLElement, amount: string) {
-  const box = within(bubble).getByRole('textbox', { name: 'כסף זמין' })
+async function answerExpenses(bubble: HTMLElement, amount: string) {
+  const box = within(bubble).getByRole('textbox', { name: 'הוצאות קבועות' })
   await userEvent.clear(box)
   await userEvent.type(box, amount)
   await userEvent.click(within(bubble).getByRole('button', { name: 'אישור' }))
 }
 
-async function commitInPanel(label: string, amount: string) {
-  await userEvent.click(screen.getByRole('button', { name: 'פתיחת הפרופיל לעריכה' }))
-  const field = within(document.querySelector<HTMLElement>('.profile-panel')!).getByLabelText(label)
-  await userEvent.clear(field)
-  await userEvent.type(field, amount)
-  await userEvent.tab()
-}
-
-test('a tapped profile answer is saved, then sent as a line', async () => {
+test('a finances answer is saved to the check, then sent as a line', async () => {
   const fetchStub = stubApi()
-  const bubble = await askSavings()
-  await answerSavings(bubble, '12000')
+  const onChecksChanged = vi.fn()
+  const bubble = askExpenses(onChecksChanged)
+  await answerExpenses(bubble, '4500')
 
-  await waitFor(() => expect(sentTexts(fetchStub)).toEqual(['כסף זמין: 12,000 ₪']))
-  expect(profilePuts(fetchStub)).toEqual([{ savings: '12000' }])
+  await waitFor(() => expect(sentTexts(fetchStub)).toEqual(['הוצאות קבועות: 4,500 ₪']))
+  expect(financesPuts(fetchStub)).toEqual([{ fixed_expenses: '4500' }])
   const paths = fetchStub.mock.calls.map(([path, init]) => `${init?.method ?? 'GET'} ${path}`)
-  expect(paths.indexOf('PUT /api/profile')).toBeLessThan(paths.indexOf(`POST ${MESSAGES}`))
+  expect(paths.indexOf(`PUT ${FINANCES}`)).toBeLessThan(paths.indexOf(`POST ${MESSAGES}`))
+  expect(onChecksChanged).toHaveBeenCalledTimes(1)
+})
+
+test('a refused finances save stays on the question and sends nothing', async () => {
+  const fetchStub = stubApi(undefined, () => jsonResponse(422, { detail: 'negative expenses' }))
+  const bubble = askExpenses()
+  await answerExpenses(bubble, '4500')
+
+  expect(await screen.findByText('הערך לא התקבל: negative expenses')).toBeInTheDocument()
+  expect(sentTexts(fetchStub)).toEqual([])
+  expect(within(bubble).getByRole('button', { name: 'אישור' })).toBeEnabled()
 })
 
 test('a capped send after a saved answer keeps the bubble', async () => {
@@ -371,101 +384,49 @@ test('a capped send after a saved answer keeps the bubble', async () => {
   const fetchStub = stubApi(() =>
     jsonResponse(429, { detail: 'daily message cap reached', next_allowed: nextAllowed }),
   )
-  const onChecksChanged = vi.fn()
-  const bubble = await askSavings(onChecksChanged)
-  await answerSavings(bubble, '12000')
+  const bubble = askExpenses()
+  await answerExpenses(bubble, '4500')
 
   expect(
     await screen.findByText('הגעתם למכסת ההודעות. אפשר להמשיך מחר ב-07:05'),
   ).toBeInTheDocument()
-  expect(profilePuts(fetchStub)).toEqual([{ savings: '12000' }])
-  expect(onChecksChanged).toHaveBeenCalledTimes(1)
-  expect(within(bubble).getByRole('textbox', { name: 'כסף זמין' })).toBeInTheDocument()
+  expect(financesPuts(fetchStub)).toEqual([{ fixed_expenses: '4500' }])
+  expect(within(bubble).getByRole('textbox', { name: 'הוצאות קבועות' })).toBeInTheDocument()
   expect(within(bubble).getByRole('button', { name: 'אישור' })).toBeEnabled()
 })
 
-test('a skipped savings question saves 0 before sending its line', async () => {
+test('a skip sends its line without saving anything', async () => {
   const fetchStub = stubApi()
-  const bubble = await askSavings()
+  const bubble = askExpenses()
   await userEvent.click(within(bubble).getByRole('button', { name: 'דילוג' }))
 
-  await waitFor(() => expect(sentTexts(fetchStub)).toEqual(['דילוג על: כסף זמין (נשמר כ-0)']))
-  expect(profilePuts(fetchStub)).toEqual([{ savings: '0' }])
+  await waitFor(() => expect(sentTexts(fetchStub)).toEqual(['דילוג על: הוצאות קבועות']))
+  expect(financesPuts(fetchStub)).toEqual([])
 })
 
 test('a failed skip shows the failure and keeps the bubble', async () => {
   stubApi(() => jsonResponse(500, { detail: 'boom' }))
-  const bubble = await askSavings()
+  const bubble = askExpenses()
   await userEvent.click(within(bubble).getByRole('button', { name: 'דילוג' }))
 
   expect(await screen.findByText('ההודעה לא נשלחה: boom')).toBeInTheDocument()
   expect(within(bubble).getByRole('button', { name: 'דילוג' })).toBeEnabled()
 })
 
-test('a panel edit shows as a note in the conversation', async () => {
-  const fetchStub = stubApi()
-  const { onChecksChanged } = renderPage()
-  await screen.findByLabelText('כסף זמין')
-  emit(userMessage(1, 'רוצה לקנות רכב'), assistantMessage(2, 'a1', 'בשמחה'))
-  await commitInPanel('הוצאות קבועות', '3000')
-
-  const note = await screen.findByText('עודכן בפרופיל: הוצאות קבועות 3,000 ₪')
-  expect(note).toHaveClass('panel-note-line')
-  expect(note.closest('li')).toHaveTextContent('בשמחה')
-  expect(profilePuts(fetchStub)).toEqual([{ fixed_expenses: '3000' }])
-  expect(sentTexts(fetchStub)).toEqual([])
-  expect(onChecksChanged).toHaveBeenCalledTimes(1)
-})
-
-test('a panel edit of the field the live question asks for answers it', async () => {
-  const fetchStub = stubApi()
-  await askSavings()
-  await commitInPanel('כסף זמין', '9000')
-
-  await waitFor(() => expect(sentTexts(fetchStub)).toEqual(['כסף זמין: 9,000 ₪']))
-  expect(profilePuts(fetchStub)).toEqual([{ savings: '9000' }])
-  expect(screen.queryByText(/עודכן בפרופיל/)).not.toBeInTheDocument()
-})
-
-test('a refused answer from the panel is noted instead', async () => {
-  stubApi(() => jsonResponse(500, { detail: 'boom' }))
-  await askSavings()
-  await commitInPanel('כסף זמין', '9000')
-
-  expect(await screen.findByText('ההודעה לא נשלחה: boom')).toBeInTheDocument()
-  expect(await screen.findByText('עודכן בפרופיל: כסף זמין 9,000 ₪')).toHaveClass(
-    'panel-note-line',
-  )
-})
-
-test('a panel note made while a reply streams outlives the reply being dropped', async () => {
-  stubApi()
-  renderPage()
-  await screen.findByLabelText('כסף זמין')
-  emit(userMessage(1, 'רוצה לקנות רכב'), turnStatus(2, 'running'), delta('a1', 'חצי'))
-  await commitInPanel('הוצאות קבועות', '3000')
-  const text = 'עודכן בפרופיל: הוצאות קבועות 3,000 ₪'
-  await screen.findByText(text)
-  emit(turnStatus(3, 'idle'))
-
-  expect(screen.queryByText('חצי')).not.toBeInTheDocument()
-  expect(screen.getByText(text).closest('li')).toHaveTextContent('רוצה לקנות רכב')
-})
-
 test('a typed message closes the live question', async () => {
   stubApi()
-  const bubble = await askSavings()
+  const bubble = askExpenses()
   expect(within(bubble).getByRole('button', { name: 'דילוג' })).toBeInTheDocument()
   await userEvent.type(screen.getByRole('textbox', { name: 'הודעה לעוזר' }), 'יש לי 5000{Enter}')
   emit(userMessage(5, 'יש לי 5000'), turnStatus(6, 'running'))
 
   expect(within(bubble).queryByRole('button')).not.toBeInTheDocument()
-  expect(bubble).toHaveTextContent('כסף זמין')
+  expect(bubble).toHaveTextContent('כמה יוצא כל חודש על הוצאות קבועות?')
 })
 
 const CLONE_OFFER = { field: null, text: null, choices: null, offer_clone: true } as const
 
-test('a clone offer clones with its choice and answers this check with the other', async () => {
+test('a clone offer clones with its choice and the request, and answers this check with the other', async () => {
   const fetchStub = stubApi()
   const { onClone } = renderPage()
   emit(userMessage(1, 'ומה עם 1,000 בחודש?'), questionAsked(2, CLONE_OFFER))
@@ -473,33 +434,74 @@ test('a clone offer clones with its choice and answers this check with the other
   expect(screen.getByText(/לשכפל את הבדיקה/, { selector: '.question-label' })).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'דילוג' })).not.toBeInTheDocument()
   await userEvent.click(screen.getByRole('button', { name: 'לשכפל ולבדוק בנפרד' }))
-  expect(onClone).toHaveBeenCalledWith('לשכפל ולבדוק בנפרד')
+  expect(onClone).toHaveBeenCalledWith('לשכפל ולבדוק בנפרד: ומה עם 1,000 בחודש?')
   expect(sentTexts(fetchStub)).toEqual([])
 
   await userEvent.click(screen.getByRole('button', { name: 'לעדכן את הבדיקה הזאת' }))
   expect(sentTexts(fetchStub)).toEqual(['לעדכן את הבדיקה הזאת'])
 })
 
-test('a continuation opens the new check only after this page sent', async () => {
+test('an archived check shows the manual archive line only, with no stale banner', () => {
   stubApi()
-  const { onOpenCheck } = renderPage()
-  emit(userMessage(1, 'א'), checkArchived(2), checkContinued(3, 'c0'))
-  expect(onOpenCheck).not.toHaveBeenCalled()
+  renderPage()
+  emit(userMessage(1, 'א'), checkArchived(2))
 
-  await userEvent.click(screen.getByRole('button', { name: 'מעבר לבדיקה המעודכנת' }))
-  expect(onOpenCheck).toHaveBeenCalledWith('c0')
+  expect(screen.getByRole('note')).toHaveTextContent('הבדיקה הועברה לארכיון ידנית.')
+  expect(screen.queryByRole('button', { name: 'מעבר לבדיקה המעודכנת' })).not.toBeInTheDocument()
+  expect(screen.queryByText('ההמלצה חושבה לפי פרופיל קודם.')).not.toBeInTheDocument()
 })
 
-test('a live continuation after a send opens the new check', async () => {
+test('no stale banner exists', () => {
   stubApi()
-  const { onOpenCheck } = renderPage()
-  await userEvent.type(screen.getByRole('textbox'), 'טעיתי{Enter}')
-  emit(
-    userMessage(1, 'טעיתי'),
-    turnStatus(2, 'running'),
-    checkArchived(3),
-    checkContinued(4, 'c2'),
-  )
+  renderPage()
+  expect(document.querySelector('.stale-banner')).toBeNull()
+  expect(screen.queryByRole('button', { name: 'לחשב מחדש' })).not.toBeInTheDocument()
+})
 
-  await waitFor(() => expect(onOpenCheck).toHaveBeenCalledWith('c2'))
+test('the figures panel stays hidden until the check has figures', () => {
+  stubApi()
+  renderPage()
+  expect(document.querySelector('.finances-panel')).toBeNull()
+  emit(financesUpdated, turnStatus(9, 'idle'))
+  expect(document.querySelector('.finances-panel')).not.toBeNull()
+})
+
+test('an edited figure is saved, then followed by its update line', async () => {
+  const fetchStub = stubApi()
+  renderPage()
+  emit(financesUpdated, turnStatus(9, 'idle'))
+  await userEvent.click(screen.getByRole('button', { name: 'עריכה' }))
+  const input = screen.getByRole('textbox', { name: 'הוצאות קבועות' })
+  expect(input).toHaveValue('4,500')
+  await userEvent.clear(input)
+  await userEvent.type(input, '5000{Tab}')
+
+  await waitFor(() => expect(sentTexts(fetchStub)).toEqual(['עודכן: הוצאות קבועות 5,000 ₪']))
+  expect(financesPuts(fetchStub)).toEqual([{ fixed_expenses: '5000' }])
+})
+
+test('a running turn offers no edit of the figures', () => {
+  stubApi()
+  renderPage()
+  emit(financesUpdated, turnStatus(9, 'running'))
+  expect(document.querySelector('.finances-panel')).not.toBeNull()
+  expect(screen.queryByRole('button', { name: 'עריכה' })).not.toBeInTheDocument()
+})
+
+test('an archived check shows the figures read-only', () => {
+  const fetchStub = stubApi()
+  renderPage()
+  emit(financesUpdated, turnStatus(9, 'idle'), checkArchived(10))
+  expect(document.querySelector('.finances-panel')).not.toBeNull()
+  expect(screen.queryByRole('button', { name: 'עריכה' })).not.toBeInTheDocument()
+  expect(financesPuts(fetchStub)).toEqual([])
+})
+
+test('an idle check whose term the list shows otherwise refreshes the list once', async () => {
+  const onChecksChanged = vi.fn()
+  renderPage(onChecksChanged, undefined, { ...NEW_CHECK, loan: loanSet.data, term_months: 24 })
+  emit(userMessage(1, 'לשכפל ולבדוק בנפרד'), turnStatus(2, 'running'), loanSet)
+  expect(onChecksChanged).not.toHaveBeenCalled()
+  emit(withSeq(termSet, 4), turnStatus(5, 'idle'))
+  await waitFor(() => expect(onChecksChanged).toHaveBeenCalledTimes(1))
 })

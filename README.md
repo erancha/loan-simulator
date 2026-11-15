@@ -1,14 +1,15 @@
 # loan-simulator
 
 The loan simulator is a Hebrew-only AI agent that helps a person in Israel decide on a short- or
-medium-term loan (a car, a renovation, a consumer purchase): how much to borrow, how much savings
-to keep, for how long, and on which track (one part of a loan with its own rate: fixed or tied to
-the prime rate, linked to the consumer price index or not). The model leads the conversation and
-decides what to ask; code computes every number and sets the bounds the recommendation must
-respect. The engine prices each track at what it costs today and at what it would have cost had
-interest rates and inflation moved as in the worst stretch of the last ten years; the page shows
-both. Access is by invitation, and the stack runs on one machine under Docker Compose. This repo
-holds the loan engine, the agent and the page.
+medium-term loan (a car, a renovation, a consumer purchase): for how long, and on which track (one
+part of a loan with its own rate: fixed or tied to the prime rate, linked to the consumer price
+index or not). The person states the loan they need and sees it simulated within the first turns;
+their household finances come up only if they ask for help with a monthly payment ceiling. The model
+leads the conversation and decides what to ask; code computes every number and sets the bounds the
+recommendation must respect. The engine prices each track at what it costs today and at what it
+would have cost had interest rates and inflation moved as in the worst stretch of the last ten
+years; the page shows both. Access is by invitation, and the stack runs on one machine under Docker
+Compose. This repo holds the loan engine, the agent and the page.
 
 **Contents:** [Overview](#overview) · [Tech stack](#tech-stack) · [Architecture](#architecture) ·
 [Getting started](#getting-started) · [Scripts](#scripts) · [Details](#details) ·
@@ -19,23 +20,26 @@ holds the loan engine, the agent and the page.
 - **Sign-in and chat**: a person signs in with a Google account and chats with the assistant in
   Hebrew, on a right-to-left page. Only the Google accounts the operator lists as test users of
   the app's Google client can sign in.
-- **Profile**: the assistant asks about savings, income, fixed expenses and existing loan
-  payments, and keeps them as a profile the person can correct in a side panel.
-- **Loan check**: each check sizes the loan, the savings cushion to keep and a monthly payment
-  ceiling, and compares example tracks, a fixed and a prime one, or the real offers the person
-  collected. A check can be paused to collect offers and resumed days later, or cloned to try a
-  variant beside it. A profile change closes every check recommended from the old figures, with
-  a note listing them; a change made in a check's chat goes on in a new check that recalculates.
-  The person can also archive a check, restore it while its figures match the profile, and
-  delete an archived one.
+- **The loan first**: the person writes the amount they need, or a price and the money they put
+  in, with a purpose if they like. The assistant proposes a term with its first payment (with
+  a stated monthly limit, the shortest term that fits it; otherwise 60 months for a car, or the
+  shortest term whose first payment is under 1,000 ₪, up to 84 months), which the person
+  confirms, changes, or replaces with a monthly limit, and then compares two example tracks, a fixed
+  and a prime one, or the real offers the person collected.
+- **An optional payment ceiling**: the person may state the highest monthly payment that suits
+  them, or ask for help, and the engine derives one from their net income and fixed expenses.
+  These figures belong to the check and show as one line above its conversation once given. A
+  check can be paused to collect offers and resumed days later, cloned to try a variant beside it,
+  archived, restored, and deleted once archived.
 - **Worst case**: every option shows today's payment and its worst-case payment: the highest
   payment had rates and inflation moved as in any stretch of past months as long as the loan's
   term, starting in the last ten years, and which stretch that was.
 - **Recommendation**: a card with the loan amount, term and payment, each option's worst case,
-  and the ceiling and cushion behind it. Every figure on it comes from the engine's results,
-  never from the model's text. A guardrail in code refuses a recommendation whose worst case is
-  above the ceiling, or that borrows less than the sized loan unless the person, told what it
-  takes from the cushion, insisted; the model then tries again.
+  and the ceiling when there is one. Every figure on it comes from the engine's results, never
+  from the model's text. The amount recommended is always the amount the person asked for.
+  Without a ceiling the card says the recommendation is not yet checked against what the person
+  can pay; with one, a guardrail in code refuses an option whose worst case is above it, and the
+  assistant offers a longer term or names the largest loan that fits.
 - **Message limit**: each person may send 20 messages per 24 hours as shipped; the operator can
   set another limit for a person by email.
 - **Market data**: refreshed daily from public sources: the Bank of Israel rate and its average
@@ -61,10 +65,10 @@ holds the loan engine, the agent and the page.
 ## Architecture
 
 The page talks to the agent over an HTTP API and an event stream. The agent runs the
-conversation as a LangGraph loop, keeps each person's profile and checks in Postgres, and calls
-the loan engine's tools over MCP. The engine knows nothing about people: it takes a profile and
-loans, returns numbers and bounds, and refreshes its market data daily from the Bank of Israel
-and the Central Bureau of Statistics.
+conversation as a LangGraph loop, keeps each person's checks in Postgres, and calls the loan
+engine's tools over MCP. The engine knows nothing about people: it takes loans, and two monthly
+figures for the ceiling, returns numbers and bounds, and refreshes its market data daily from the
+Bank of Israel and the Central Bureau of Statistics.
 
 ```mermaid
 flowchart LR
@@ -136,7 +140,7 @@ Each script's header comment is its full documentation, and `--help` prints it.
   scripts, the addresses and MCP Inspector
 - [Testing](docs/testing.md) — what each test layer proves
 - [Decisions](docs/adr/) — one record per founding decision: the engine, the worst case, the
-  agent, storage, sign-in, the model setting, Compose and the page
+  agent, storage, sign-in, the model setting, Compose, the page, EC2, and the loan-first flow
 
 ## License
 

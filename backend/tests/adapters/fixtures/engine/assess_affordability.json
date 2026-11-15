@@ -1,6 +1,5 @@
 {
   "payment_ceiling": "4700.00",
-  "min_cushion": "18000.00",
   "counted_income": "20000.00",
   "reasons": [
     "variable_income_minimum_counted",

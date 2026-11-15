@@ -8,7 +8,6 @@ Each file holds the result of one call:
 
 - `assess_affordability.json`: net fixed income 18000, variable 4000 (minimum 2000), fixed expenses
   9000, existing loans 800
-- `size_loan.json`: price 120000, savings 70000, cushion 30000
 - `simulate_loan_unlinked_prime.json`: one track, 80000 over 48 months, prime + 1.5, unlinked,
   spitzer
 - `simulate_loan_linked_balloon.json`: one track, 80000 over 48 months, fixed 4.9%, CPI-linked,

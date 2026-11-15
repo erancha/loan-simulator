@@ -1,31 +1,26 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { sendMessage } from '../api/checks.ts'
+import {
+  saveFinances,
+  saveTerm,
+  sendMarketSample,
+  sendMessage,
+  sendTermCeiling,
+} from '../api/checks.ts'
 import { ApiException, isRecord } from '../api/client.ts'
-import type { ProfileUpdate } from '../api/types.ts'
-import { ProfilePanel } from '../profile/ProfilePanel.tsx'
-import { useProfileStore } from '../profile/profileStore.ts'
-import type { ProfileKey } from '../profile/profileStore.ts'
 import { buildCard } from './card.ts'
 import { CardBoundary } from './CardBoundary.tsx'
 import { CardResizer, useCardWidth } from './CardResizer.tsx'
 import { Chat } from './Chat.tsx'
-import type { PanelNote } from './Chat.tsx'
-import {
-  RECOMPUTE_BUTTON,
-  RECOMPUTE_MESSAGE,
-  STALE_BANNER,
-  answerLine,
-  capNotice,
-  fieldLabel,
-  panelNote,
-  profileValueText,
-  sendFailed,
-} from './copy.ts'
+import { capNotice, sendFailed } from './copy.ts'
+import { FinancesPanel, hasFinances } from './FinancesPanel.tsx'
+import { termConfirmation, typedTerm } from './QuestionBubble.tsx'
 import type { Answer } from './QuestionBubble.tsx'
 import { RecommendationCard } from './RecommendationCard.tsx'
-import { isArchived, isSettled, liveQuestion } from './events.ts'
+import { isArchived, liveQuestion } from './events.ts'
 import type { CheckState } from './events.ts'
+import type { CheckSummary } from '../api/types.ts'
+import { isMarketSample } from './marketSample.ts'
 import { useCheckEvents } from './useCheckEvents.ts'
 
 /** A 429's detail carries the ISO time the next message is allowed. */
@@ -45,41 +40,46 @@ function sendFailureText(error: unknown): string {
   throw error
 }
 
-/** A saved profile value as the conversation shows it; the panel never saves a null. */
-function savedValueText(value: ProfileUpdate[ProfileKey]): string {
-  if (value === null || value === undefined) {
-    throw new Error(`a profile save without a value: ${JSON.stringify(value)}`)
-  }
-  return profileValueText(value)
-}
-
 /** Builds the card while rendering, inside the boundary, so a throw from buildCard is contained. */
 function BuiltCard({ state }: { state: CheckState }) {
   return <RecommendationCard model={buildCard(state)} />
 }
 
+/**
+ * Whether the checks list shows the check as its own events do: its loan, its term and whether it
+ * has a recommendation. They differ after a turn this page did not start, such as the first turn
+ * of a clone, which the page that cloned it sends.
+ */
+function listedAsShown(listed: CheckSummary, state: CheckState): boolean {
+  return (
+    listed.loan?.amount === state.loan?.amount &&
+    listed.term_months === state.termMonths &&
+    (listed.recommendation === null) === (state.recommendation === null)
+  )
+}
+
 interface Props {
   checkId: string
-  /** The check's recommendation was computed from a profile the person has since changed. */
-  stale: boolean
+  /** The check as the checks list shows it. */
+  listed: CheckSummary
   sidebar: ReactNode
   /** Which pane a narrow screen shows; wide screens show all three. */
   activePane: 'chat' | 'card' | 'side'
-  /** The checks list may have changed: a turn this page started ended, or the profile was saved. */
+  /** The checks list may have changed: a turn this page started ended, or figures were saved. */
   onChecksChanged: () => void
   /** Clones this check, sends the line to the copy and opens it. */
   onClone: (line: string) => Promise<void>
+  /** Opens another of the person's checks. */
   onOpenCheck: (id: string) => void
 }
 
 /**
- * One check: the checks list and profile, the conversation, and the recommendation card, all fed
- * by the check's single event stream. A turn this page started that archived the check opens the
- * check its conversation went on in; opening an archived check later stays on it.
+ * One check: the checks list, the conversation, and the recommendation card, all fed by the
+ * check's single event stream.
  */
 export function CheckPage({
   checkId,
-  stale,
+  listed,
   sidebar,
   activePane,
   onChecksChanged,
@@ -87,16 +87,12 @@ export function CheckPage({
   onOpenCheck,
 }: Props) {
   const { state } = useCheckEvents(checkId)
-  const profileStore = useProfileStore(state.profileVersion)
   const [notice, setNotice] = useState<string | null>(null)
-  const [recomputing, setRecomputing] = useState(false)
   // The turn count when this page's last accepted send started; null once that turn has ended.
   // Turns that end in a replay or that another tab started do not pass it.
   const awaitedAfter = useRef<number | null>(null)
   // Bumped on each accepted send, so the check below also runs for a turn that ended mid-POST.
   const [accepted, setAccepted] = useState(0)
-  const [panelNotes, setPanelNotes] = useState<PanelNote[]>([])
-  const nextNoteId = useRef(0)
   const live = liveQuestion(state)
 
   useEffect(() => {
@@ -106,18 +102,22 @@ export function CheckPage({
     onChecksChanged()
   }, [accepted, state.turnsEnded, onChecksChanged])
 
-  // Opening the new check refreshes the checks list itself, so the turn's end needs no refresh.
+  // Once the stream has events and no turn runs, a list that shows the check otherwise is stale.
+  const stale = state.lastSeq > 0 && state.turn === 'idle' && !listedAsShown(listed, state)
   useEffect(() => {
-    if (state.continuedIn === null || awaitedAfter.current === null) return
-    awaitedAfter.current = null
-    onOpenCheck(state.continuedIn)
-  }, [accepted, state.continuedIn, onOpenCheck])
+    if (stale) onChecksChanged()
+  }, [stale, onChecksChanged])
 
   /** Resolves true when the server accepted the text; a 409 means a turn is already running. */
-  async function send(text: string): Promise<boolean> {
+  function send(text: string): Promise<boolean> {
+    return deliver(() => (isMarketSample(text) ? sendMarketSample : sendMessage)(checkId, text))
+  }
+
+  /** Runs a request that starts a turn, with a send's notices and its wait for the turn's end. */
+  async function deliver(request: () => Promise<void>): Promise<boolean> {
     const turnsEndedBefore = state.turnsEnded
     try {
-      await sendMessage(checkId, text)
+      await request()
     } catch (error) {
       if (!(error instanceof ApiException && error.status === 409)) {
         setNotice(sendFailureText(error))
@@ -130,48 +130,33 @@ export function CheckPage({
     return true
   }
 
-  /** A profile answer is saved before its line is sent; a refused save propagates to the bubble. */
-  async function answer({ line, update }: Answer): Promise<boolean> {
-    if (update !== null) {
-      await profileStore.save(update, 'chat')
+  /**
+   * A finances answer, from a bubble or the data panel, or a confirmed term with any ceiling
+   * typed beside it is saved before its line is sent; a refused save propagates to the control
+   * that asked. A new ceiling alone from the term card goes with its line in one request, which
+   * the server answers with a new card.
+   */
+  async function answer(given: Answer): Promise<boolean> {
+    if ('term' in given) {
+      await saveTerm(checkId, given.term, given.ceiling)
+    } else if ('ceiling' in given) {
+      return deliver(() => sendTermCeiling(checkId, given.line, given.ceiling))
+    } else if (given.update !== null) {
+      await saveFinances(checkId, given.update)
       onChecksChanged()
     }
-    return send(line)
+    return send(given.line)
   }
 
-  /**
-   * A panel save of the field the live question asks for answers that question; any other field,
-   * or an answer the server refused, is noted in the conversation.
-   */
-  function onPanelSaved(update: ProfileUpdate) {
-    // A reply still streaming may be dropped when its turn ends, so a note never follows one.
-    const anchor = state.messages.findLast(isSettled)
-    const afterEntryId = anchor === undefined ? null : anchor.id
-    for (const key of Object.keys(update) as ProfileKey[]) {
-      const label = fieldLabel(key)
-      const value = savedValueText(update[key])
-      const addNote = () => {
-        nextNoteId.current += 1
-        const note = { id: nextNoteId.current, afterEntryId, text: panelNote(label, value) }
-        setPanelNotes((shown) => [...shown, note])
-      }
-      if (live?.question.field === key) {
-        void send(answerLine(label, value)).then((sent) => {
-          if (!sent) addNote()
-        })
-      } else {
-        addNote()
-      }
-    }
-    onChecksChanged()
-  }
-
-  async function recompute() {
-    setRecomputing(true)
+  /** Typed text that names the open term card's own term confirms it, as its button does. */
+  async function sendTyped(text: string): Promise<boolean> {
+    const card = live?.question.kind === 'term' ? live.question : null
+    if (card === null || typedTerm(text) !== card.term_months) return send(text)
     try {
-      await send(RECOMPUTE_MESSAGE)
-    } finally {
-      setRecomputing(false)
+      return await answer(termConfirmation(card.term_months, null))
+    } catch (error) {
+      setNotice(sendFailureText(error))
+      return false
     }
   }
 
@@ -181,40 +166,35 @@ export function CheckPage({
     <div className="check-page" data-active-pane={activePane} style={cardWidth.style}>
       <aside className="pane-side">
         {sidebar}
-        <ProfilePanel store={profileStore} onSaved={onPanelSaved} />
       </aside>
       <section className="pane-chat">
-        <Chat
-          messages={state.messages}
-          liveQuestionId={live === null ? null : live.id}
-          profile={profileStore.view === null ? null : profileStore.view.profile}
-          panelNotes={panelNotes}
-          turn={state.turn}
-          failure={state.failure}
-          notice={notice}
-          onSend={send}
-          onAnswer={answer}
-          onSkip={send}
-          onClone={onClone}
-          continuedIn={state.continuedIn}
-          onOpenCheck={onOpenCheck}
-          recommended={state.recommendation !== null}
-        />
+        {hasFinances(state.finances) && (
+          <FinancesPanel
+            finances={state.finances}
+            ceiling={state.ceiling}
+            readOnly={state.turn === 'running' || isArchived(state)}
+            onAnswer={answer}
+          />
+        )}
+        <div className="pane-chat-body">
+          <Chat
+            messages={state.messages}
+            liveQuestionId={live === null ? null : live.id}
+            finances={state.finances}
+            ceiling={state.ceiling === null ? null : state.ceiling.amount}
+            turn={state.turn}
+            failure={state.failure}
+            notice={notice}
+            onSend={sendTyped}
+            onAnswer={answer}
+            onSkip={send}
+            onClone={onClone}
+            onOpenCheck={onOpenCheck}
+            recommended={state.recommendation !== null}
+          />
+        </div>
       </section>
       <section className="pane-card">
-        {stale && !isArchived(state) && (
-          <div className="stale-banner">
-            <span>{STALE_BANNER}</span>
-            <button
-              type="button"
-              disabled={state.turn === 'running' || recomputing}
-              onClick={() => void recompute()}
-            >
-              {RECOMPUTE_BUTTON}
-            </button>
-            {notice !== null && <p className="chat-notice">{notice}</p>}
-          </div>
-        )}
         <CardBoundary>
           <BuiltCard state={state} />
         </CardBoundary>

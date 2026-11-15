@@ -9,11 +9,8 @@ BOI_RATE_FLOOR = Decimal(0)
 
 INCOME_SHARE_CAP = Decimal("0.30")
 DISPOSABLE_SHARE_CAP = Decimal("0.50")
-CUSHION_MONTHS = 2
 
-# A suggested term leaves this share of the payment ceiling as the most its payment may reach, so
-# the worst historical rate path still leaves room; terms are tried in steps of TERM_STEP months.
-COMFORT_SHARE = Decimal("0.9")
+# A suggested term is searched in steps of TERM_STEP months.
 TERM_STEP = 6
 # The largest loan a payment ceiling carries is named to a whole LOAN_STEP shekels.
 LOAN_STEP = 1000

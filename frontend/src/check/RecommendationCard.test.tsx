@@ -48,19 +48,10 @@ test('the reasoning stands apart from the figures', () => {
   expect(screen.getByText(recommendationPrime.data.reasoning)).toHaveClass('reasoning')
 })
 
-test('the fold is open, explains the ceiling and lists totals; it can be closed', async () => {
+test('the fold is open and lists totals; it can be closed', async () => {
   render(<RecommendationCard model={reference} />)
   const fold = screen.getByText('למה המספרים האלה').closest('details')!
   expect(fold).toHaveAttribute('open')
-  expect(within(fold).getByText('תקרת ההחזר החודשי: 1,900 ₪')).toBeInTheDocument()
-  expect(within(fold).getByText('מההכנסה המשתנה נספר רק הסכום המינימלי שמגיע גם בחודש חלש')).toBeInTheDocument()
-  expect(
-    within(fold).getByText(
-      'התקרה היא מחצית ממה שנשאר מההכנסה שהוזנה אחרי ההוצאות הקבועות; החצי השני נשאר להוצאות לא צפויות',
-    ),
-  ).toBeInTheDocument()
-  expect(within(fold).getByText('כרית הביטחון: 9,000 ₪')).toBeInTheDocument()
-
   const rows = within(fold).getAllByRole('row').map((row) => row.textContent)
   expect(rows).toHaveLength(4)
   expect(within(fold).getByRole('columnheader', { name: 'סך התשלומים בתנאים של היום' }))
@@ -94,7 +85,7 @@ test('options before a recommendation show without a decision or fold', () => {
 test('no options: the empty line', () => {
   render(<RecommendationCard model={modelOf()} />)
   expect(
-    screen.getByText('ההמלצה תופיע כאן אחרי שנכיר את המטרה ואת המצב.'),
+    screen.getByText('ההמלצה תופיע כאן אחרי שנכיר את ההלוואה.'),
   ).toBeInTheDocument()
 })
 
@@ -130,4 +121,9 @@ test('a line above the options says what a sample is, once, only when one is sho
 
   render(<RecommendationCard model={modelOf(optionOfferFixed)} />)
   expect(screen.queryByText(note)).not.toBeInTheDocument()
+})
+
+test('no cushion text remains', () => {
+  const { container } = render(<RecommendationCard model={reference} />)
+  expect(container.textContent).not.toMatch(/כרית|מקדמה|בטחון/)
 })

@@ -3,13 +3,13 @@ import { afterEach, expect, test, vi } from 'vitest'
 import { App } from '../App.tsx'
 import {
   assistantMessage,
-  goalSet,
+  loanSet,
   questionAsked,
   optionFixed36,
   optionPrime36,
-  profileUpdated,
   recommendationPrime,
   REFERENCE_DECISION,
+  termSet,
   turnStatus,
   userMessage,
   withSeq,
@@ -25,14 +25,15 @@ const recording: Recording = {
   events: [
     userMessage(1, 'אני רוצה לקנות רכב ב-55,000 ₪'),
     turnStatus(2, 'running'),
-    withSeq(profileUpdated, 3),
-    withSeq(goalSet, 4),
+    withSeq(loanSet, 3),
+    withSeq(termSet, 4),
     withSeq(optionPrime36, 5),
     withSeq(optionFixed36, 6),
     withSeq(recommendationPrime, 7),
     assistantMessage(8, 'm1', REPLY),
     turnStatus(9, 'idle'),
   ],
+  source: null,
 }
 
 /** Installs the demo backend with no pauses, the way demo/main.tsx installs it with its pace. */
@@ -60,26 +61,36 @@ test('the demo signs in and replays the recorded check into the page', async () 
   expect(screen.getByRole('button', { name: 'תפריט חשבון' })).toBeInTheDocument()
 })
 
-test('the demo serves the profile as the replay has filled it so far', async () => {
-  const backend = createDemoBackend(
-    { events: recording.events.slice(0, 1) },
-    PACE,
-    noEntry,
-  )
-  const empty = await (await backend.fetch('/api/profile')).json()
-  expect(empty.missing).toEqual([
-    'savings',
-    'net_fixed_income',
-    'variable_income',
-    'variable_income_minimum',
-    'fixed_expenses',
-    'existing_loan_payments',
-  ])
+test('the demo lists the check with the loan and term the replay has set so far', async () => {
+  const backend = createDemoBackend({ events: recording.events.slice(0, 1), source: null }, PACE, noEntry)
+  const [empty] = await (await backend.fetch('/api/checks')).json()
+  expect(empty).toMatchObject({
+    id: 'demo',
+    loan: null,
+    term_months: null,
+    recommendation: null,
+    archived: false,
+  })
 
-  const filled = createDemoBackend(recording, PACE, noEntry)
-  await vi.waitFor(async () =>
-    expect(await (await filled.fetch('/api/profile')).json()).toEqual(profileUpdated.data),
-  )
+  const played = createDemoBackend(recording, PACE, noEntry)
+  await vi.waitFor(async () => {
+    const [summary] = await (await played.fetch('/api/checks')).json()
+    expect(summary).toMatchObject({
+      loan: { purpose: 'רכב', amount: '29000' },
+      term_months: 36,
+      recommendation: {
+        preferred_option_id: 'prime-36',
+        loan_amount: '29000.00',
+        payment_ceiling: '1900.00',
+        checked: true,
+      },
+    })
+  })
+})
+
+test('the demo refuses a profile request, which the page never makes', async () => {
+  const backend = createDemoBackend(recording, PACE, noEntry)
+  await expect(backend.fetch('/api/profile')).rejects.toThrow('GET /api/profile')
 })
 
 test('the demo refuses a request the page is not known to make', async () => {
@@ -93,14 +104,14 @@ test('the demo shows what the person typed before each message, nothing for a ta
     userMessage(1, 'אני רוצה לקנות רכב'),
     questionAsked(2, { field: 'net_fixed_income', text: null, choices: null }),
     userMessage(3, 'הכנסה קבועה: 8,300 ₪'),
-    questionAsked(4, { field: 'existing_loan_payments', text: null, choices: null }),
-    userMessage(5, 'דילוג על: החזרי הלוואות (נשמר כ-0)'),
+    questionAsked(4, { field: 'payment_ceiling', text: null, choices: null }),
+    userMessage(5, 'דילוג על: מה ההחזר החודשי הגבוה ביותר שנוח לך?'),
     questionAsked(6, { field: null, text: 'לאיזו תקופה?', choices: ['36 חודשים', 'אחר'] }),
     userMessage(7, 'לאיזו תקופה? 36 חודשים'),
     questionAsked(8, { field: null, text: 'מה עוד חשוב?', choices: null }),
     userMessage(9, 'מה עוד חשוב? החזר נמוך'),
   ]
-  createDemoBackend({ events }, PACE, (entry) => {
+  createDemoBackend({ events, source: null }, PACE, (entry) => {
     shown.push(entry)
     return () => shown.push('cleared')
   })
@@ -114,4 +125,43 @@ test('the demo shows what the person typed before each message, nothing for a ta
     { box: 'מה עוד חשוב?', value: 'החזר נמוך' },
     'cleared',
   ])
+})
+
+test('a recorded clone lists its source once the replay passes the clone, with its whole history', async () => {
+  const clone: Recording = {
+    events: [
+      ...recording.events,
+      userMessage(10, 'לשכפל ולבדוק בנפרד: ננסה עם 48 חודשים'),
+      withSeq({ ...termSet, data: { term_months: 48 } }, 11),
+    ],
+    source: { sharedThroughSeq: 9 },
+  }
+  const sharedOnly = createDemoBackend({ ...clone, events: recording.events }, PACE, noEntry)
+  await vi.waitFor(async () => {
+    const listed = await (await sharedOnly.fetch('/api/checks')).json()
+    expect(listed.map((check: { id: string }) => check.id)).toEqual(['demo'])
+    expect(listed[0].recommendation).not.toBeNull()
+  })
+
+  const backend = createDemoBackend(clone, PACE, noEntry)
+  await vi.waitFor(async () => {
+    const listed = await (await backend.fetch('/api/checks')).json()
+    expect(listed.map((check: { id: string; term_months: number }) => [check.id, check.term_months]))
+      .toEqual([
+        ['demo', 48],
+        ['demo-source', 36],
+      ])
+  })
+  const stream = new backend.EventSource('/api/checks/demo-source/events')
+  const types: string[] = []
+  for (const type of ['message.user', 'check.cloned']) {
+    stream.addEventListener(type, (frame) => types.push(`${frame.type}:${frame.lastEventId}`))
+  }
+  await vi.waitFor(() => expect(types).toEqual(['message.user:1', 'check.cloned:10']))
+})
+
+test('a recorded clone whose source ends at an event it lacks is refused', () => {
+  expect(() =>
+    createDemoBackend({ events: recording.events, source: { sharedThroughSeq: 12 } }, PACE, noEntry),
+  ).toThrow('no event 12')
 })

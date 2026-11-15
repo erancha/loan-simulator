@@ -5,7 +5,7 @@
 #
 #   ./scripts/docker-helper.sh --stop [--volumes]
 #       Stop and remove the stack's containers and network. The engine-data volume (market data)
-#       and the db-data volume (checks, profiles, conversations) are KEPT by default so they
+#       and the db-data volume (checks, conversations) are KEPT by default so they
 #       survive a restart; --volumes (alias -v) also removes both.
 #   ./scripts/docker-helper.sh --logs [-e|--errors]
 #       Follow the stack's logs live (last 200 lines). -e filters to ERROR/EXCEPTION/FATAL lines.

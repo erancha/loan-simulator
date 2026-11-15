@@ -8,19 +8,21 @@ import threading
 from collections.abc import Iterator
 from dataclasses import replace
 from datetime import datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import pytest
-from app_world import DANA, DANA_TOKEN, OMER, OMER_TOKEN, World, seed_recommended_check
+from app_world import DANA, DANA_TOKEN, FINANCES, OMER, OMER_TOKEN, World, seed_recommended_check
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from fakes import NOW, PRIME_TRACK
-from loan_agent.domain.models import Check, OptionSource
+from loan_agent.domain.models import Check, Finances, OptionSource
 from loan_agent.platform.check_runner import FAILURE_MESSAGE
+from loan_agent.ports.engine import EngineError
 
 TIMEOUT_SECONDS = 5.0
 
@@ -32,13 +34,17 @@ def test_create_answers_201_with_a_new_check_of_the_signed_in_person(
     assert response.status_code == 201
     check_id = response.json()["id"]
     assert response.json() == {"id": check_id}
-    assert world.checks.rows[check_id] == Check(check_id, DANA.id, NOW, None, None)
+    assert world.checks.rows[check_id] == Check(
+        check_id, DANA.id, NOW, None, None, None, None, Finances()
+    )
 
 
 def test_list_shows_only_the_persons_checks_newest_first(world: World, client: TestClient) -> None:
     seed_recommended_check(world)
-    world.checks.rows["c-new"] = Check("c-new", DANA.id, NOW + timedelta(days=1), None, None)
-    world.checks.rows["c-omer"] = Check("c-omer", OMER.id, NOW, None, None)
+    world.checks.rows["c-new"] = Check(
+        "c-new", DANA.id, NOW + timedelta(days=1), None, None, None, None, Finances()
+    )
+    world.checks.rows["c-omer"] = Check("c-omer", OMER.id, NOW, None, None, None, None, Finances())
 
     response = client.get("/api/checks")
 
@@ -47,30 +53,45 @@ def test_list_shows_only_the_persons_checks_newest_first(world: World, client: T
         {
             "id": "c-new",
             "created_at": "2026-10-28T09:00:00Z",
-            "goal": None,
+            "loan": None,
+            "term_months": None,
             "recommendation": None,
             "recommends_examples_only": False,
-            "profile_stale": False,
             "archived": False,
-            "restorable": False,
+            "started": False,
         },
         {
             "id": "c-rec",
             "created_at": "2026-10-27T09:00:00Z",
-            "goal": {"purpose": "רכב משפחתי", "price": "120000"},
+            "loan": {"purpose": "רכב משפחתי", "amount": "120000"},
+            "term_months": 60,
             "recommendation": {
                 "preferred_option_id": "o1",
                 "alternative_option_id": None,
                 "loan_amount": "80000.00",
                 "payment_ceiling": "4700.00",
+                "checked": True,
                 "created_at": "2026-10-27T09:00:00Z",
             },
             "recommends_examples_only": False,
-            "profile_stale": False,
             "archived": False,
-            "restorable": False,
+            "started": False,
         },
     ]
+
+
+def test_a_check_is_started_once_the_person_sends_it_a_message(
+    world: World, client: TestClient
+) -> None:
+    world.replies(AIMessage("שלום"))
+    empty = client.post("/api/checks").json()["id"]
+    sent = client.post("/api/checks").json()["id"]
+    client.post(f"/api/checks/{sent}/messages", json={"text": "שלום"})
+    world.drain(client)
+
+    started = {check["id"]: check["started"] for check in client.get("/api/checks").json()}
+
+    assert started == {empty: False, sent: True}
 
 
 @pytest.mark.parametrize(
@@ -107,7 +128,7 @@ def test_list_says_whether_the_recommendation_names_only_examples(
     assert listed["recommends_examples_only"] is examples_only
 
 
-def test_get_shows_the_goal_options_with_figures_and_the_recommendation(
+def test_get_shows_the_loan_figures_options_and_the_recommendation(
     world: World, client: TestClient
 ) -> None:
     seed_recommended_check(world)
@@ -117,13 +138,20 @@ def test_get_shows_the_goal_options_with_figures_and_the_recommendation(
     assert response.status_code == 200
     body = response.json()
     assert body["id"] == "c-rec"
-    assert body["goal"] == {"purpose": "רכב משפחתי", "price": "120000"}
+    assert body["loan"] == {"purpose": "רכב משפחתי", "amount": "120000"}
+    assert (body["term_months"], body["payment_ceiling"], body["ceiling_source"]) == (
+        60,
+        "4700.00",
+        "finances",
+    )
+    assert body["finances"] == {"net_fixed_income": "14000", "fixed_expenses": "6500"}
     assert body["options"] == [
         {
             "id": "o1",
             "source": "offer",
             "lender": "בנק הפועלים",
             "offer_date": "2026-10-27",
+            "max_term_months": None,
             "loan": {"tracks": [PRIME_TRACK]},
             "figures": {
                 "first_payment": "1887.99",
@@ -145,21 +173,19 @@ def test_get_shows_the_goal_options_with_figures_and_the_recommendation(
         "reasoning": "ההחזר החודשי נמוך מהתקרה",
         "loan_amount": "80000.00",
         "payment_ceiling": "4700.00",
-        "min_cushion": "18000.00",
-        "cushion_kept": "30000.00",
+        "checked": True,
         "created_at": "2026-10-27T09:00:00Z",
     }
-    assert body["profile_stale"] is False
     assert body["archived"] is False
 
 
-def test_a_new_check_has_no_goal_options_or_recommendation(client: TestClient) -> None:
+def test_a_new_check_has_nothing_set_yet(client: TestClient) -> None:
     check_id = client.post("/api/checks").json()["id"]
     body = client.get(f"/api/checks/{check_id}").json()
-    assert body["goal"] is None
+    assert (body["loan"], body["term_months"], body["payment_ceiling"]) == (None, None, None)
+    assert body["finances"] == {"net_fixed_income": None, "fixed_expenses": None}
     assert body["options"] == []
     assert body["recommendation"] is None
-    assert body["profile_stale"] is False
     assert body["archived"] is False
 
 
@@ -191,11 +217,31 @@ def test_a_message_is_accepted_with_202_and_runs_a_turn(world: World, client: Te
     ]
 
 
+def test_the_market_sample_is_accepted_with_202_and_answered_without_the_model(
+    world: World, client: TestClient
+) -> None:
+    check_id = client.post("/api/checks").json()["id"]
+
+    response = client.post(f"/api/checks/{check_id}/market-sample", json={"text": "פריים"})
+    world.drain(client)
+
+    assert response.status_code == 202
+    assert [event.type for event in world.events.rows[check_id]] == [
+        "message.user",
+        "turn.status",
+        "message.assistant",
+        "chart.shown",
+        "chart.shown",
+        "turn.status",
+    ]
+
+
 def test_an_empty_message_is_422(client: TestClient) -> None:
     check_id = client.post("/api/checks").json()["id"]
-    for text in ("", "   "):
-        response = client.post(f"/api/checks/{check_id}/messages", json={"text": text})
-        assert response.status_code == 422
+    for route in ("messages", "market-sample"):
+        for text in ("", "   "):
+            response = client.post(f"/api/checks/{check_id}/{route}", json={"text": text})
+            assert response.status_code == 422
 
 
 class Gate:
@@ -346,14 +392,14 @@ def test_no_checkpoint_blob_holds_the_id_token(world: World, client: TestClient)
             content="",
             tool_calls=[
                 {
-                    "name": "update_profile",
-                    "args": {"savings": "70000"},
-                    "id": "call-profile",
+                    "name": "update_finances",
+                    "args": {"net_fixed_income": "70000"},
+                    "id": "call-finances",
                     "type": "tool_call",
                 }
             ],
         ),
-        AIMessage("שמרתי את החסכונות"),
+        AIMessage("שמרתי את ההכנסה"),
     )
     check_id = client.post("/api/checks").json()["id"]
     sent = client.post(f"/api/checks/{check_id}/messages", json={"text": "יש לי 70,000 ₪"})
@@ -371,7 +417,7 @@ def test_no_checkpoint_blob_holds_the_id_token(world: World, client: TestClient)
 
 
 def test_startup_ends_turns_a_stopped_process_left_running(world: World, public_key: Path) -> None:
-    world.checks.rows["c1"] = Check("c1", DANA.id, NOW, None, None)
+    world.checks.rows["c1"] = Check("c1", DANA.id, NOW, None, None, None, None, Finances())
     asyncio.run(world.events.append("c1", "message.user", {"text": "שלום"}))
     asyncio.run(world.events.append("c1", "turn.status", {"status": "running"}))
 
@@ -426,29 +472,191 @@ def test_a_message_to_an_archived_check_is_409(world: World, client: TestClient)
     assert client.get("/api/checks/c-rec").json()["archived"] is True
 
 
-def test_archive_and_restore_answer_204_and_the_list_says_what_can_be_restored(
-    world: World, client: TestClient
-) -> None:
+def test_archive_and_restore_answer_204(world: World, client: TestClient) -> None:
     seed_recommended_check(world)
 
     assert client.post("/api/checks/c-rec/archive").status_code == 204
     (listed,) = client.get("/api/checks").json()
-    assert (listed["archived"], listed["restorable"]) == (True, True)
+    assert listed["archived"] is True
     assert client.post("/api/checks/c-rec/archive").status_code == 409
 
     assert client.post("/api/checks/c-rec/restore").status_code == 204
     (listed,) = client.get("/api/checks").json()
-    assert (listed["archived"], listed["restorable"]) == (False, False)
+    assert listed["archived"] is False
     assert client.post("/api/checks/c-rec/restore").status_code == 409
 
 
-def test_a_check_archived_by_a_profile_edit_is_not_restorable(
+def test_a_restored_check_takes_messages(world: World, client: TestClient) -> None:
+    seed_recommended_check(world)
+    world.replies(AIMessage("שלום"))
+    assert client.post("/api/checks/c-rec/archive").status_code == 204
+    assert client.post("/api/checks/c-rec/messages", json={"text": "א"}).status_code == 409
+
+    assert client.post("/api/checks/c-rec/restore").status_code == 204
+
+    assert client.post("/api/checks/c-rec/messages", json={"text": "א"}).status_code == 202
+    world.drain(client)
+
+
+def test_put_finances_saves_and_derives_the_ceiling(world: World, client: TestClient) -> None:
+    check_id = client.post("/api/checks").json()["id"]
+
+    first = client.put(f"/api/checks/{check_id}/finances", json={"net_fixed_income": "14000"})
+    assert first.status_code == 200
+    assert first.json()["finances"] == {"net_fixed_income": "14000", "fixed_expenses": None}
+    assert first.json()["payment_ceiling"] is None
+
+    response = client.put(f"/api/checks/{check_id}/finances", json={"fixed_expenses": "6500"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["finances"] == {"net_fixed_income": "14000", "fixed_expenses": "6500"}
+    assert (body["payment_ceiling"], body["ceiling_source"]) == ("4700.00", "finances")
+    assert client.get(f"/api/checks/{check_id}").json() == body
+    assert world.events.rows[check_id][-1].type == "finances.updated"
+
+
+def test_a_term_card_ceiling_is_accepted_and_refused_at_zero(
     world: World, client: TestClient
 ) -> None:
     seed_recommended_check(world)
-    world.clock.value = NOW + timedelta(minutes=5)
-    assert client.put("/api/profile", json={"savings": "60000"}).status_code == 200
+    for amount in ("0", "-5"):
+        refused = client.post(
+            "/api/checks/c-rec/term-ceiling", json={"text": "תקרה", "payment_ceiling": amount}
+        )
+        assert refused.status_code == 422
 
-    (listed,) = client.get("/api/checks").json()
-    assert (listed["archived"], listed["restorable"]) == (True, False)
-    assert client.post("/api/checks/c-rec/restore").status_code == 409
+    response = client.post(
+        "/api/checks/c-rec/term-ceiling", json={"text": "תקרה", "payment_ceiling": "3000"}
+    )
+    world.drain(client)
+
+    assert response.status_code == 202
+    assert world.checks.rows["c-rec"].payment_ceiling == Decimal(3000)
+
+
+def test_put_term_saves_the_confirmed_term(world: World, client: TestClient) -> None:
+    seed_recommended_check(world)
+
+    response = client.put("/api/checks/c-rec/term", json={"term_months": 72})
+
+    assert response.status_code == 204
+    assert world.checks.rows["c-rec"].term_months == 72
+    assert world.events.rows["c-rec"][-1].type == "term.set"
+
+
+def test_put_term_with_a_ceiling_saves_both(world: World, client: TestClient) -> None:
+    seed_recommended_check(world)
+
+    response = client.put(
+        "/api/checks/c-rec/term", json={"term_months": 48, "payment_ceiling": "1000"}
+    )
+
+    assert response.status_code == 204
+    check = world.checks.rows["c-rec"]
+    assert (check.term_months, check.payment_ceiling, check.ceiling_source) == (
+        48,
+        Decimal(1000),
+        "stated",
+    )
+    assert [event.type for event in world.events.rows["c-rec"][-2:]] == ["term.set", "ceiling.set"]
+
+
+def test_put_term_with_a_ceiling_of_zero_is_422(world: World, client: TestClient) -> None:
+    seed_recommended_check(world)
+
+    response = client.put(
+        "/api/checks/c-rec/term", json={"term_months": 48, "payment_ceiling": "0"}
+    )
+
+    assert response.status_code == 422
+    assert world.checks.rows["c-rec"].term_months != 48
+
+
+def test_put_term_outside_6_to_84_is_422(world: World, client: TestClient) -> None:
+    seed_recommended_check(world)
+    for term in (5, 85):
+        response = client.put("/api/checks/c-rec/term", json={"term_months": term})
+        assert response.status_code == 422
+
+
+def test_put_term_to_an_archived_check_is_409(world: World, client: TestClient) -> None:
+    seed_recommended_check(world)
+    assert client.post("/api/checks/c-rec/archive").status_code == 204
+
+    response = client.put("/api/checks/c-rec/term", json={"term_months": 72})
+
+    assert response.status_code == 409
+
+
+def test_put_finances_refuses_an_unknown_field(client: TestClient) -> None:
+    check_id = client.post("/api/checks").json()["id"]
+
+    response = client.put(f"/api/checks/{check_id}/finances", json={"savings": "1"})
+
+    assert response.status_code == 422
+
+
+def test_put_finances_names_the_figure_at_fault_with_422(world: World, client: TestClient) -> None:
+    check_id = client.post("/api/checks").json()["id"]
+
+    for body in ({"fixed_expenses": "-5"}, {"fixed_expenses": "abc"}, {"fixed_expenses": None}):
+        response = client.put(f"/api/checks/{check_id}/finances", json=body)
+        assert response.status_code == 422
+        assert "fixed_expenses" in response.json()["detail"]
+    assert world.checks.rows[check_id].finances == Finances()
+
+
+def test_put_finances_relays_an_engine_refusal_as_422_and_saves_nothing(
+    world: World, client: TestClient
+) -> None:
+    world.engine.assess_error = EngineError("the profile is not accepted")
+    check_id = client.post("/api/checks").json()["id"]
+    client.put(f"/api/checks/{check_id}/finances", json={"net_fixed_income": "14000"})
+
+    response = client.put(f"/api/checks/{check_id}/finances", json={"fixed_expenses": "6500"})
+
+    assert response.status_code == 422
+    assert "the profile is not accepted" in response.json()["detail"]
+    assert world.checks.rows[check_id].finances == Finances(Decimal(14000), None)
+
+
+def test_put_finances_to_an_archived_check_is_409(world: World, client: TestClient) -> None:
+    seed_recommended_check(world)
+    assert client.post("/api/checks/c-rec/archive").status_code == 204
+
+    response = client.put("/api/checks/c-rec/finances", json={"fixed_expenses": "1"})
+
+    assert response.status_code == 409
+    assert world.checks.rows["c-rec"].finances == FINANCES
+
+
+def test_put_finances_while_a_turn_runs_is_409(
+    world: World, gate: Gate, client: TestClient
+) -> None:
+    """gate comes before client, so the app is built with the gated tool."""
+    world.replies(calls_size_loan(), AIMessage("בבקשה"))
+    check_id = client.post("/api/checks").json()["id"]
+    assert client.post(f"/api/checks/{check_id}/messages", json={"text": "א"}).status_code == 202
+    assert gate.entered.wait(TIMEOUT_SECONDS)
+
+    response = client.put(f"/api/checks/{check_id}/finances", json={"fixed_expenses": "1"})
+
+    assert response.status_code == 409
+    assert response.json()["check_id"] == check_id
+    gate.opened.set()
+    world.drain(client)
+
+
+def test_put_finances_of_another_persons_check_is_404(world: World, public_key: Path) -> None:
+    with world.client(public_key, token=OMER_TOKEN) as omer:
+        omers = omer.post("/api/checks").json()["id"]
+    with world.client(public_key, token=DANA_TOKEN) as dana:
+        for check_id in (omers, "no-such-check"):
+            response = dana.put(f"/api/checks/{check_id}/finances", json={"fixed_expenses": "1"})
+            assert response.status_code == 404
+    assert world.checks.rows[omers].finances == Finances()
+
+
+def test_the_profile_route_is_gone(client: TestClient) -> None:
+    assert client.get("/api/profile").status_code == 404

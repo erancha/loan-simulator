@@ -1,66 +1,91 @@
 import { type FormEvent, useState } from 'react'
-import type { ProfileFields, ProfileUpdate, Question, QuestionField } from '../api/types.ts'
-import { formatAmount, formatShekels, normaliseMoneyInput } from '../money.ts'
-import { FieldHint } from '../profile/FieldHint.tsx'
-import { rejectionText } from '../profile/rejection.ts'
+import type { Finances, Question, QuestionField } from '../api/types.ts'
+import { formatAmount, normaliseMoneyInput } from '../money.ts'
 import {
   ANSWER,
-  CLONE_CHOICE,
-  STAY_CHOICE,
+  amountText,
   answerLine,
-  isGoalField,
-  profileValueText,
+  CEILING_BOX_PLACEHOLDER,
+  CEILING_CLEARED,
+  CEILING_LABEL,
+  CLONE_CHOICE,
+  confirmedTermLine,
+  DONT_KNOW,
+  NOT_A_NUMBER,
   PURPOSE_CHOICES,
   questionHint,
   questionLabel,
   questionText,
   SKIP,
-  skipAsZeroLine,
   skipLine,
+  STAY_CHOICE,
+  TERM_BOX_LABEL,
+  TERM_BOX_PLACEHOLDER,
+  TERM_MAX_MONTHS,
+  TERM_MIN_MONTHS,
+  TERM_OUT_OF_RANGE,
 } from './copy.ts'
 import type { QuestionEntry } from './events.ts'
+import { FieldHint } from './FieldHint.tsx'
+import { rejectionText } from './rejection.ts'
 
 /**
- * Profile amounts for which "none" is a common answer: a skip saves 0, since the calculation
- * cannot go on with them missing, and the chat line says so.
+ * The person's message for the question and what goes with it: finances figures, or a confirmed
+ * term with any ceiling typed beside it, saved before the line; or a new ceiling alone from the
+ * term card, which the server saves and answers with a term card for it.
  */
-const ZERO_SKIP_FIELDS: ReadonlySet<QuestionField> = new Set([
-  'variable_income',
-  'variable_income_minimum',
-  'existing_loan_payments',
-  'savings',
-])
+export type Answer =
+  | { line: string; update: Partial<Finances> | null }
+  | { line: string; term: number; ceiling: string | null }
+  | { line: string; ceiling: string }
 
-
-/** The person's message for the question, and the profile save that goes before it. */
-export interface Answer {
-  line: string
-  update: ProfileUpdate | null
+/**
+ * The answer that confirms a term, and a new ceiling when one is given: saved by the page, so
+ * the model reads them as set.
+ */
+export function termConfirmation(months: number, ceiling: string | null): Answer {
+  return { line: confirmedTermLine(months, ceiling), term: months, ceiling }
 }
+
+/** The months in a typed term, "78" or "78 חודשים"; null for any other text. */
+export function typedTerm(text: string): number | null {
+  const match = /^\s*(\d+)\s*(חודשים)?\s*[.!]?\s*$/.exec(text)
+  return match === null ? null : Number(match[1])
+}
+
+const FINANCES_FIELDS: ReadonlySet<QuestionField> = new Set(['net_fixed_income', 'fixed_expenses'])
+
+function isFinancesField(field: QuestionField): field is keyof Finances {
+  return FINANCES_FIELDS.has(field)
+}
+
+/** A question with a field of its own or the model's own sentence: everything but the term card. */
+type FieldQuestion = Exclude<Question, { kind: 'term' }>
 
 interface Props {
   entry: QuestionEntry
   /** Only a live bubble shows its control; a closed one keeps the question as text. */
   live: boolean
-  profile: ProfileFields | null
+  finances: Finances | null
+  /** The payment ceiling the check holds, which the term card starts its box with. */
+  ceiling: string | null
   /** Resolves false when nothing was sent; rejects with an ApiException on a refused save. */
   onAnswer: (answer: Answer) => Promise<boolean>
   onSkip: (line: string) => Promise<boolean>
-  /** Clones the check and sends the line to the copy. */
-  onClone: (line: string) => Promise<void>
+  /** Clones the check and sends the copy the request the clone offer answers. */
+  onClone: () => Promise<void>
 }
 
-/** The text box's starting value: a profile amount the person already gave, grouped. */
-function initialDraft(question: Question, profile: ProfileFields | null): string {
+/** The text box's starting value: a finances figure the person already gave, grouped. */
+function initialDraft(question: FieldQuestion, finances: Finances | null): string {
   const { field } = question
-  if (field === null || isGoalField(field)) return ''
-  if (profile === null) return ''
-  const stored = profile[field]
+  if (field === null || finances === null || !isFinancesField(field)) return ''
+  const stored = finances[field]
   return stored === null ? '' : formatAmount(stored)
 }
 
 /** Whether the control has a text box, answered with the confirm button, besides any taps. */
-function takesText(question: Question): boolean {
+function takesText(question: FieldQuestion): boolean {
   if (question.offer_clone === true || question.field === 'purpose') return false
   return question.field !== null || question.choices === null
 }
@@ -70,7 +95,7 @@ function takesText(question: Question): boolean {
  * offer, or a free question the model gave choices) leaves the person the chat box for any other
  * answer, and a skip there only makes the model ask again.
  */
-function offersSkip(question: Question): boolean {
+function offersSkip(question: FieldQuestion): boolean {
   if (question.offer_clone === true || question.field === 'purpose') return false
   return !(question.field === null && question.choices !== null)
 }
@@ -98,21 +123,140 @@ function MoneyBox(props: {
 
 /**
  * A question the model asked, as an assistant bubble: the lead-in, the label and, while live, a
- * control fitted to the field, a confirm button for typed answers and, where offersSkip allows,
- * a skip. It builds the answer and hands it to its owner, which saves and sends it. The clone
- * offer's two choices clone the check, or send the other choice to this one.
+ * control fitted to the question. The term card confirms or changes the proposed term; every
+ * other question is a field's, handled by FieldBubble.
  */
-export function QuestionBubble({ entry, live, profile, onAnswer, onSkip, onClone }: Props) {
-  const { question } = entry
+export function QuestionBubble(props: Props) {
+  const { question } = props.entry
+  return question.kind === 'term' ? (
+    <TermBubble {...props} termMonths={question.term_months} />
+  ) : (
+    <FieldBubble {...props} question={question} />
+  )
+}
+
+/** The ceiling box's text for an amount: whole shekels, grouped; empty for none. */
+function ceilingDraft(ceiling: string | null): string {
+  return ceiling === null ? '' : formatAmount(ceiling)
+}
+
+/**
+ * The term card: the proposed term with its first payment, and one form with the term and the
+ * payment ceiling, each starting at the check's value, and one confirm button. A new ceiling with
+ * the term left as proposed asks for a card worked out from that ceiling; anything else confirms
+ * the term in the box, with the new ceiling when there is one.
+ */
+function TermBubble({ entry, live, ceiling, onAnswer, termMonths }: Props & { termMonths: number }) {
+  const [termDraft, setTermDraft] = useState(String(termMonths))
+  const [ceilingText, setCeilingText] = useState(() => ceilingDraft(ceiling))
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  /** The answer the form holds, or the text of what is wrong with it. */
+  function built(): Answer | string {
+    const months = typedTerm(termDraft)
+    if (months === null || months < TERM_MIN_MONTHS || months > TERM_MAX_MONTHS) {
+      return TERM_OUT_OF_RANGE
+    }
+    const typed = normaliseMoneyInput(ceilingText)
+    if (typed === null && ceiling !== null) return CEILING_CLEARED
+    const held = ceiling === null ? null : normaliseMoneyInput(ceilingDraft(ceiling))
+    const newCeiling = typed === held ? null : typed
+    if (newCeiling !== null && months === termMonths) {
+      return { line: answerLine(CEILING_LABEL, amountText(newCeiling)), ceiling: newCeiling }
+    }
+    return termConfirmation(months, newCeiling)
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    let answer: Answer | string
+    try {
+      answer = built()
+    } catch (caught) {
+      if (!(caught instanceof RangeError)) throw caught
+      answer = NOT_A_NUMBER
+    }
+    if (typeof answer === 'string') {
+      setError(answer)
+      return
+    }
+    setError(null)
+    setBusy(true)
+    try {
+      await onAnswer(answer)
+    } catch (caught) {
+      setError(rejectionText(caught))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const termId = `${entry.id}-term`
+  const ceilingId = `${entry.id}-ceiling`
+  return (
+    <div className="bubble bubble-assistant bubble-question">
+      {entry.leadIn !== null && <p className="question-lead-in">{entry.leadIn}</p>}
+      <p className="question-label">{questionText(entry.question)}</p>
+      {live && (
+        <form className="term-form" onSubmit={(event) => void submit(event)}>
+          <label htmlFor={termId}>{TERM_BOX_LABEL}</label>
+          <input
+            id={termId}
+            type="text"
+            inputMode="numeric"
+            placeholder={TERM_BOX_PLACEHOLDER}
+            value={termDraft}
+            onChange={(event) => setTermDraft(event.target.value)}
+          />
+          <label htmlFor={ceilingId}>{CEILING_LABEL}</label>
+          <span className="field-input">
+            <input
+              id={ceilingId}
+              type="text"
+              inputMode="decimal"
+              placeholder={CEILING_BOX_PLACEHOLDER}
+              value={ceilingText}
+              onChange={(event) => setCeilingText(event.target.value)}
+            />
+            <span className="unit">₪</span>
+          </span>
+          {error !== null && <p className="field-error">{error}</p>}
+          <div className="question-actions">
+            <button type="submit" className="primary" disabled={busy}>
+              {ANSWER}
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
+  )
+}
+
+/**
+ * A field's question or the model's own: the label and, while live, a control fitted to the
+ * field, a confirm button for typed answers and, where offersSkip allows, a skip. It builds the
+ * answer and hands it to its owner, which saves and sends it. The clone offer's two choices
+ * clone the check, or send the other choice to this one.
+ */
+function FieldBubble({
+  entry,
+  live,
+  finances,
+  onAnswer,
+  onSkip,
+  onClone,
+  question,
+}: Props & { question: FieldQuestion }) {
   const label = questionLabel(question)
   const hint = questionHint(question)
   const hintId = `${entry.id}-hint`
   const describedBy = hint === null ? undefined : hintId
-  const [draft, setDraft] = useState(() => initialDraft(question, profile))
+  const [draft, setDraft] = useState(() => initialDraft(question, finances))
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
-  const reply = (value: string, update: ProfileUpdate | null = null): Answer => ({
+  const reply = (value: string, update: Partial<Finances> | null = null): Answer => ({
     line: answerLine(label, value),
     update,
   })
@@ -132,10 +276,6 @@ export function QuestionBubble({ entry, live, profile, onAnswer, onSkip, onClone
   }
 
   async function skip() {
-    const { field } = question
-    if (field !== null && ZERO_SKIP_FIELDS.has(field)) {
-      return answer(() => ({ line: skipAsZeroLine(label), update: { [field]: '0' } }))
-    }
     await settle(() => onSkip(skipLine(label)))
   }
 
@@ -147,12 +287,11 @@ export function QuestionBubble({ entry, live, profile, onAnswer, onSkip, onClone
     }
     const amount = normaliseMoneyInput(draft)
     if (amount === null) return null
-    if (field === 'price') return reply(formatShekels(amount))
-    return reply(profileValueText(amount), { [field]: amount })
+    return reply(amountText(amount), isFinancesField(field) ? { [field]: amount } : null)
   }
 
-  function tap(value: string, update: ProfileUpdate | null = null) {
-    void answer(() => reply(value, update))
+  function tap(value: string) {
+    void answer(() => reply(value))
   }
 
   function choiceButtons(choices: string[]) {
@@ -174,7 +313,7 @@ export function QuestionBubble({ entry, live, profile, onAnswer, onSkip, onClone
 
   function control() {
     if (question.offer_clone === true) {
-      const clone = () => void settle(() => onClone(CLONE_CHOICE))
+      const clone = () => void settle(onClone)
       const stay = () => void settle(() => onSkip(STAY_CHOICE))
       return (
         <>
@@ -232,6 +371,15 @@ export function QuestionBubble({ entry, live, profile, onAnswer, onSkip, onClone
             {offersSkip(question) && (
               <button type="button" disabled={busy} onClick={() => void skip()}>
                 {SKIP}
+              </button>
+            )}
+            {question.field === 'payment_ceiling' && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void settle(() => onSkip(DONT_KNOW))}
+              >
+                {DONT_KNOW}
               </button>
             )}
           </div>

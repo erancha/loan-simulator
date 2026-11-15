@@ -18,13 +18,19 @@ import pytest
 import uvicorn
 from langchain_core.messages import ToolMessage
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent
 from pydantic import Field
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from fakes import ENGINE_TOOL_NAMES
-from loan_agent.adapters.engine_mcp import McpLoanEngine
-from loan_agent.ports.engine import Bounds, EngineError, MarketPoint, OfferTerm, Sizing
+from loan_agent.adapters.engine_mcp import MODEL_ENGINE_TOOLS, McpLoanEngine
+from loan_agent.ports.engine import (
+    Bounds,
+    EngineError,
+    MarketPoint,
+    OfferTerm,
+    ProposedTerm,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures" / "engine"
 TOKEN = "0123456789abcdef" * 3
@@ -74,17 +80,6 @@ def _stub_server(calls: list[tuple[str, dict[str, Any]]]) -> FastMCP:
         return _result(bounds, json.dumps(bounds))
 
     @server.tool()
-    def size_loan(goal_price: str, savings: str, min_cushion: str) -> CallToolResult:
-        arguments = {
-            "goal_price": goal_price,
-            "savings": savings,
-            "min_cushion": min_cushion,
-        }
-        calls.append(("size_loan", arguments))
-        sizing = _fixture("size_loan")
-        return _result(sizing, json.dumps(sizing))
-
-    @server.tool()
     def simulate_loan(loan: dict[str, Any]) -> CallToolResult:
         calls.append(("simulate_loan", {"loan": loan}))
         tracks = loan["tracks"]
@@ -107,8 +102,18 @@ def _stub_server(calls: list[tuple[str, dict[str, Any]]]) -> FastMCP:
         return _result(suggestions, json.dumps(suggestions))
 
     @server.tool()
-    def shortest_comfortable_term(principal: str, payment_ceiling: str) -> CallToolResult:
-        term = {"term_months": 24, "payment_limit": "1800.00"}
+    def shortest_comfortable_term(
+        principal: str, payment_ceiling: str, any_track: bool = False
+    ) -> CallToolResult:
+        arguments = {
+            "principal": principal,
+            "payment_ceiling": payment_ceiling,
+            "any_track": any_track,
+        }
+        calls.append(("shortest_comfortable_term", arguments))
+        if Decimal(principal) < 20000:
+            raise ToolError("the market data is unavailable")
+        term = {"term_months": None if Decimal(principal) > 100000 else 24}
         return _result(term, json.dumps(term))
 
     @server.tool()
@@ -121,8 +126,31 @@ def _stub_server(calls: list[tuple[str, dict[str, Any]]]) -> FastMCP:
                 {"track": track, "payment_ceiling": payment_ceiling},
             )
         )
-        term = {"term_months": 24, "comfortable": True, "payment_limit": "1800.00"}
+        term = {"term_months": 24, "comfortable": True}
         return _result(term, json.dumps(term))
+
+    @server.tool()
+    def propose_term(principal: str, payment_limit: str) -> CallToolResult:
+        calls.append(("propose_term", {"principal": principal, "payment_limit": payment_limit}))
+        term = {"term_months": 30, "first_payment": "1750.50"}
+        return _result(term, json.dumps(term))
+
+    @server.tool()
+    def propose_offer_term(track: dict[str, Any], payment_limit: str) -> CallToolResult:
+        calls.append(("propose_offer_term", {"track": track, "payment_limit": payment_limit}))
+        term = {"term_months": 36, "first_payment": "1500.00"}
+        return _result(term, json.dumps(term))
+
+    @server.tool()
+    def largest_comfortable_loan(payment_ceiling: str, term_months: int) -> CallToolResult:
+        calls.append(
+            (
+                "largest_comfortable_loan",
+                {"payment_ceiling": payment_ceiling, "term_months": term_months},
+            )
+        )
+        largest = {"loan_amount": None if term_months < 12 else "90000.00"}
+        return _result(largest, json.dumps(largest))
 
     @server.tool()
     def market_series(prime_months: int, cpi_months: int) -> CallToolResult:
@@ -199,7 +227,6 @@ async def test_assess_parses_bounds(engine: McpLoanEngine, stub: StubEngine) -> 
 
     assert bounds == Bounds(
         payment_ceiling=Decimal("4700.00"),
-        min_cushion=Decimal("18000.00"),
         reasons=(
             "variable_income_minimum_counted",
             "ceiling_by_disposable_income",
@@ -209,31 +236,50 @@ async def test_assess_parses_bounds(engine: McpLoanEngine, stub: StubEngine) -> 
     assert stub.calls == [("assess_affordability", {"profile": profile})]
 
 
-async def test_size_sends_decimal_strings_and_parses_sizing(
+async def test_propose_term_parses_term_and_first_payment(
     engine: McpLoanEngine, stub: StubEngine
 ) -> None:
-    sizing = await engine.size(
-        goal_price=Decimal(120000),
-        savings=Decimal(70000),
-        min_cushion=Decimal("30000.00"),
-    )
+    proposed = await engine.propose_term(Decimal(80000), Decimal("1800.00"))
+    offered = await engine.propose_offer_term({"principal": "32000"}, Decimal(1600))
 
-    assert sizing == Sizing(
-        loan_amount=Decimal("80000.00"),
-        savings_used=Decimal("40000.00"),
-        cushion_kept=Decimal("30000.00"),
-        spare_savings=Decimal("0.00"),
-    )
+    assert proposed == ProposedTerm(term_months=30, first_payment=Decimal("1750.50"))
+    assert offered == ProposedTerm(term_months=36, first_payment=Decimal("1500.00"))
+    assert stub.calls == [
+        ("propose_term", {"principal": "80000", "payment_limit": "1800.00"}),
+        ("propose_offer_term", {"track": {"principal": "32000"}, "payment_limit": "1600"}),
+    ]
+
+
+async def test_comfortable_term_parses_the_term(engine: McpLoanEngine, stub: StubEngine) -> None:
+    term = await engine.comfortable_term(Decimal(80000), Decimal(2000), any_track=True)
+
+    assert term == 24
     assert stub.calls == [
         (
-            "size_loan",
-            {
-                "goal_price": "120000",
-                "savings": "70000",
-                "min_cushion": "30000.00",
-            },
+            "shortest_comfortable_term",
+            {"principal": "80000", "payment_ceiling": "2000", "any_track": True},
         )
     ]
+
+
+async def test_comfortable_term_is_none_when_no_term_fits(engine: McpLoanEngine) -> None:
+    assert await engine.comfortable_term(Decimal(200000), Decimal(900), any_track=False) is None
+
+
+async def test_comfortable_term_raises_other_engine_errors(engine: McpLoanEngine) -> None:
+    with pytest.raises(EngineError, match="market data is unavailable"):
+        await engine.comfortable_term(Decimal(10000), Decimal(900), any_track=False)
+
+
+async def test_largest_loan_parses_the_amount_or_none(
+    engine: McpLoanEngine, stub: StubEngine
+) -> None:
+    assert await engine.largest_loan(Decimal(2000), 60) == Decimal("90000.00")
+    assert await engine.largest_loan(Decimal(100), 6) is None
+    assert stub.calls[0] == (
+        "largest_comfortable_loan",
+        {"payment_ceiling": "2000", "term_months": 60},
+    )
 
 
 async def test_simulate_parses_figures_and_keeps_structured(engine: McpLoanEngine) -> None:
@@ -292,10 +338,17 @@ async def test_tool_error_raises_engine_error_with_message(engine: McpLoanEngine
     assert "greater than or equal to 10000" in message
 
 
+async def test_model_tools_are_the_loan_side_allow_list(engine: McpLoanEngine) -> None:
+    tools = await engine.model_tools()
+
+    assert {tool.name for tool in tools} == MODEL_ENGINE_TOOLS
+    assert MODEL_ENGINE_TOOLS == {"simulate_loan", "suggest_tracks", "market_series"}
+
+
 async def test_model_tools_keep_schedule_in_artifact(engine: McpLoanEngine) -> None:
     tools = {tool.name: tool for tool in await engine.model_tools()}
 
-    assert set(tools) == ENGINE_TOOL_NAMES
+    assert set(tools) == MODEL_ENGINE_TOOLS
     assert {tool.response_format for tool in tools.values()} == {"content_and_artifact"}
     message = await tools["simulate_loan"].ainvoke(
         {

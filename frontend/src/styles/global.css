@@ -13,8 +13,6 @@
   --red: #b3261e;
   --user-bubble: #c7d7f9;
   --accent-border: #b6c9ea;
-  --value-missing: #8b1a1a;
-  --value-set: #1b6b3a;
   --user-ink: var(--ink);
   --bot-bubble: #e6efeb;
   --side: #e9edf2;
@@ -39,8 +37,6 @@
     --red: #f2827a;
     --user-bubble: #2a3f66;
     --accent-border: #34507d;
-    --value-missing: #f08a8a;
-    --value-set: #6fd39a;
     --user-ink: var(--ink);
     --bot-bubble: #1e2c27;
     --side: #0d1116;
@@ -100,7 +96,7 @@ body {
 .landing-card .app-version {
   margin: 4px 0 20px;
   text-align: center;
-  font-size: 0.8rem;
+  font-size: calc(0.8rem - 1px);
 }
 
 /* The links under the card, centered beside each other, wrapping on a narrow phone. */
@@ -241,13 +237,6 @@ body {
   }
 }
 
-.profile-panel {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 12px 16px;
-}
-
 .panel-title {
   margin: 0 0 8px;
   font-size: 1.05rem;
@@ -307,60 +296,6 @@ body {
   font-weight: 700;
   line-height: 1;
   cursor: help;
-}
-
-.panel-toggle {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-}
-
-.toggle-mark {
-  color: var(--mute);
-  font-size: 0.9rem;
-}
-
-.profile-summary {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 4px 8px;
-  margin: 0 0 12px;
-  font-size: 0.9rem;
-}
-
-.profile-summary dt {
-  color: var(--mute);
-}
-
-.profile-summary dd {
-  margin: 0;
-}
-
-.profile-summary .value-missing {
-  color: var(--value-missing);
-}
-
-.profile-summary .value-set {
-  color: var(--value-set);
-}
-
-.panel-note {
-  margin: 0 0 4px;
-  color: var(--mute);
-  font-size: 0.85rem;
-}
-
-.saved-status {
-  margin: 0;
-  color: var(--green);
-  font-size: 0.85rem;
 }
 
 .reply-heading {
@@ -524,6 +459,25 @@ fieldset.field.changed {
   margin-top: 8px;
 }
 
+.term-form {
+  display: grid;
+  grid-template-columns: auto auto;
+  justify-content: start;
+  gap: 8px 10px;
+  align-items: center;
+  margin-top: 10px;
+  color: var(--mute);
+}
+
+.term-form input {
+  width: 6em;
+}
+
+.term-form .field-error,
+.term-form .question-actions {
+  grid-column: 1 / -1;
+}
+
 .caret::after {
   content: "▍";
   margin-inline-start: 2px;
@@ -547,13 +501,6 @@ fieldset.field.changed {
   align-self: flex-end;
 }
 
-.panel-note-line {
-  align-self: flex-end;
-  margin: 4px 0 0;
-  color: var(--mute);
-  font-size: 0.85rem;
-}
-
 .chat-failure {
   margin: 0;
   color: var(--red);
@@ -564,10 +511,6 @@ fieldset.field.changed {
   margin: 0;
   color: var(--amber);
   font-size: 0.9rem;
-}
-
-.stale-banner .chat-notice {
-  flex-basis: 100%;
 }
 
 .chat-samples {
@@ -622,7 +565,6 @@ fieldset.field.changed {
 }
 
 .chat-input button,
-.stale-banner button,
 button.primary {
   padding: 8px 16px;
   border: 0;
@@ -633,23 +575,9 @@ button.primary {
   cursor: pointer;
 }
 
-.chat-input button:disabled,
-.stale-banner button:disabled {
+.chat-input button:disabled {
   opacity: 0.5;
   cursor: default;
-}
-
-.stale-banner {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  align-items: center;
-  justify-content: space-between;
-  margin-block-end: 12px;
-  padding: 8px 12px;
-  border-radius: 8px;
-  background: var(--amber-bg);
-  color: var(--amber);
 }
 
 .card,
@@ -679,6 +607,14 @@ button.primary {
 .decision p {
   margin: 0;
   font-weight: 600;
+}
+
+.decision .check-note,
+.decision .ceiling-line {
+  margin: 4px 0 0;
+  color: var(--mute);
+  font-size: 0.9rem;
+  font-weight: 400;
 }
 
 .option {
@@ -986,7 +922,60 @@ button.primary {
 }
 
 .check-page > .pane-chat {
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
+}
+
+.finances-panel {
+  align-self: flex-start;
+  max-width: 100%;
+  margin-block-end: 8px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  font-size: 0.85rem;
+  color: var(--mute);
+}
+
+.finances-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 16px;
+  margin: 0;
+}
+
+.finances-summary b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.link-button:hover,
+.link-button:focus-visible {
+  text-decoration: underline;
+}
+
+.finances-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 220px));
+  gap: 8px 16px;
+  margin-block-start: 8px;
+}
+
+.pane-chat-body {
+  flex: 1;
+  min-height: 0;
 }
 
 .check-page {
@@ -1123,15 +1112,16 @@ button.primary {
   font-weight: 600;
 }
 
+.check-term {
+  color: var(--mute);
+  font-size: 0.9rem;
+}
+
 .check-chips {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-}
-
-.pane-side .profile-panel {
-  margin-block-start: 12px;
 }
 
 @media (min-width: 900px) {
@@ -1142,15 +1132,19 @@ button.primary {
   .check-page {
     display: grid;
     position: relative;
-    grid-template-columns: 250px minmax(0, 1fr) var(--card-width);
+    grid-template-columns: var(--side-width) minmax(0, 1fr) var(--card-width);
   }
 
   .check-page[data-active-pane] > .card-resizer {
     display: block;
   }
 
-  .check-page[data-active-pane] > :is(.pane-side, .pane-chat, .pane-card) {
+  .check-page[data-active-pane] > :is(.pane-side, .pane-card) {
     display: block;
+  }
+
+  .check-page[data-active-pane] > .pane-chat {
+    display: flex;
   }
 }
 

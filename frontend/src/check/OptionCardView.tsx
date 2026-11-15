@@ -22,6 +22,7 @@ export function OptionCardView({ option }: { option: OptionCard }) {
       {option.isExample && <ExampleChip />}
       <p className="option-track">{option.track}</p>
       <p className="option-source">{option.source}</p>
+      {option.termNote !== null && <p className="option-source">{option.termNote}</p>}
       <p className="option-payment">{monthlyPayment(option.paymentToday)}</p>
       <span className={`chip chip-${option.chip.tone}`}>{option.chip.text}</span>
       {option.balloon !== null && <p className="option-balloon">{option.balloon}</p>}

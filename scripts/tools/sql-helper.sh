@@ -16,7 +16,7 @@
 #   ./scripts/tools/sql-helper.sh --restore <file>   replace the database's tables with a backup's,
 #                                                    after asking to type the database's name
 #   ./scripts/tools/sql-helper.sh --people           every person with records: Google account ID,
-#                                                    profile, checks, last activity (newest first)
+#                                                    checks, last activity (newest first)
 #   ./scripts/tools/sql-helper.sh --reset <id>       delete every record of the person with that
 #                                                    account ID, so their next sign-in is a first
 #                                                    visit; asks to type the database's name

@@ -1,5 +1,5 @@
-import { apiDelete, apiGet, apiPost } from './client.ts'
-import type { CheckSummary, CheckView } from './types.ts'
+import { apiDelete, apiGet, apiPost, apiPut } from './client.ts'
+import type { CheckSummary, CheckView, Finances } from './types.ts'
 
 export function listChecks(): Promise<CheckSummary[]> {
   return apiGet('/api/checks')
@@ -14,7 +14,7 @@ export function cloneCheck(id: string): Promise<{ id: string }> {
   return apiPost(`/api/checks/${id}/clone`, {})
 }
 
-/** Closes the check; it stays readable and can be restored while its figures match the profile. */
+/** Closes the check; it stays readable and can be restored. */
 export function archiveCheck(id: string): Promise<void> {
   return apiPost(`/api/checks/${id}/archive`, {})
 }
@@ -34,4 +34,37 @@ export function getCheck(id: string): Promise<CheckView> {
 /** The server accepts the message with an empty 202; the answer arrives on the event stream. */
 export function sendMessage(id: string, text: string): Promise<void> {
   return apiPost(`/api/checks/${id}/messages`, { text })
+}
+
+/** A ceiling typed on the term card: the server saves it and shows a term card for it. */
+export function sendTermCeiling(id: string, text: string, paymentCeiling: string): Promise<void> {
+  return apiPost(`/api/checks/${id}/term-ceiling`, { text, payment_ceiling: paymentCeiling })
+}
+
+/**
+ * Saves the term the person confirms on the term card, and the payment ceiling typed beside it
+ * when one is given; refused outside 6 to 84 months.
+ */
+export function saveTerm(
+  checkId: string,
+  termMonths: number,
+  paymentCeiling: string | null,
+): Promise<void> {
+  return apiPut(`/api/checks/${checkId}/term`, {
+    term_months: termMonths,
+    payment_ceiling: paymentCeiling,
+  })
+}
+
+/** Sends the market-data sample, which the server answers from the market data with no model. */
+export function sendMarketSample(id: string, text: string): Promise<void> {
+  return apiPost(`/api/checks/${id}/market-sample`, { text })
+}
+
+/**
+ * Replaces the figures named; one left out keeps its value. The server derives the check's
+ * payment ceiling from the two figures once both are known, and answers with the saved check.
+ */
+export function saveFinances(checkId: string, update: Partial<Finances>): Promise<CheckView> {
+  return apiPut(`/api/checks/${checkId}/finances`, update)
 }

@@ -1,6 +1,7 @@
 """The migration run alone prepares every table the app needs, the checkpointer's included; the
 schema it builds matches the ORM, and its downgrade removes the agent's tables."""
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -10,14 +11,13 @@ from alembic.config import Config
 from alembic.migration import MigrationContext
 from langgraph.checkpoint.postgres.base import MIGRATIONS
 from psycopg import AsyncConnection
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 
 from loan_agent.adapters.postgres.orm import Base
 from loan_agent.platform.checkpointer import libpq_dsn
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 AGENT_TABLES = (
-    "profiles",
     "checks",
     "options",
     "recommendations",
@@ -72,3 +72,30 @@ async def test_downgrade_removes_the_agent_tables_and_upgrade_restores_them(
     command.upgrade(config, "head")
     for table in AGENT_TABLES:
         assert await _scalar(pg_url, f"SELECT to_regclass('{table}')") == table
+
+
+async def test_migration_0004_refuses_a_database_with_checks(
+    pg_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", pg_url)
+    config = Config(str(BACKEND_DIR / "alembic.ini"))
+    config.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    command.downgrade(config, "0003")
+    engine = create_engine(pg_url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text("INSERT INTO checks (id, user_id, created_at) VALUES ('c-old', 'p', :at)"),
+                {"at": datetime(2026, 10, 1, tzinfo=UTC)},
+            )
+
+        with pytest.raises(RuntimeError, match="sql-helper.sh --reset-all"):
+            command.upgrade(config, "head")
+        assert await _scalar(pg_url, "SELECT to_regclass('profiles')") == "profiles"
+
+        with engine.begin() as connection:
+            connection.execute(text("DELETE FROM checks"))
+    finally:
+        engine.dispose()
+    command.upgrade(config, "head")
+    assert await _scalar(pg_url, "SELECT to_regclass('profiles')") is None

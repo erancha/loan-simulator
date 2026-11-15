@@ -98,10 +98,7 @@ export function Shell({ user, onSignOut }: Props) {
     }
   }, [selectedId])
 
-  // Going to an archived check unfolds the archived group, so the check shows marked in the list;
-  // a check opened by the page's load leaves the group folded.
   function select(id: string, opening: Pane) {
-    if (checks?.find((listed) => listed.id === id)?.archived === true) setArchivedOpen(true)
     setWantedId(id)
     setCreateError(null)
     setPane(opening)
@@ -154,11 +151,23 @@ export function Shell({ user, onSignOut }: Props) {
     }
   }
 
+  // The archived group may be folded, so archiving the open check opens another in its place:
+  // the newest live one, or a new check when none is left.
   async function archive(id: string) {
     setCreateError(null)
     try {
       await archiveCheck(id)
+      if (id !== selectedId) {
+        await refresh()
+        return
+      }
+      const newestLive = checks?.find((check) => !check.archived && check.id !== id)
+      if (newestLive === undefined) {
+        await create()
+        return
+      }
       await refresh()
+      open(newestLive.id)
     } catch (error) {
       setCreateError(
         error instanceof ApiException && error.status === 409
@@ -243,7 +252,7 @@ export function Shell({ user, onSignOut }: Props) {
           <CheckPage
             key={selected.id}
             checkId={selected.id}
-            stale={selected.profile_stale}
+            listed={selected}
             sidebar={list}
             activePane={pane}
             onChecksChanged={refresh}

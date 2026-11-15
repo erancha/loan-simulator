@@ -30,6 +30,10 @@ class CheckEventSink:
     async def publish_live(self, check_id: str, type: str, data: Mapping[str, object]) -> None:
         await self._bus.publish(check_channel(check_id), _wire(type, data))
 
+    async def latest(self, check_id: str, type: str) -> Mapping[str, object] | None:
+        of_type = [event for event in await self._store.list(check_id, 0) if event.type == type]
+        return of_type[-1].data if of_type else None
+
 
 def _wire(type: str, data: Mapping[str, object]) -> dict[str, Any]:
     return {"type": type, "data": dict(data)}

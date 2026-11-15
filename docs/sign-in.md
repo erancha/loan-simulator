@@ -1,7 +1,8 @@
 # Sign-in
 
 People sign in to the loan agent with a Google account, and there is no other way in. Every piece of
-data belongs to the person who signed in: their profile, their checks and the conversations on them.
+data belongs to the person who signed in: their checks, the figures held in them and the
+conversations on them.
 This page explains how sign-in works and how to set up the Google side, behind
 [Architecture](architecture.md#the-agent). The "התחברות עם Google" button is on the page
 ([architecture/page.md](architecture/page.md)); the agent's sign-in API is what it calls.

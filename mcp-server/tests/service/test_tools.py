@@ -1,5 +1,4 @@
 import json
-import re
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
@@ -13,10 +12,12 @@ from loan_engine.service.server import build_server
 
 TOOLS = {
     "assess_affordability",
-    "size_loan",
     "simulate_loan",
     "shortest_comfortable_term",
     "shortest_comfortable_offer_term",
+    "propose_term",
+    "propose_offer_term",
+    "largest_comfortable_loan",
     "suggest_tracks",
     "market_series",
 }
@@ -55,17 +56,13 @@ async def test_assess_affordability_reference_user(
 ) -> None:
     profile = {
         "net_fixed_income": 8600,
-        "variable_income": 5000,
-        "variable_income_minimum": 0,
         "fixed_expenses": 5500,
-        "existing_loan_payments": 0,
     }
     async with client(settings, history) as c:
         result = await c.call_tool("assess_affordability", {"profile": profile})
     assert not result.is_error, result.content
     assert result.structured_content == {
         "payment_ceiling": "1550.00",
-        "min_cushion": "11000.00",
         "counted_income": "8600.00",
         "reasons": ["ceiling_by_disposable_income"],
     }
@@ -228,21 +225,6 @@ async def test_invalid_track_is_tool_error_naming_field(
     assert field in result.content[0].text
 
 
-async def test_size_loan_zero_loan(settings: Settings, history: MarketHistory) -> None:
-    async with client(settings, history) as c:
-        result = await c.call_tool(
-            "size_loan",
-            {"goal_price": 10000, "savings": 15000, "min_cushion": 2000},
-        )
-    assert not result.is_error, result.content
-    assert result.structured_content == {
-        "loan_amount": "0.00",
-        "savings_used": "10000.00",
-        "cushion_kept": "2000.00",
-        "spare_savings": "3000.00",
-    }
-
-
 async def test_suggest_tracks_names_source_and_month(
     settings: Settings, history: MarketHistory
 ) -> None:
@@ -258,7 +240,7 @@ async def test_suggest_tracks_names_source_and_month(
     assert (prime["rate_kind"], prime["prime_spread"]) == ("prime", "2.9")
 
 
-async def test_shortest_comfortable_term_names_the_term_and_its_payment_limit(
+async def test_shortest_comfortable_term_names_the_term(
     settings: Settings, history: MarketHistory
 ) -> None:
     arguments = {"principal": 31000, "payment_ceiling": 1000}
@@ -266,26 +248,22 @@ async def test_shortest_comfortable_term_names_the_term_and_its_payment_limit(
         result = await c.call_tool("shortest_comfortable_term", arguments)
     assert not result.is_error, result.content
     assert result.structured_content is not None
-    assert result.structured_content["payment_limit"] == "900.00"
     assert result.structured_content["term_months"] % 6 == 0
 
 
-async def test_shortest_comfortable_term_refuses_a_ceiling_no_term_fits(
+async def test_shortest_comfortable_term_is_null_when_no_term_fits(
     settings: Settings, history: MarketHistory
 ) -> None:
     async with client(settings, history) as c:
         nothing_fits = await c.call_tool(
             "shortest_comfortable_term", {"principal": 31000, "payment_ceiling": 100}
         )
-        less_fits = await c.call_tool(
-            "shortest_comfortable_term", {"principal": 2000000, "payment_ceiling": 2000}
+        too_large = await c.call_tool(
+            "shortest_comfortable_term", {"principal": 500000, "payment_ceiling": 2000}
         )
-    assert nothing_fits.is_error
-    assert "too large for this ceiling" in nothing_fits.content[0].text
-    assert "carries no loan the simulator prices" in nothing_fits.content[0].text
-    assert less_fits.is_error
-    carried = r"largest loan it carries, over 96 months, is \d+000 ₪"
-    assert re.search(carried, less_fits.content[0].text)
+    for result in (nothing_fits, too_large):
+        assert not result.is_error, result.content
+        assert result.structured_content == {"term_months": None}
 
 
 async def test_offer_term_is_the_shortest_comfortable_term_under_the_maximum(
@@ -298,7 +276,6 @@ async def test_offer_term_is_the_shortest_comfortable_term_under_the_maximum(
     assert result.structured_content is not None
     assert result.structured_content["comfortable"] is True
     assert result.structured_content["term_months"] < 84
-    assert result.structured_content["payment_limit"] == "1800.00"
 
 
 async def test_offer_term_falls_back_to_the_maximum_when_no_term_is_comfortable(
@@ -364,3 +341,38 @@ async def test_rates_resources_return_json_with_as_of(
         "consumer_rate": "7.9",
         "consumer_rate_month": "2026-08-01",
     }
+
+
+async def test_propose_term_returns_the_term_and_its_first_payment_in_agorot(
+    settings: Settings, history: MarketHistory
+) -> None:
+    arguments = {"principal": 31000, "payment_limit": 1000}
+    async with client(settings, history) as c:
+        result = await c.call_tool("propose_term", arguments)
+    assert not result.is_error, result.content
+    assert result.structured_content is not None
+    assert result.structured_content["term_months"] % 6 == 0
+    first = Decimal(str(result.structured_content["first_payment"]))
+    assert first < 1000 and first == first.quantize(Decimal("0.01"))
+
+
+async def test_propose_offer_term_proposes_the_maximum_when_none_is_under_the_limit(
+    settings: Settings, history: MarketHistory
+) -> None:
+    arguments = {"track": {**PRIME_TRACK, "term_months": 84}, "payment_limit": 100}
+    async with client(settings, history) as c:
+        result = await c.call_tool("propose_offer_term", arguments)
+    assert not result.is_error, result.content
+    assert result.structured_content is not None
+    assert result.structured_content["term_months"] == 84
+
+
+async def test_largest_comfortable_loan_is_null_for_a_ceiling_of_200(
+    settings: Settings, history: MarketHistory
+) -> None:
+    async with client(settings, history) as c:
+        result = await c.call_tool(
+            "largest_comfortable_loan", {"payment_ceiling": 200, "term_months": 60}
+        )
+    assert not result.is_error, result.content
+    assert result.structured_content == {"loan_amount": None}

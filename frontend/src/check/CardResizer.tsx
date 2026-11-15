@@ -2,16 +2,21 @@ import { useState } from 'react'
 import type { CSSProperties, KeyboardEvent, PointerEvent } from 'react'
 import { RESIZE_CARD } from './copy.ts'
 
-/** The card pane's width at rest, its narrowest; the page grid reads it from --card-width. */
+/** The card pane's narrowest width; the page grid reads its width from --card-width. */
 export const MIN_CARD_WIDTH = 380
+/** The card pane's width until the person drags it: room for an option's figures on one line. */
+export const DEFAULT_CARD_WIDTH = 470
+/** The checks list's column; wide enough that an entry's title fits its first line and its term
+ * its second. The page grid reads it from --side-width. */
+const SIDE_WIDTH = 300
 /** What the card may never take from the page: the sidebar and a readable chat. */
-const RESERVED_WIDTH = 250 + 360
+const RESERVED_WIDTH = SIDE_WIDTH + 360
 const STEP = 20
 const STORAGE_KEY = 'card-width'
 
 function stored(): number {
   const value = Number(localStorage.getItem(STORAGE_KEY))
-  return Number.isFinite(value) && value > MIN_CARD_WIDTH ? value : MIN_CARD_WIDTH
+  return Number.isFinite(value) && value >= MIN_CARD_WIDTH ? value : DEFAULT_CARD_WIDTH
 }
 
 /** The card pane's width, which the person widens by dragging its border toward the chat. */
@@ -27,7 +32,7 @@ export function useCardWidth() {
     setWidth(clamped)
     localStorage.setItem(STORAGE_KEY, String(clamped))
   }
-  const style = { '--card-width': `${width}px` } as CSSProperties
+  const style = { '--card-width': `${width}px`, '--side-width': `${SIDE_WIDTH}px` } as CSSProperties
   return { width, resize, style }
 }
 

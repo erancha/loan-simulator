@@ -1,9 +1,8 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, expect, test, vi } from 'vitest'
+import { expect, test, vi } from 'vitest'
 import { Chat } from './Chat.tsx'
-import type { PanelNote } from './Chat.tsx'
-import { checkArchived, checkFollows, cpiChart } from '../test/fixtures.ts'
+import { checkArchived, cpiChart } from '../test/fixtures.ts'
 import type { ChatEntry, ChatMessage, CheckState, QuestionEntry } from './events.ts'
 
 const exchange: ChatMessage[] = [
@@ -14,20 +13,18 @@ const exchange: ChatMessage[] = [
 /** The question props, for a chat whose entries hold no question. */
 const noQuestion = {
   liveQuestionId: null,
-  profile: null,
-  panelNotes: [],
+  finances: null,
+  ceiling: null,
   onAnswer: vi.fn(),
   onSkip: vi.fn(),
   onClone: vi.fn(),
-  continuedIn: null,
-  onOpenCheck: vi.fn(),
+    onOpenCheck: vi.fn(),
   recommended: false,
 }
 
 interface Options {
   messages?: ChatEntry[]
   liveQuestionId?: string | null
-  panelNotes?: PanelNote[]
   turn?: CheckState['turn']
   failure?: string | null
   notice?: string | null
@@ -38,7 +35,6 @@ interface Options {
 function renderChat({
   messages = exchange,
   liveQuestionId = null,
-  panelNotes = [],
   turn = 'idle',
   failure = null,
   notice = null,
@@ -50,7 +46,6 @@ function renderChat({
       {...noQuestion}
       messages={messages}
       liveQuestionId={liveQuestionId}
-      panelNotes={panelNotes}
       turn={turn}
       failure={failure}
       notice={notice}
@@ -285,7 +280,7 @@ test('growth without a new message re-pins the log unless the reader scrolled up
 const question: QuestionEntry = {
   id: 'q-3',
   role: 'question',
-  question: { field: 'savings', text: null, choices: null },
+  question: { field: 'amount', text: null, choices: null },
   leadIn: null,
   answered: false,
 }
@@ -307,35 +302,21 @@ test('a question shows as its own turn, with a control only while it is live', (
   )
   const turn = screen.getAllByRole('listitem')[3]
   expect(turn).toHaveClass('chat-turn')
-  expect(turn.querySelector('.bubble-question')).toHaveTextContent('כסף זמין')
+  expect(turn.querySelector('.bubble-question')).toHaveTextContent('כמה צריך ללוות?')
   expect(screen.getByRole('button', { name: 'דילוג' })).toBeInTheDocument()
 
   rerender(<Chat {...props} liveQuestionId={null} />)
   expect(screen.queryByRole('button', { name: 'דילוג' })).not.toBeInTheDocument()
-  expect(document.querySelector('.bubble-question')).toHaveTextContent('כסף זמין')
-})
-
-test('a panel note follows its entry; one from an empty chat follows the opening line', () => {
-  renderChat({
-    panelNotes: [
-      { id: 1, afterEntryId: null, text: 'עודכן בפרופיל: כסף זמין 9,000 ₪' },
-      { id: 2, afterEntryId: 'a1', text: 'עודכן בפרופיל: הוצאות קבועות 3,000 ₪' },
-    ],
-  })
-  const turns = screen.getAllByRole('listitem')
-  const first = screen.getByText('עודכן בפרופיל: כסף זמין 9,000 ₪')
-  expect(first).toHaveClass('panel-note-line')
-  expect(turns[0]).toContainElement(first)
-  expect(turns[2]).toContainElement(screen.getByText('עודכן בפרופיל: הוצאות קבועות 3,000 ₪'))
+  expect(document.querySelector('.bubble-question')).toHaveTextContent('כמה צריך ללוות?')
 })
 
 test('a question that ends the conversation is announced with its lead-in and question', () => {
   renderChat({
-    messages: [...exchange, { ...question, leadIn: 'כדי לחשב כרית ביטחון' }],
+    messages: [...exchange, { ...question, leadIn: 'כדי להמשיך' }],
     liveQuestionId: 'q-3',
   })
   const announced = document.querySelector('[aria-live="polite"]')
-  expect(announced).toHaveTextContent(/^כדי לחשב כרית ביטחון כמה כסף זמין יש לקנייה\?$/)
+  expect(announced).toHaveTextContent(/^כדי להמשיך כמה צריך ללוות\?$/)
 })
 
 test('a chart shows its title, its source and a table of every month', () => {
@@ -350,47 +331,34 @@ test('a chart shows its title, its source and a table of every month', () => {
 
 test('a sample fills the input without sending, until the first question', async () => {
   const { onSend } = renderChat({ messages: [] })
-  await userEvent.click(screen.getByRole('button', { name: 'מכונית' }))
+  await userEvent.click(screen.getByRole('button', { name: 'הלוואה' }))
 
   const input = screen.getByRole('textbox')
-  expect(input).toHaveValue('אני רוצה לקנות מכונית. ')
+  expect(input).toHaveValue('אני רוצה הלוואה בסך 60,000₪ ')
   expect(input).toHaveFocus()
   expect(onSend).not.toHaveBeenCalled()
   expect(screen.getByRole('button', { name: 'שליחה' })).toBeEnabled()
 })
-
-beforeEach(() => localStorage.clear())
 
 test('a multi-line sample keeps its line breaks in the input', async () => {
   renderChat({ messages: [] })
   await userEvent.click(screen.getByRole('button', { name: 'פריים ומדדים' }))
 
   const lines = (screen.getByRole('textbox') as HTMLTextAreaElement).value.split('\n')
-  expect(lines).toHaveLength(3)
-  expect(lines[2]).toBe('הצג את הנתונים בשני גרפים. ')
+  expect(lines).toHaveLength(2)
+  expect(lines[1]).toBe('מה היו המדדים לצרכן ב-12 החודשים האחרונים? ')
 })
 
-test('the market sample stays after the first question, until tapped that day', async () => {
+test('the market sample stays after the first question and after a tap', async () => {
   const question: QuestionEntry = {
     id: 'q-2',
     role: 'question',
-    question: { field: 'price', text: null, choices: null },
+    question: { field: 'amount', text: null, choices: null },
     leadIn: null,
     answered: false,
   }
-  const { unmount } = renderChat({ messages: [...exchange, question], liveQuestionId: 'q-2' })
+  renderChat({ messages: [...exchange, question], liveQuestionId: 'q-2' })
   await userEvent.click(screen.getByRole('button', { name: 'פריים ומדדים' }))
-  expect(screen.queryByRole('button', { name: 'פריים ומדדים' })).not.toBeInTheDocument()
-  unmount()
-
-  renderChat({ messages: [] })
-  expect(screen.getByRole('button', { name: 'מכונית' })).toBeInTheDocument()
-  expect(screen.queryByRole('button', { name: 'פריים ומדדים' })).not.toBeInTheDocument()
-})
-
-test('a tap on an earlier day leaves the market sample showing', () => {
-  localStorage.setItem('market-sample-tapped', '2000-01-01')
-  renderChat({ messages: [] })
   expect(screen.getByRole('button', { name: 'פריים ומדדים' })).toBeInTheDocument()
 })
 
@@ -398,16 +366,15 @@ test('the samples are gone once the model has asked a question', () => {
   const question: QuestionEntry = {
     id: 'q-2',
     role: 'question',
-    question: { field: 'price', text: null, choices: null },
+    question: { field: 'amount', text: null, choices: null },
     leadIn: null,
     answered: false,
   }
   renderChat({ messages: [...exchange, question], liveQuestionId: 'q-2' })
-  expect(screen.queryByRole('button', { name: 'מכונית' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'הלוואה' })).not.toBeInTheDocument()
 })
 
-test('an archived check ends with its closing note, the whole profile and no input', async () => {
-  const onOpenCheck = vi.fn()
+test('an archived check ends with the manual archive line and no input', () => {
   render(
     <Chat
       {...noQuestion}
@@ -416,33 +383,37 @@ test('an archived check ends with its closing note, the whole profile and no inp
       failure={null}
       notice={null}
       onSend={vi.fn()}
-      continuedIn="c2"
-      onOpenCheck={onOpenCheck}
     />,
   )
 
   const note = screen.getByRole('note')
   expect(note).toHaveTextContent('הבדיקה נסגרה והועברה לארכיון.')
-  expect(note).toHaveTextContent('14.11.2026')
-  expect(note).toHaveTextContent('כסף זמין: מ-35,000 ₪ ל-23,000 ₪')
-  for (const line of [
-    'כסף זמין: 35,000 ₪',
-    'הכנסה קבועה: 8,000 ₪',
-    'הכנסה משתנה: 5,000 ₪',
-    'מינימלית: 2,000 ₪',
-    'הוצאות קבועות: 6,000 ₪',
-    'החזרי הלוואות קיימות: 0 ₪',
-  ]) {
-    expect(within(note).getByText(line)).toBeInTheDocument()
-  }
+  expect(note).toHaveTextContent('ב-14.11.2026 הבדיקה הועברה לארכיון ידנית.')
   expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
-  await userEvent.click(within(note).getByRole('button', { name: 'מעבר לבדיקה המעודכנת' }))
-  expect(onOpenCheck).toHaveBeenCalledWith('c2')
+})
+
+test('a cloned check ends with the handoff note, whose button opens the copy', async () => {
+  const onOpenCheck = vi.fn()
+  render(
+    <Chat
+      {...noQuestion}
+      messages={[...exchange, { id: 'c-3', role: 'cloned', cloneId: 'copy' }]}
+      turn="idle"
+      failure={null}
+      notice={null}
+      onSend={vi.fn()}
+      onOpenCheck={onOpenCheck}
+    />,
+  )
+
+  expect(screen.getByRole('note')).toHaveTextContent('הבדיקה שוכפלה לבדיקה נפרדת.')
+  await userEvent.click(screen.getByRole('button', { name: 'מעבר לבדיקה החדשה' }))
+  expect(onOpenCheck).toHaveBeenCalledWith('copy')
 })
 
 test('once a check has a recommendation, a real-offer sample fills in a template to complete', async () => {
   renderChat({ recommended: true })
-  expect(screen.queryByRole('button', { name: 'מכונית' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'הלוואה' })).not.toBeInTheDocument()
   await userEvent.click(screen.getByRole('button', { name: 'הצעה מגוף מלווה' }))
 
   const lines = (screen.getByRole('textbox') as HTMLTextAreaElement).value.split('\n')
@@ -482,53 +453,12 @@ test('a single question mark sends without asking', async () => {
   expect(onSend).toHaveBeenCalledWith('כמה זה עולה?')
 })
 
-test('a follow-up check opens with why it exists and a way back to the archived check', async () => {
-  const onOpenCheck = vi.fn()
-  render(
-    <Chat
-      {...noQuestion}
-      messages={[{ id: 'f-1', role: 'follows', follows: checkFollows(1, 'c-old').data }]}
-      turn="idle"
-      failure={null}
-      notice={null}
-      onSend={vi.fn()}
-      onOpenCheck={onOpenCheck}
-    />,
-  )
-
-  const note = screen.getByRole('note')
-  expect(note).toHaveTextContent('בדיקת המשך')
-  expect(note).toHaveTextContent('כסף זמין: מ-35,000 ₪ ל-23,000 ₪')
-  expect(screen.getByRole('textbox')).toBeInTheDocument()
-  await userEvent.click(within(note).getByRole('button', { name: 'מעבר לבדיקה הקודמת שבארכיון' }))
-  expect(onOpenCheck).toHaveBeenCalledWith('c-old')
-})
-
-test('a check the person archived says so, without a profile list', () => {
-  const manual = { previous_profile: null, changes: [], archived_at: '2026-11-14T09:30:00+00:00' }
-  render(
-    <Chat
-      {...noQuestion}
-      messages={[{ id: 'x-1', role: 'archived', archive: manual }]}
-      turn="idle"
-      failure={null}
-      notice={null}
-      onSend={vi.fn()}
-    />,
-  )
-
-  const note = screen.getByRole('note')
-  expect(note).toHaveTextContent('ב-14.11.2026 הבדיקה הועברה לארכיון ידנית.')
-  expect(note).not.toHaveTextContent('הפרופיל שעליו התבססה הבדיקה')
-  expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
-})
-
 test('a message and a question show when they were said; one without a time shows none', () => {
   const at = new Date(2026, 10, 14, 9, 30, 5).toISOString()
   const question: QuestionEntry = {
     id: 'q-3',
     role: 'question',
-    question: { field: 'savings', text: null, choices: null },
+    question: { field: 'amount', text: null, choices: null },
     leadIn: null,
     answered: false,
     at,

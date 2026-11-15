@@ -64,3 +64,11 @@ name = "Domain is framework free"
 type = "forbidden"
 source_modules = ["loan_engine.domain"]
 forbidden_modules = ["mcp", "httpx2", "pydantic_settings", "starlette", "uvicorn", "structlog"]
+
+# The ceiling formula is the only household calculation; loan arithmetic never depends on it.
+[[tool.importlinter.contracts]]
+name = "Loan arithmetic does not import affordability"
+type = "forbidden"
+source_modules = ["loan_engine.domain.policy", "loan_engine.domain.history",
+  "loan_engine.domain.schedule"]
+forbidden_modules = ["loan_engine.domain.affordability"]

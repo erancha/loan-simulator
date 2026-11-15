@@ -2,20 +2,21 @@ import { expect, test } from 'vitest'
 import {
   assistantMessage,
   checkArchived,
-  checkContinued,
-  checkFollows,
   chartShown,
   cpiChart,
   delta,
-  goal,
-  goalSet,
+  ceilingSet,
+  finances,
+  financesUpdated,
+  loan,
+  loanSet,
   optionFixed36,
   optionOfferFixed,
   optionPrime36,
-  profileUpdated,
   questionAsked,
   recommendationPrime,
   turnFailed,
+  termSet,
   turnStatus,
   userMessage,
   withSeq,
@@ -111,7 +112,7 @@ test('a turn that goes idle drops its half-written reply, as a reload would', ()
   const state = play([
     userMessage(1, 'חשב'),
     turnStatus(2, 'running'),
-    withSeq(goalSet, 3),
+    withSeq(loanSet, 3),
     delta('a1', 'חצי תשו'),
     turnFailed(4, 'boom'),
     turnStatus(5, 'idle'),
@@ -130,17 +131,17 @@ test('a question becomes an entry and is live once the turn is idle', () => {
   expect(liveQuestion(state)?.id).toBe('q-3')
 })
 
-test('status and profile events after a question do not close it; a user message does', () => {
-  const asked = questionAsked(3, { field: 'savings', text: null, choices: null })
+test('status and finances events after a question do not close it; a user message does', () => {
+  const asked = questionAsked(3, { field: 'amount', text: null, choices: null })
   const open = play([
     userMessage(1, 'x'),
     turnStatus(2, 'running'),
     asked,
-    withSeq(profileUpdated, 4),
+    withSeq(financesUpdated, 4),
     turnStatus(5, 'idle'),
   ])
   expect(liveQuestion(open)?.id).toBe('q-3')
-  const closed = reduce(open, userMessage(6, 'כסף זמין: 12,000 ₪'))
+  const closed = reduce(open, userMessage(6, 'כמה צריך ללוות? 12,000 ₪'))
   expect(closed.messages.find((m) => m.id === 'q-3')).toMatchObject({ answered: true })
   expect(liveQuestion(closed)).toBeNull()
 })
@@ -170,33 +171,32 @@ test('a question is not live while a turn runs', () => {
 })
 
 
-test('profile updates are counted and the latest goal is kept', () => {
+test('the loan, term and ceiling events set the check\'s figures', () => {
   const state = play([
-    userMessage(1, 'רכב ב-55,000'),
+    userMessage(1, 'רכב ב-29,000'),
     turnStatus(2, 'running'),
-    withSeq(profileUpdated, 3),
-    withSeq(goalSet, 4),
-    withSeq(profileUpdated, 5),
+    withSeq(loanSet, 3),
+    withSeq(termSet, 4),
+    withSeq(ceilingSet, 5),
     turnStatus(6, 'idle'),
   ])
-  expect(state.profileVersion).toBe(2)
-  expect(state.goal).toBe(goal)
+  expect(state.loan).toBe(loan)
+  expect(state.termMonths).toBe(36)
+  expect(state.ceiling).toEqual({ amount: '1900', source: 'stated' })
 })
 
-test('an archive closes the conversation with its note; a continuation names the new check', () => {
+test('a finances save sets the figures and the ceiling that follows from them', () => {
+  const state = play([withSeq(financesUpdated, 1)])
+  expect(state.finances).toBe(finances)
+  expect(state.ceiling).toEqual({ amount: '1900', source: 'finances' })
+})
+
+test('an archive closes the conversation with its note', () => {
   const archived = checkArchived(2)
-  const state = play([userMessage(1, 'טעיתי'), archived, checkContinued(3, 'c2')])
+  const state = play([userMessage(1, 'טעיתי'), archived])
   expect(state.messages.at(-1)).toEqual({ id: 'x-2', role: 'archived', archive: archived.data })
   expect(isArchived(state)).toBe(true)
-  expect(state.continuedIn).toBe('c2')
   expect(isArchived(play([userMessage(1, 'שלום')]))).toBe(false)
-})
-
-test('a follow-up check opens with a note naming the check it follows', () => {
-  const follows = checkFollows(1, 'c-old')
-  const state = play([follows, userMessage(2, 'טעיתי')])
-  expect(state.messages[0]).toEqual({ id: 'f-1', role: 'follows', follows: follows.data })
-  expect(isArchived(state)).toBe(false)
 })
 
 test('a restore reopens the conversation and drops the closing note', () => {
@@ -209,12 +209,21 @@ test('a restore reopens the conversation and drops the closing note', () => {
   expect(state.messages).toHaveLength(1)
 })
 
+test('a clone hands the conversation over with a note naming the copy, which closes a question', () => {
+  const state = play([
+    questionAsked(1, { field: null, text: null, choices: null, offer_clone: true }),
+    { type: 'check.cloned', data: { clone_id: 'copy' }, seq: 2 },
+  ])
+  expect(state.messages.at(-1)).toEqual({ id: 'c-2', role: 'cloned', cloneId: 'copy' })
+  expect(liveQuestion(state)).toBeNull()
+})
+
 test('messages and questions keep the time of their stored event; a streaming reply has none', () => {
   const at = '2026-11-14T09:30:05+00:00'
   const state = play([
     { ...userMessage(1, 'שלום'), at },
     { ...assistantMessage(2, 'a1', 'היי'), at },
-    { ...questionAsked(3, { field: 'savings', text: null, choices: null }), at },
+    { ...questionAsked(3, { field: 'amount', text: null, choices: null }), at },
     delta('a2', 'ע'),
   ])
   expect(state.messages.map((entry) => ('at' in entry ? entry.at : 'none'))).toEqual([

@@ -6,7 +6,9 @@
 const DECIMAL = /^\d+(\.\d+)?$/
 
 function assertDecimal(text: string): void {
-  if (!DECIMAL.test(text)) throw new RangeError(`not a non-negative decimal: ${JSON.stringify(text)}`)
+  if (!DECIMAL.test(text)) {
+    throw new RangeError(`not a non-negative decimal: ${JSON.stringify(text)}`)
+  }
 }
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
@@ -20,6 +22,18 @@ const ZERO = /^0+(\.0+)?$/
 export function isZero(amount: string): boolean {
   assertDecimal(amount)
   return ZERO.test(amount)
+}
+
+/** Whether the first amount is greater than the second, compared digit by digit. */
+export function exceeds(amount: string, limit: string): boolean {
+  assertDecimal(amount)
+  assertDecimal(limit)
+  const scaled = (text: string, places: number) => {
+    const [whole, fraction = ''] = text.split('.')
+    return BigInt(whole + fraction.padEnd(places, '0'))
+  }
+  const places = Math.max(amount.split('.')[1]?.length ?? 0, limit.split('.')[1]?.length ?? 0)
+  return scaled(amount, places) > scaled(limit, places)
 }
 
 /** Decimal text of an amount or rate the agent sent as a string or a number, without arithmetic. */

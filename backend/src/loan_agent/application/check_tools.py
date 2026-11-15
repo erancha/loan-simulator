@@ -1,15 +1,18 @@
-"""The agent's own tools for one check: the calls the model makes to save the person's data, to
-ask the person a question and to present a recommendation, with the guardrail that keeps a
-recommendation within the engine's bounds.
+"""The agent's own tools for one check: the calls the model makes to save the loan, its term, its
+payment ceiling and the person's finances, to ask the person a question and to present a
+recommendation, with the guardrail that keeps a recommendation honest.
 
 - ToolDeps: the ports, the clock and the id generator the tools act through
-- CheckTools: update_profile, set_goal, save_option and present_recommendation, each returning a
-  compact key: value summary for the model and emitting an event for the page; update_profile
-  returns CHECK_ARCHIVED_RESULT instead when its save archived this check, after which the turn
-  ends; ask, emitting the question for the page and returning ASKED_RESULT, after which the turn
-  ends; show_chart, emitting a market series from the engine for the page to draw
+- CheckTools: set_loan, set_term, set_ceiling, update_finances, save_option and
+  present_recommendation, each returning a compact key: value summary for the model and emitting
+  an event for the page; ask and ask_term, emitting a question for the page and returning
+  ASKED_RESULT, after which the turn ends; show_chart, emitting a market series for the page
+- The guardrail in present_recommendation: every named option borrows the loan amount; with a
+  ceiling, every one's worst-case recurring payment fits it, and a refusal names the remedy to
+  offer the person; an example never beats a real offer
 - ToolError: a refusal whose message tells the model what is wrong and what to do next
 - ENGLISH_WORD: what marks text the person would see as not Hebrew
+- summary, finances_figures: the key: value text the model reads, and the finances' part of it
 """
 
 import re
@@ -19,23 +22,35 @@ from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Literal, cast, get_args
 
-from loan_agent.application.profile_saving import save_profile
-from loan_agent.domain.errors import GoalError, ProfileError
-from loan_agent.domain.models import Goal, Option, OptionSource, Profile, Recommendation
-from loan_agent.ports.engine import Bounds, EngineError, LoanEngine, MarketPoint, Sizing
+from loan_agent.application.finances_saving import save_finances
+from loan_agent.application.market_answer import chart_data
+from loan_agent.domain.errors import FinancesError, LoanError
+from loan_agent.domain.models import (
+    CAR_PURPOSE,
+    CAR_TERM_MONTHS,
+    FIRST_PAYMENT_TARGET,
+    Check,
+    Finances,
+    LoanRequest,
+    Option,
+    OptionFigures,
+    OptionSource,
+    Recommendation,
+)
+from loan_agent.ports.engine import EngineError, LoanEngine, MarketPoint, ProposedTerm
 from loan_agent.ports.events import (
+    CEILING_SET,
     CHART_SHOWN,
-    GOAL_SET,
+    LOAN_SET,
     OPTION_SAVED,
-    PROFILE_UPDATED,
     QUESTION_ASKED,
     RECOMMENDATION_PRESENTED,
+    TERM_SET,
     EventSink,
 )
 from loan_agent.ports.repositories import (
     CheckRepository,
     OptionRepository,
-    ProfileRepository,
     RecommendationRepository,
 )
 
@@ -44,15 +59,14 @@ _SOURCES: tuple[str, ...] = get_args(OptionSource)
 ChartSeries = Literal["prime", "cpi"]
 _CHART_SERIES: tuple[str, ...] = get_args(ChartSeries)
 
+# The engine's shortest and longest terms (MIN_TERM and MAX_TERM of the engine's limits), which
+# the agent cannot import; the engine refuses a term outside them.
+MIN_TERM = 6
+MAX_TERM = 84
+
 ASKED_RESULT = (
     "The question is on the person's screen and this turn ends here; their answer arrives as the "
     "next message."
-)
-
-CHECK_ARCHIVED_RESULT = (
-    "Saved. The change replaced figures this check's recommendation was computed from, so this "
-    "check is archived and this turn ends here; the conversation continues in a new check with "
-    "the same goal, which recalculates."
 )
 
 # The page's card changes only through a recommendation, so a saved offer it does not reach would
@@ -62,6 +76,17 @@ _COMPARE_THE_OFFER = (
     "person's card changes only through that call"
 )
 
+# The same holds for a recommendation made against another ceiling, or none.
+_RECHECK_THE_RECOMMENDATION = (
+    "the check's recommendation was made before this ceiling; call present_recommendation in this "
+    "turn to check it against the ceiling; the person's card changes only through that call"
+)
+
+_PERSON_DECIDES = (
+    "Change neither the amount nor the term until the person chooses; when they keep them, the "
+    "recommendation stands and the remedy is not offered again."
+)
+
 
 class ToolError(Exception):
     pass
@@ -69,7 +94,6 @@ class ToolError(Exception):
 
 @dataclass(frozen=True)
 class ToolDeps:
-    profiles: ProfileRepository
     checks: CheckRepository
     options: OptionRepository
     recommendations: RecommendationRepository
@@ -85,32 +109,189 @@ class CheckTools:
         self._check_id = check_id
         self._deps = deps
 
-    async def update_profile(self, **fields: object) -> str:
-        deps = self._deps
+    async def set_loan(
+        self, purpose: str | None, amount: object, payment_ceiling: object | None = None
+    ) -> str:
+        """Saves the loan, and the payment ceiling as stated when the person named one with it,
+        so a ceiling in the message that states the loan is saved before the term card proposes
+        a term. Everything is checked before anything is saved."""
+        if purpose is not None and not purpose.strip():
+            raise ToolError("purpose is empty; omit it when the person named no purpose")
         try:
-            saved = await save_profile(
-                self._user_id, fields, deps.profiles, deps.checks, deps.sink, deps.clock
+            loan = LoanRequest(purpose, _amount("amount", amount))
+        except LoanError as error:
+            raise ToolError(f"{error}; ask the person for the correct amount") from None
+        ceiling = None if payment_ceiling is None else _ceiling(payment_ceiling)
+        await self._require_priced(loan.amount)
+        await self._deps.checks.set_loan(self._check_id, loan)
+        data = _json_ready(asdict(loan))
+        await self._deps.sink.emit(self._check_id, LOAN_SET, data)
+        if ceiling is not None:
+            data = {**data, **await self._save_stated_ceiling(ceiling)}
+        recommendation = await self._deps.recommendations.latest(self._check_id)
+        if recommendation is not None and recommendation.loan_amount != loan.amount:
+            return summary(
+                {
+                    **data,
+                    "next_step": f"the check's recommendation is for {recommendation.loan_amount}; "
+                    "save options of the new amount and call present_recommendation in this turn",
+                }
             )
-        except ProfileError as error:
-            raise ToolError(f"{error}; correct it and call update_profile again") from None
-        profile = saved.profile
-        data = {"profile": _json_ready(asdict(profile)), "missing": list(profile.missing())}
-        await deps.sink.emit(self._check_id, PROFILE_UPDATED, data)
-        if self._check_id in saved.archived:
-            return CHECK_ARCHIVED_RESULT
-        return summary(profile_figures(profile))
-
-    async def set_goal(self, purpose: str, price: object) -> str:
-        if not purpose.strip():
-            raise ToolError("purpose is empty; ask the person what the loan is for")
-        try:
-            goal = Goal(purpose, _amount("price", price))
-        except GoalError as error:
-            raise ToolError(f"{error}; ask the person for the correct value") from None
-        await self._deps.checks.set_goal(self._check_id, goal)
-        data = _json_ready(asdict(goal))
-        await self._deps.sink.emit(self._check_id, GOAL_SET, data)
         return summary(data)
+
+    async def _require_priced(self, amount: Decimal) -> None:
+        """The engine alone knows the principal limits it prices; asking it for the example
+        tracks of the amount refuses an amount outside them, naming the limit."""
+        try:
+            await self._deps.engine.suggest(amount, MAX_TERM)
+        except EngineError as error:
+            raise ToolError(
+                f"The engine refused the amount: {error}; tell the person the range this "
+                "simulator prices and ask for an amount within it"
+            ) from None
+
+    async def ask_term(self, term_months: int | None) -> str:
+        """With term_months None, the card proposes a term; with a number, the person typed it
+        and the card shows its first payment."""
+        if term_months is not None:
+            _require_term(term_months)
+            if term_months == await self._last_card_term():
+                raise ToolError(
+                    f"The last term card already showed {term_months} months, so the person's "
+                    f"answer confirms it: call set_term with {term_months}"
+                )
+        check = await self._check()
+        loan = _require_loan(check, "ask_term")
+        if term_months is None:
+            proposed = await self._proposed_term(check, loan)
+        else:
+            proposed = ProposedTerm(term_months, await self._first_payment(loan, term_months))
+        question = {
+            "kind": "term",
+            "term_months": proposed.term_months,
+            "first_payment": str(proposed.first_payment),
+        }
+        await self._deps.sink.emit(
+            self._check_id, QUESTION_ASKED, {"question": question, "lead_in": None}
+        )
+        return ASKED_RESULT
+
+    async def _last_card_term(self) -> int | None:
+        """The term of the check's latest question when it is a term card."""
+        asked = await self._deps.sink.latest(self._check_id, QUESTION_ASKED)
+        if asked is None:
+            return None
+        question = cast(Mapping[str, object], asked["question"])
+        return cast(int, question["term_months"]) if question.get("kind") == "term" else None
+
+    async def _proposed_term(self, check: Check, loan: LoanRequest) -> ProposedTerm:
+        """With a ceiling, any purpose gets the shortest term at which every example track's
+        worst case fits it, or the longest term when none does: a limit the person knows decides
+        the term. Without one, a car gets the usual dealer maximum, and another purpose the
+        shortest term whose first payment is under the target."""
+        if check.payment_ceiling is not None:
+            found = await self._comfortable_term(
+                loan.amount, check.payment_ceiling, any_track=False
+            )
+            term = MAX_TERM if found is None else found
+        elif loan.purpose == CAR_PURPOSE:
+            term = CAR_TERM_MONTHS
+        else:
+            return await self._deps.engine.propose_term(loan.amount, FIRST_PAYMENT_TARGET)
+        return ProposedTerm(term, await self._first_payment(loan, term))
+
+    async def _first_payment(self, loan: LoanRequest, term_months: int) -> Decimal:
+        """The higher first payment of the example tracks, as the engine's term proposal gives."""
+        examples = await self._examples(loan.amount, term_months)
+        return max(figures.first_payment for _, figures in examples)
+
+    async def _examples(
+        self, amount: Decimal, term_months: int
+    ) -> list[tuple[Mapping[str, object], OptionFigures]]:
+        """The engine's example tracks of the loan at the term, each with its simulated figures."""
+        engine = self._deps.engine
+        examples = []
+        for track in await engine.suggest(amount, term_months):
+            simulation = await engine.simulate({"tracks": [track]})
+            examples.append((track, simulation.figures))
+        return examples
+
+    async def set_term(self, term_months: int) -> str:
+        try:
+            repriced = await self.save_term(term_months)
+        except EngineError as error:
+            raise ToolError(
+                f"The engine refused to price the offers at {term_months} months: {error}"
+            ) from None
+        data: dict[str, object] = {"term_months": term_months}
+        if repriced:
+            data["offers_repriced"] = ", ".join(repriced)
+        return summary(data)
+
+    async def save_term(self, term_months: int) -> list[str]:
+        """Saves the term and prices every offer that leaves its term open at it, up to the
+        offer's maximum, so each option on the card is for the term the person is deciding on.
+        All the prices are taken before anything is written, so an engine refusal saves nothing.
+        Returns the ids of the offers priced again. The page's term confirmation saves through
+        here too."""
+        _require_term(term_months)
+        _require_loan(await self._check(), "set_term")
+        repriced = []
+        for option in await self._deps.options.list(self._check_id):
+            if option.max_term_months is None:
+                continue
+            (track,) = cast(list[Mapping[str, object]], option.loan["tracks"])
+            term = min(term_months, option.max_term_months)
+            if track["term_months"] != term:
+                loan = {**option.loan, "tracks": [{**track, "term_months": term}]}
+                repriced.append((option, loan, await self._deps.engine.simulate(loan)))
+        await self._deps.checks.set_term(self._check_id, term_months)
+        await self._deps.sink.emit(self._check_id, TERM_SET, {"term_months": term_months})
+        for option, loan, simulation in repriced:
+            priced = replace(option, loan=loan, summary=simulation.figures)
+            await self._deps.options.replace(priced)
+            await self._deps.sink.emit(
+                self._check_id,
+                OPTION_SAVED,
+                {**_option_data(priced), "result": simulation.structured},
+            )
+        return [option.id for option, _, _ in repriced]
+
+    async def set_ceiling(self, amount: object) -> str:
+        """The ceiling the person states replaces any ceiling the check held."""
+        return await self._with_recheck(await self._save_stated_ceiling(_ceiling(amount)))
+
+    async def _save_stated_ceiling(self, ceiling: Decimal) -> dict[str, str]:
+        await self._deps.checks.set_ceiling(self._check_id, ceiling, "stated")
+        data = {"payment_ceiling": str(ceiling), "ceiling_source": "stated"}
+        await self._deps.sink.emit(self._check_id, CEILING_SET, data)
+        return data
+
+    async def _with_recheck(self, data: Mapping[str, object]) -> str:
+        """The summary, telling the model to recommend again when the check holds a
+        recommendation, since a ceiling change re-checks it in the same turn."""
+        if await self._deps.recommendations.latest(self._check_id) is None:
+            return summary(data)
+        return summary({**data, "next_step": _RECHECK_THE_RECOMMENDATION})
+
+    async def update_finances(self, **fields: object) -> str:
+        try:
+            check = await save_finances(self._check_id, self._user_id, fields, self._deps)
+        except FinancesError as error:
+            raise ToolError(f"{error}; correct it and call update_finances again") from None
+        except EngineError as error:
+            raise ToolError(
+                f"The engine refused the finances: {error}; nothing was saved, so correct them "
+                "and call update_finances again"
+            ) from None
+        data = {
+            **finances_figures(check.finances),
+            "payment_ceiling": check.payment_ceiling,
+            "ceiling_source": check.ceiling_source,
+        }
+        if check.finances.missing():
+            return summary(data)
+        return await self._with_recheck(data)
 
     async def save_option(
         self,
@@ -125,26 +306,43 @@ class CheckTools:
         if source != "offer" and max_term_months is not None:
             raise ToolError("max_term_months belongs to a real offer; omit it for an example")
         offered = None if offer_date is None else _offer_date(offer_date)
-        profile, _ = await self._deps.profiles.get(self._user_id)
-        if profile.missing() and (source == "published_average" or max_term_months is not None):
-            kept_for = "an example" if source == "published_average" else "a term up to a maximum"
-            raise ToolError(
-                f"{kept_for} comes only after the whole profile is known; ask the person for: "
-                + ", ".join(profile.missing())
-            )
+        check = await self._check()
+        requested = _require_loan(check, "save_option")
         try:
             simulation = await self._deps.engine.simulate(loan)
         except EngineError as error:
             raise ToolError(
                 f"The engine refused the loan: {error}; correct the loan and call save_option again"
             ) from None
-        # A principal that cannot be read as money is refused at save time, not when a
-        # recommendation first sums it.
-        _principal(loan)
-        if source == "published_average":
-            await self._require_within_ceiling(profile, simulation.figures.risk_payment)
+        principal = _principal(loan)
+        if principal != requested.amount:
+            raise ToolError(
+                f"this loan borrows {principal}, not the check's loan amount of "
+                f"{requested.amount}; save it with a principal of {requested.amount}. If the "
+                "person wants another amount, call set_loan first"
+            )
         if max_term_months is not None:
-            await self._require_offer_term(profile, loan, max_term_months)
+            term = await self._offer_term(check, loan, max_term_months)
+            (track,) = cast(list[Mapping[str, object]], loan["tracks"])
+            if track["term_months"] != term:
+                raise ToolError(
+                    f"this offer allows up to {max_term_months} months and the term to save is "
+                    f"{term}; save it with term_months {term}. If the person chose this term "
+                    "themselves, omit max_term_months"
+                )
+        offer_terms = (source, lender, offered, max_term_months)
+        for existing in await self._deps.options.list(self._check_id):
+            same_terms = (
+                existing.source,
+                existing.lender,
+                existing.offer_date,
+                existing.max_term_months,
+            ) == offer_terms
+            if same_terms and existing.summary == simulation.figures:
+                raise ToolError(
+                    f"this option is already saved as option {existing.id}, with the same figures; "
+                    "use that option rather than saving it again"
+                )
         option = Option(
             id=self._deps.new_id(),
             check_id=self._check_id,
@@ -152,6 +350,7 @@ class CheckTools:
             source=cast(OptionSource, source),
             lender=lender,
             offer_date=offered,
+            max_term_months=max_term_months,
             summary=simulation.figures,
             created_at=self._deps.clock(),
         )
@@ -162,45 +361,45 @@ class CheckTools:
             {**_option_data(option), "result": simulation.structured},
         )
         saved = {"option_id": option.id, **_whole_shekels(asdict(option.summary))}
-        if source == "offer" and not profile.missing():
+        comparisons = [
+            _comparison(option, other)
+            for other in await self._deps.options.list(self._check_id)
+            if other.id != option.id and _terms(other) == _terms(option)
+        ]
+        if comparisons:
+            saved["compared"] = "; ".join(comparisons)
+        if source == "offer":
             return summary({**saved, "next_step": _COMPARE_THE_OFFER})
         return summary(saved)
 
-    async def _require_within_ceiling(self, profile: Profile, risk_payment: Decimal) -> None:
-        """An example option is the page's suggestion, so its worst-case payment must fit the
-        payment ceiling of the complete profile; a real offer is saved whatever its payment, to
-        be compared."""
-        bounds = await self._deps.engine.assess(profile.engine_profile())
-        if risk_payment > bounds.payment_ceiling:
-            raise ToolError(
-                f"this example has a worst-case monthly payment of {risk_payment}, above the "
-                f"payment_ceiling of {bounds.payment_ceiling}; do not offer it. Save a longer term "
-                "or a lower payment that fits the ceiling"
-            )
-
-    async def _require_offer_term(
-        self, profile: Profile, loan: Mapping[str, object], max_term_months: int
-    ) -> None:
-        """An offer that leaves the term open is kept at its shortest comfortable term: a longer
-        one only adds interest. The simulation already refused a loan of several tracks."""
-        tracks = loan["tracks"]
-        assert isinstance(tracks, list)
-        (track,) = tracks
-        bounds = await self._deps.engine.assess(profile.engine_profile())
+    async def _offer_term(
+        self, check: Check, loan: Mapping[str, object], max_term_months: int
+    ) -> int:
+        """An offer that leaves the term open is priced at the check's confirmed term, or at the
+        offer's maximum when that is shorter. Before a term is confirmed it takes the term the
+        engine's search over its own track gives: without a ceiling the shortest whose first
+        payment is under the target, with one the shortest that fits it, else the longest. The
+        simulation already refused a loan of several tracks."""
+        if check.term_months is not None:
+            return min(check.term_months, max_term_months)
+        ceiling = check.payment_ceiling
+        (track,) = cast(list[Mapping[str, object]], loan["tracks"])
+        longest = {**track, "term_months": max_term_months}
+        engine = self._deps.engine
         try:
-            term = await self._deps.engine.offer_term(
-                {**track, "term_months": max_term_months}, bounds.payment_ceiling
-            )
+            if ceiling is None:
+                proposed = await engine.propose_offer_term(longest, FIRST_PAYMENT_TARGET)
+                term = proposed.term_months
+            elif ceiling == 0:
+                # No term fits a zero ceiling, and the engine's search takes a positive one.
+                term = max_term_months
+            else:
+                term = (await engine.offer_term(longest, ceiling)).term_months
         except EngineError as error:
             raise ToolError(
                 f"The engine refused the offer: {error}; correct it and call save_option again"
             ) from None
-        if track["term_months"] != term.term_months:
-            raise ToolError(
-                f"this offer allows up to {max_term_months} months and the term to save is "
-                f"{term.term_months}; save it with term_months {term.term_months}. If the person "
-                "chose this term themselves, omit max_term_months"
-            )
+        return term
 
     async def ask(self, question: Mapping[str, object], lead_in: str | None) -> str:
         choices = question["choices"]
@@ -218,14 +417,11 @@ class CheckTools:
                 "yet, so do what the person asked in this check"
             )
         field = question["field"]
-        profile, _ = await self._deps.profiles.get(self._user_id)
-        known = asdict(profile)
-        if field in known and known[field] is not None:
+        known = _known_fields(await self._check())
+        if field in known:
             raise ToolError(
                 f"{field} is already known: {_summary_value(known[field])}; do not ask for it again"
             )
-        if field == "variable_income_minimum" and profile.variable_income == 0:
-            raise ToolError("variable_income_minimum is not needed: the variable income is 0")
         await self._deps.sink.emit(
             self._check_id, QUESTION_ASKED, {"question": question, "lead_in": lead_in}
         )
@@ -243,12 +439,7 @@ class CheckTools:
             points, as_of = market.prime, market.rate_as_of
         else:
             points, as_of = market.cpi_change, market.cpi_as_of
-        data = {
-            "series": series,
-            "as_of": as_of.isoformat(),
-            "points": [{"month": p.month.isoformat(), "value": str(p.value)} for p in points],
-        }
-        await self._deps.sink.emit(self._check_id, CHART_SHOWN, data)
+        await self._deps.sink.emit(self._check_id, CHART_SHOWN, chart_data(series, points, as_of))
         return (
             f"The {series} chart of {len(points)} months, {points[0].month:%Y-%m} to "
             f"{points[-1].month:%Y-%m}, is on the person's screen under its own title; do not "
@@ -260,19 +451,15 @@ class CheckTools:
         preferred_option_id: str,
         reasoning: str,
         alternative_option_id: str | None = None,
-        *,
-        person_accepts_smaller_cushion: bool = False,
     ) -> str:
-        profile, profile_updated_at = await self._deps.profiles.get(self._user_id)
-        check = await self._deps.checks.get(self._user_id, self._check_id)
-        missing = [*profile.missing(), *(["goal"] if check.goal is None else [])]
-        if missing:
-            raise ToolError(
-                "A recommendation needs the complete profile and the goal; ask the person for: "
-                + ", ".join(missing)
-            )
-        assert check.goal is not None and profile_updated_at is not None
-        assert profile.savings is not None
+        """Without a ceiling the recommendation is on the merits and recorded unchecked; with
+        one, it is checked against it. Only options for the check's term count: an example of
+        another term is refused, and offers count at any term, since the term's save prices them
+        at it. A named option above the ceiling is refused while a saved option for the term
+        fits; when none does, the person's term stands, so the recommendation is presented above
+        the ceiling and its result names the remedy for the model to offer."""
+        check = await self._check()
+        loan = _require_loan(check, "a recommendation")
         if not reasoning.strip():
             raise ToolError("reasoning is empty; explain why the preferred option fits the person")
         named_ids = ["option_id", preferred_option_id, *filter(None, [alternative_option_id])]
@@ -290,72 +477,165 @@ class CheckTools:
             if alternative_option_id is None
             else await self._option("alternative_option_id", alternative_option_id)
         )
-
-        bounds = await self._deps.engine.assess(profile.engine_profile())
-        sizing = await self._deps.engine.size(check.goal.price, profile.savings, bounds.min_cushion)
-        _check_bounds(
-            bounds,
-            sizing,
-            [preferred] if alternative is None else [preferred, alternative],
-            person_accepts_smaller_cushion,
-        )
-        borrowed = _as_borrowed(sizing, _principal(preferred.loan))
-        if preferred.source == "published_average":
-            await self._require_no_fitting_offer(
-                bounds, min(sizing.loan_amount, borrowed.loan_amount)
+        named = [preferred] if alternative is None else [preferred, alternative]
+        for option in named:
+            principal = _principal(option.loan)
+            if principal != loan.amount:
+                raise ToolError(
+                    f"option {option.id} borrows {principal}, not the check's loan amount of "
+                    f"{loan.amount}; recommend options of the loan amount, saving them with "
+                    "save_option first"
+                )
+        for option in named:
+            if not _for_term(option, check.term_months):
+                raise ToolError(
+                    f"option {option.id} is an example for another term than the check's "
+                    f"{check.term_months} months; recommend options for the check's term"
+                )
+        options = [
+            option
+            for option in await self._deps.options.list(self._check_id)
+            if _principal(option.loan) == loan.amount and _for_term(option, check.term_months)
+        ]
+        ceiling = check.payment_ceiling
+        above_ceiling = None
+        if ceiling is not None and not all(_fits(option, ceiling) for option in named):
+            above_ceiling = await self._above_ceiling(
+                check, loan, ceiling, preferred, alternative, options
             )
-        sizing = borrowed
+        if preferred.source == "published_average":
+            _require_no_fitting_offer(options, loan.amount, ceiling)
 
         recommendation = Recommendation(
             check_id=self._check_id,
             preferred_option_id=preferred.id,
             alternative_option_id=alternative_option_id,
             reasoning=reasoning,
-            loan_amount=sizing.loan_amount,
-            payment_ceiling=bounds.payment_ceiling,
-            min_cushion=bounds.min_cushion,
-            cushion_kept=sizing.cushion_kept,
+            loan_amount=loan.amount,
+            payment_ceiling=ceiling,
             created_at=self._deps.clock(),
         )
         await self._deps.recommendations.save(recommendation)
-        await self._deps.checks.snapshot_profile(self._check_id, at=profile_updated_at)
         await self._deps.sink.emit(
             self._check_id,
             RECOMMENDATION_PRESENTED,
             {
-                "bounds": _json_ready(asdict(bounds)),
-                "sizing": _json_ready(asdict(sizing)),
+                "loan_amount": str(loan.amount),
+                "payment_ceiling": _json_value(ceiling),
+                "ceiling_source": check.ceiling_source,
+                "checked": recommendation.checked,
                 "preferred": _option_data(preferred),
                 "alternative": None if alternative is None else _option_data(alternative),
                 "reasoning": reasoning,
             },
         )
-        return summary(
-            {
-                "recommendation": "presented",
-                "preferred_option_id": preferred.id,
-                "alternative_option_id": alternative_option_id,
-                "loan_amount": sizing.loan_amount,
-                "payment_ceiling": bounds.payment_ceiling,
-                "min_cushion": bounds.min_cushion,
-                "cushion_kept": sizing.cushion_kept,
-            }
+        data: dict[str, object] = {
+            "recommendation": "presented",
+            "preferred_option_id": preferred.id,
+            "alternative_option_id": alternative_option_id,
+            "loan_amount": loan.amount,
+            "payment_ceiling": ceiling,
+            "checked": recommendation.checked,
+        }
+        if above_ceiling is not None:
+            data["next_step"] = above_ceiling
+        return summary(data)
+
+    async def _above_ceiling(
+        self,
+        check: Check,
+        loan: LoanRequest,
+        ceiling: Decimal,
+        preferred: Option,
+        alternative: Option | None,
+        options: list[Option],
+    ) -> str:
+        """Called when a named option is above the ceiling. Refuses while a saved option for the
+        term fits, saying which argument to change: the preferred option, or only the
+        alternative when the preferred one fits. Otherwise returns what the presented
+        recommendation's result tells the model."""
+        named = [("preferred", preferred), *([("alternative", alternative)] if alternative else [])]
+        payments = "; ".join(
+            f"the {role} option {option.id} has a worst-case monthly payment of "
+            f"{option.summary.risk_payment}, above the payment_ceiling of {ceiling}"
+            for role, option in named
+            if not _fits(option, ceiling)
+        )
+        fitting = [option for option in options if _fits(option, ceiling)]
+        if not fitting:
+            return (
+                f"{payments}, and no saved option for the term fits, so the card marks the "
+                "recommendation above the ceiling; say so in one sentence with both payments. "
+                + await self._remedy(check, loan, ceiling)
+            )
+        if _fits(preferred, ceiling):
+            others = [option.id for option in fitting if option.id != preferred.id]
+            raise ToolError(
+                f"{payments}. The preferred option fits and stands: call present_recommendation "
+                f"again with preferred_option_id {preferred.id} and without "
+                "alternative_option_id"
+                + (f", or with an alternative that fits: {', '.join(others)}" if others else "")
+            )
+        raise ToolError(
+            f"{payments}; "
+            + "; ".join(
+                f"option {option.id} fits with a worst-case monthly payment of "
+                f"{option.summary.risk_payment}"
+                for option in fitting
+            )
+            + "; name an option that fits as preferred_option_id, and no alternative above the "
+            "ceiling"
         )
 
-    async def _require_no_fitting_offer(self, bounds: Bounds, loan_amount: Decimal) -> None:
-        """An example is an average, not a loan anyone can take, so it never beats a real offer
-        that covers the loan within the payment ceiling."""
-        for option in await self._deps.options.list(self._check_id):
-            if (
-                option.source == "offer"
-                and _principal(option.loan) >= loan_amount
-                and option.summary.risk_payment <= bounds.payment_ceiling
-            ):
-                raise ToolError(
-                    f"option {option.id} is a real offer within the bounds and the preferred "
-                    "option is only an example, which nobody can take; prefer the real offer and "
-                    "keep the example as the alternative"
-                )
+    async def _remedy(self, check: Check, loan: LoanRequest, ceiling: Decimal) -> str:
+        """What the model offers the person when no saved option for the term fits the ceiling,
+        in order: the shortest term up to MAX_TERM at which an example track fits, naming the
+        tracks that do; the largest loan that fits at the confirmed term, or at MAX_TERM when the
+        person confirmed none; that no loan fits."""
+        term = await self._comfortable_term(loan.amount, ceiling, any_track=True)
+        if term is not None:
+            tracks = [
+                f"the {track['rate_kind']} track, with a worst-case monthly payment of "
+                f"{figures.risk_payment},"
+                for track, figures in await self._examples(loan.amount, term)
+                if figures.risk_payment <= ceiling
+            ]
+            assert tracks, "the engine's term search found a term at which an example track fits"
+            return (
+                f"At {term} months {' and '.join(tracks)} fits the ceiling: offer the person that "
+                "term once, and once they choose it call set_term, save that option and "
+                f"recommend again. {_PERSON_DECIDES}"
+            )
+        confirmed = MAX_TERM if check.term_months is None else check.term_months
+        largest = await self._largest_loan(ceiling, confirmed)
+        if largest is not None:
+            return (
+                f"no term up to {MAX_TERM} months fits a loan of {loan.amount}; the largest loan "
+                f"that fits at {confirmed} months is {largest}. Tell the person and ask whether to "
+                f"borrow less or put in more own capital. {_PERSON_DECIDES}"
+            )
+        return (
+            f"no loan the simulator prices fits a payment_ceiling of {ceiling}, at any term; "
+            f"tell the person. {_PERSON_DECIDES}"
+        )
+
+    # The engine's ceiling searches take a positive ceiling. A zero ceiling, which finances with no
+    # room for a payment give, fits no loan at any term.
+
+    async def _comfortable_term(
+        self, amount: Decimal, ceiling: Decimal, *, any_track: bool
+    ) -> int | None:
+        if ceiling == 0:
+            return None
+        return await self._deps.engine.comfortable_term(amount, ceiling, any_track=any_track)
+
+    async def _largest_loan(self, ceiling: Decimal, term_months: int) -> Decimal | None:
+        if ceiling == 0:
+            return None
+        return await self._deps.engine.largest_loan(ceiling, term_months)
+
+    async def _check(self) -> Check:
+        return await self._deps.checks.get(self._user_id, self._check_id)
 
     async def _option(self, argument: str, option_id: str) -> Option:
         try:
@@ -367,18 +647,67 @@ class CheckTools:
             ) from None
 
 
-def _as_borrowed(sizing: Sizing, principal: Decimal) -> Sizing:
-    """The loan a recommendation takes may be above the sized one, at the engine's minimum loan or
-    at an offer's amount, and the savings it spares stay in the cushion. It may be below the sized
-    one when the person insists, and the savings that fill the gap come out of the cushion."""
-    above_sized = principal - sizing.loan_amount
-    spared = min(above_sized, sizing.savings_used)
-    return replace(
-        sizing,
-        loan_amount=sizing.loan_amount + above_sized,
-        savings_used=sizing.savings_used - spared,
-        cushion_kept=sizing.cushion_kept + spared,
-    )
+def _require_loan(check: Check, needed_by: str) -> LoanRequest:
+    if check.loan is None:
+        raise ToolError(
+            f"{needed_by} needs the loan; ask the person for the amount and call set_loan first"
+        )
+    return check.loan
+
+
+def _require_term(term_months: int) -> None:
+    if not MIN_TERM <= term_months <= MAX_TERM:
+        raise ToolError(
+            f"term_months must be between {MIN_TERM} and {MAX_TERM}, the terms the simulator "
+            f"prices, not {term_months}; ask the person for a term in that range"
+        )
+
+
+def _known_fields(check: Check) -> dict[str, object]:
+    """The question fields the check already holds a value for."""
+    known: dict[str, object] = {
+        name: value for name, value in asdict(check.finances).items() if value is not None
+    }
+    if check.loan is not None:
+        known["amount"] = check.loan.amount
+        if check.loan.purpose is not None:
+            known["purpose"] = check.loan.purpose
+    if check.payment_ceiling is not None:
+        known["payment_ceiling"] = check.payment_ceiling
+    return known
+
+
+def _for_term(option: Option, term_months: int | None) -> bool:
+    """Whether the option is one for the check's term: an offer always is, since the term's save
+    prices an open offer at it; an example is when every track runs for the term."""
+    if term_months is None or option.source == "offer":
+        return True
+    tracks = cast(list[Mapping[str, object]], option.loan["tracks"])
+    return all(track["term_months"] == term_months for track in tracks)
+
+
+def _fits(option: Option, ceiling: Decimal) -> bool:
+    """A balloon is paid once at the end, so the test reads the recurring payment only."""
+    return option.summary.risk_payment <= ceiling
+
+
+def _require_no_fitting_offer(
+    options: list[Option], loan_amount: Decimal, ceiling: Decimal | None
+) -> None:
+    """An example is an average, not a loan anyone can take, so it never beats a real offer of
+    the loan amount that fits the ceiling, or any such offer while the check has no ceiling."""
+    for option in options:
+        if (
+            option.source == "offer"
+            and _principal(option.loan) == loan_amount
+            and (ceiling is None or _fits(option, ceiling))
+        ):
+            raise ToolError(
+                f"option {option.id} is a real offer of the loan amount"
+                f"{'' if ceiling is None else ' within the ceiling'} and the preferred option is "
+                "only an example, which nobody can take; prefer the real offer and keep the "
+                "example as the alternative"
+            )
 
 
 # The person reads Hebrew only, while the instructions and the tools' results the model reads name
@@ -400,55 +729,6 @@ def _require_hebrew(argument: str, text: object) -> None:
         )
 
 
-def _check_bounds(
-    bounds: Bounds, sizing: Sizing, options: list[Option], person_accepts_smaller_cushion: bool
-) -> None:
-    """The guardrail: refuses when no loan is needed, when an option's worst-case recurring
-    payment exceeds the payment ceiling, or when an option borrows less than the loan amount the
-    engine sized, since the gap comes out of the minimum cushion. The person may accept that gap
-    after being told what it leaves, up to the whole cushion; a loan that leaves the price
-    uncovered even then is always refused. A balloon is paid once at the end, so it is not a
-    recurring payment."""
-    if sizing.loan_amount == 0:
-        raise ToolError(
-            "no loan is needed: the savings cover the price while keeping the minimum cushion of "
-            f"{bounds.min_cushion}; tell the person instead of recommending a loan"
-        )
-    for option in options:
-        principal = _principal(option.loan)
-        from_cushion = sizing.loan_amount - principal
-        if from_cushion > sizing.cushion_kept:
-            raise ToolError(
-                f"option {option.id} borrows {principal}, and the price stays uncovered by "
-                f"{from_cushion - sizing.cushion_kept} even with all the savings, cushion "
-                f"included; the smallest loan that covers it is "
-                f"{sizing.loan_amount - sizing.cushion_kept}. Tell the person, and save an "
-                "option with at least that principal. If that is above the engine's maximum "
-                "loan, no option can cover it: tell the person the purchase is outside the range "
-                "this simulator prices, suggest a cheaper goal, and ask whether more money is "
-                "available"
-            )
-        if from_cushion > 0 and not person_accepts_smaller_cushion:
-            raise ToolError(
-                f"option {option.id} borrows {principal}, below the loan_amount of "
-                f"{sizing.loan_amount} the engine sized; the difference of {from_cushion} would "
-                f"come out of the minimum cushion of {bounds.min_cushion}, leaving "
-                f"{sizing.cushion_kept - from_cushion} aside. Recommend an option with a "
-                f"principal of at least {sizing.loan_amount}. Only when the person asked for the "
-                "smaller loan: tell them these amounts and why the cushion matters, and ask "
-                "whether to keep the smaller loan; if they then insist, call again with "
-                "person_accepts_smaller_cushion true"
-            )
-        risk_payment = option.summary.risk_payment
-        if risk_payment > bounds.payment_ceiling:
-            raise ToolError(
-                f"option {option.id} has a worst-case monthly payment of {risk_payment}, above "
-                f"the payment_ceiling of {bounds.payment_ceiling}; recommend an option within "
-                "the ceiling, or save one with a lower payment (e.g. a longer term or a fixed "
-                "rate)"
-            )
-
-
 def _principal(loan: Mapping[str, object]) -> Decimal:
     """The loan's total principal; raises ToolError when a track's principal is neither a string
     nor an integer, since a binary float cannot carry money exactly."""
@@ -465,6 +745,16 @@ def _principal(loan: Mapping[str, object]) -> Decimal:
             )
         total += Decimal(value)
     return total
+
+
+def _ceiling(amount: object) -> Decimal:
+    ceiling = _amount("payment_ceiling", amount)
+    if ceiling <= 0:
+        raise ToolError(
+            "payment_ceiling must be greater than zero; a person who can pay nothing a month "
+            "cannot take a loan, so tell them so"
+        )
+    return ceiling
 
 
 def _amount(name: str, value: object) -> Decimal:
@@ -488,6 +778,38 @@ def _offer_date(value: str) -> date:
         ) from None
 
 
+# Below these shares of the larger figure a difference is not worth a reason: a monthly payment
+# a few shekels apart is not mentioned, and a total a little apart is "slightly" cheaper.
+NEGLIGIBLE_PAYMENT_SHARE = Decimal("0.02")
+SLIGHT_TOTAL_SHARE = Decimal("0.03")
+
+
+def _terms(option: Option) -> list[object]:
+    return [
+        track["term_months"] for track in cast(list[Mapping[str, object]], option.loan["tracks"])
+    ]
+
+
+def _comparison(option: Option, other: Option) -> str:
+    """How this option's first payment and total differ from another option's, each classed by
+    how it should weigh in the person's reading: a negligible payment gap is not mentioned; a
+    slight total gap is said with "במקצת", since the total still decides; a clear gap plainly."""
+    mine, theirs = option.summary, other.summary
+    payment = _gap(mine.first_payment, theirs.first_payment, NEGLIGIBLE_PAYMENT_SHARE, "negligible")
+    total = _gap(mine.total_paid, theirs.total_paid, SLIGHT_TOTAL_SHARE, "slight")
+    return f"against option {other.id}: first_payment {payment}, total_paid {total}"
+
+
+def _gap(mine: Decimal, theirs: Decimal, share: Decimal, small: str) -> str:
+    """The gap with its direction and class: small below the share of the larger figure."""
+    gap = mine - theirs
+    if gap == 0:
+        return f"equal ({small})"
+    direction = "lower" if gap < 0 else "higher"
+    weight = small if abs(gap) < share * max(mine, theirs) else "clear"
+    return f"{abs(gap).quantize(Decimal(1))} {direction} ({weight})"
+
+
 def _option_data(option: Option) -> dict[str, object]:
     return {
         "option_id": option.id,
@@ -495,6 +817,7 @@ def _option_data(option: Option) -> dict[str, object]:
         "source": option.source,
         "lender": option.lender,
         "offer_date": _json_value(option.offer_date),
+        "max_term_months": option.max_term_months,
         "figures": option.summary.to_json(),
     }
 
@@ -522,22 +845,19 @@ def _json_value(value: object) -> object:
     return value
 
 
+def finances_figures(finances: Finances) -> dict[str, object]:
+    """Each figure of the finances, or "not told", and the figures still missing."""
+    missing = finances.missing()
+    return {
+        **{
+            name: "not told" if value is None else value for name, value in asdict(finances).items()
+        },
+        "missing": ", ".join(missing) if missing else "none",
+    }
+
+
 def summary(values: Mapping[str, object]) -> str:
     return "\n".join(f"{key}: {_summary_value(value)}" for key, value in values.items())
-
-
-def profile_figures(profile: Profile) -> dict[str, object]:
-    missing = profile.missing()
-    figures: dict[str, object] = {}
-    for name, value in asdict(profile).items():
-        if value is not None:
-            figures[name] = value
-        elif name in missing:
-            figures[name] = "not told"
-        else:
-            figures[name] = "not needed"
-    figures["missing"] = ", ".join(missing) if missing else "none"
-    return figures
 
 
 def _summary_value(value: object) -> str:

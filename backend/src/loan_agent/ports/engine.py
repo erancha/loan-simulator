@@ -1,8 +1,8 @@
-"""The loan engine as the application sees it: affordability, sizing, simulation, suggested
-tracks and the market data, with money as Decimal.
+"""The loan engine as the application sees it: affordability, simulation, suggested tracks, the
+ceiling searches (terms and the largest loan) and the market data, with money as Decimal.
 
 - LoanEngine: the engine calls
-- Bounds, Sizing, Simulation, OfferTerm, MarketSeries: their parsed results
+- Bounds, Simulation, OfferTerm, ProposedTerm, MarketSeries: their parsed results
 - EngineError: a call the engine refused, or a loan of more than one track, which the agent does
   not price yet; the message names the fault
 """
@@ -23,19 +23,8 @@ class EngineError(Exception):
 @dataclass(frozen=True)
 class Bounds:
     payment_ceiling: Decimal
-    min_cushion: Decimal
     reasons: tuple[str, ...]
     """The engine's reason codes for how the ceiling was set, in order."""
-
-
-@dataclass(frozen=True)
-class Sizing:
-    loan_amount: Decimal
-    """May be 0, below the engine's minimum loan, or above its maximum loan: the engine sizes
-    what the purchase needs, not what it can price."""
-    savings_used: Decimal
-    cushion_kept: Decimal
-    spare_savings: Decimal
 
 
 @dataclass(frozen=True)
@@ -50,6 +39,14 @@ class OfferTerm:
     term_months: int
     """The shortest comfortable term of an offer, or its longest term when none is comfortable."""
     comfortable: bool
+
+
+@dataclass(frozen=True)
+class ProposedTerm:
+    term_months: int
+    first_payment: Decimal
+    """The first payment at term_months; the higher of the two example tracks' for a loan
+    without an offer."""
 
 
 @dataclass(frozen=True)
@@ -73,10 +70,8 @@ class MarketSeries:
 @runtime_checkable
 class LoanEngine(Protocol):
     async def assess(self, profile: Mapping[str, object]) -> Bounds:
-        """profile: the engine's Profile arguments, as Profile.engine_profile() gives them."""
+        """profile: the engine's Profile arguments (net_fixed_income, fixed_expenses)."""
         ...
-
-    async def size(self, goal_price: Decimal, savings: Decimal, min_cushion: Decimal) -> Sizing: ...
 
     async def simulate(self, loan: Mapping[str, object]) -> Simulation:
         """loan: the engine's Loan arguments; the agent prices one-track loans only."""
@@ -88,6 +83,28 @@ class LoanEngine(Protocol):
 
     async def offer_term(self, track: Mapping[str, object], payment_ceiling: Decimal) -> OfferTerm:
         """track: an engine Loan track whose term_months is the longest the offer allows."""
+        ...
+
+    async def propose_term(self, principal: Decimal, payment_limit: Decimal) -> ProposedTerm:
+        """The shortest term at which the example tracks both start below payment_limit."""
+        ...
+
+    async def propose_offer_term(
+        self, track: Mapping[str, object], payment_limit: Decimal
+    ) -> ProposedTerm:
+        """track: an engine Loan track whose term_months is the longest the offer allows."""
+        ...
+
+    async def comfortable_term(
+        self, principal: Decimal, payment_ceiling: Decimal, *, any_track: bool
+    ) -> int | None:
+        """The shortest term whose highest payment stays within the ceiling, on every example
+        track or, with any_track, on at least one; None when no term the engine prices fits."""
+        ...
+
+    async def largest_loan(self, payment_ceiling: Decimal, term_months: int) -> Decimal | None:
+        """The largest loan the ceiling carries at the term; None when even the smallest loan
+        the engine prices does not fit."""
         ...
 
     async def market_series(self, months: int) -> MarketSeries:

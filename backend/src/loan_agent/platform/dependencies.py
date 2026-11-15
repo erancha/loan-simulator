@@ -25,14 +25,12 @@ from loan_agent.ports.repositories import (
     CheckEventStore,
     CheckRepository,
     OptionRepository,
-    ProfileRepository,
     RecommendationRepository,
 )
 
 
 @dataclass(frozen=True)
 class Infrastructure:
-    profiles: ProfileRepository
     checks: CheckRepository
     options: OptionRepository
     recommendations: RecommendationRepository
@@ -49,7 +47,6 @@ class Infrastructure:
 
 @dataclass(frozen=True)
 class AppDeps:
-    profiles: ProfileRepository
     checks: CheckRepository
     options: OptionRepository
     recommendations: RecommendationRepository

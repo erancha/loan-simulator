@@ -26,7 +26,7 @@ from langchain_core.messages import AIMessage
 from fakes import NOW, Clock, InMemoryCheckEventStore, InMemoryCheckRepository
 from loan_agent.adapters.memory_bus import InMemoryEventBus
 from loan_agent.application.event_sink import CheckEventSink
-from loan_agent.domain.models import Check
+from loan_agent.domain.models import Check, Finances
 from loan_agent.platform.api.auth import COOKIE
 from loan_agent.platform.api.events import check_frames, live_frame, stored_frame
 from loan_agent.platform.app import signal_shutdown
@@ -172,7 +172,7 @@ class RacingStore(InMemoryCheckEventStore):
 
     def __init__(self) -> None:
         checks = InMemoryCheckRepository()
-        checks.rows["c1"] = Check("c1", "1001", NOW, None, None)
+        checks.rows["c1"] = Check("c1", "1001", NOW, None, None, None, None, Finances())
         super().__init__(checks, Clock())
         self.bus = InMemoryEventBus()
         self.sink = CheckEventSink(self, self.bus)
@@ -214,7 +214,7 @@ class CompletingStore(InMemoryCheckEventStore):
 
     def __init__(self) -> None:
         checks = InMemoryCheckRepository()
-        checks.rows["c1"] = Check("c1", "1001", NOW, None, None)
+        checks.rows["c1"] = Check("c1", "1001", NOW, None, None, None, None, Finances())
         super().__init__(checks, Clock())
         self.bus = InMemoryEventBus()
         self.sink = CheckEventSink(self, self.bus)

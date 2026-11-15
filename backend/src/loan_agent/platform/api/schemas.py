@@ -1,13 +1,22 @@
-"""The JSON bodies of the checks and profile routes. Money travels as decimal strings, both ways,
+"""The JSON bodies of the checks routes. Money travels as decimal strings, both ways,
 so no amount passes through a binary float; dates and datetimes are ISO strings."""
 
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Self
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from loan_agent.domain.models import Check, Goal, Option, OptionFigures, OptionSource, Profile
+from loan_agent.application.check_tools import MAX_TERM, MIN_TERM
+from loan_agent.domain.models import (
+    CeilingSource,
+    Check,
+    Finances,
+    LoanRequest,
+    Option,
+    OptionFigures,
+    OptionSource,
+)
 from loan_agent.domain.models import Recommendation as DomainRecommendation
 
 
@@ -19,7 +28,9 @@ class RecommendationSummary(BaseModel):
     preferred_option_id: str
     alternative_option_id: str | None
     loan_amount: Decimal
-    payment_ceiling: Decimal
+    payment_ceiling: Decimal | None
+    checked: bool
+    """The recommendation was checked against a payment ceiling."""
     created_at: datetime
 
     @classmethod
@@ -29,23 +40,21 @@ class RecommendationSummary(BaseModel):
 
 class Recommendation(RecommendationSummary):
     reasoning: str
-    min_cushion: Decimal
-    cushion_kept: Decimal
 
 
 class CheckSummary(BaseModel):
     id: str
     created_at: datetime
-    goal: Goal | None
+    loan: LoanRequest | None
+    term_months: int | None
+    """The term the person confirmed; None until then."""
     recommendation: RecommendationSummary | None
     recommends_examples_only: bool
     """Every option the recommendation names is an example nobody can take."""
-    profile_stale: bool
     archived: bool
-    """Closed by a profile save that replaced the figures the recommendation was computed from,
-    or by the person; the check is read-only."""
-    restorable: bool
-    """Archived by the person, with figures the profile still has."""
+    """Closed by the person; the check is read-only until restored."""
+    started: bool
+    """The person has sent the check a message; before that it holds only the opening line."""
 
     @classmethod
     def of(
@@ -53,19 +62,19 @@ class CheckSummary(BaseModel):
         check: Check,
         recommendation: DomainRecommendation | None,
         recommends_examples_only: bool,
-        profile_updated_at: datetime | None,
+        started: bool,
     ) -> Self:
         return cls(
             id=check.id,
             created_at=check.created_at,
-            goal=check.goal,
+            loan=check.loan,
+            term_months=check.term_months,
             recommendation=None
             if recommendation is None
             else RecommendationSummary.of(recommendation),
             recommends_examples_only=recommends_examples_only,
-            profile_stale=check.is_stale(profile_updated_at),
             archived=check.archived_at is not None,
-            restorable=check.is_restorable(profile_updated_at),
+            started=started,
         )
 
 
@@ -74,6 +83,8 @@ class OptionView(BaseModel):
     source: OptionSource
     lender: str | None
     offer_date: date | None
+    max_term_months: int | None
+    """The longest term a real offer allows, when it leaves the term open."""
     loan: dict[str, Any]
     """The engine's Loan arguments the option was priced with."""
     figures: OptionFigures
@@ -86,6 +97,7 @@ class OptionView(BaseModel):
             source=option.source,
             lender=option.lender,
             offer_date=option.offer_date,
+            max_term_months=option.max_term_months,
             loan=dict(option.loan),
             figures=option.summary,
             created_at=option.created_at,
@@ -95,13 +107,32 @@ class OptionView(BaseModel):
 class CheckView(BaseModel):
     id: str
     created_at: datetime
-    goal: Goal | None
+    loan: LoanRequest | None
+    term_months: int | None
+    payment_ceiling: Decimal | None
+    ceiling_source: CeilingSource | None
+    finances: Finances
     options: list[OptionView]
     """Oldest first."""
     recommendation: Recommendation | None
-    profile_stale: bool
-    """The profile was saved after the version the recommendation was computed from."""
     archived: bool
+
+    @classmethod
+    def of(
+        cls, check: Check, options: list[Option], recommendation: DomainRecommendation | None
+    ) -> Self:
+        return cls(
+            id=check.id,
+            created_at=check.created_at,
+            loan=check.loan,
+            term_months=check.term_months,
+            payment_ceiling=check.payment_ceiling,
+            ceiling_source=check.ceiling_source,
+            finances=check.finances,
+            options=[OptionView.of(option) for option in options],
+            recommendation=None if recommendation is None else Recommendation.of(recommendation),
+            archived=check.archived_at is not None,
+        )
 
 
 class Message(BaseModel):
@@ -115,28 +146,27 @@ class Message(BaseModel):
         return text
 
 
-class ProfileView(BaseModel):
-    profile: Profile
-    missing: list[str]
-    """The fields the person has not told yet."""
+class TermCeiling(Message):
+    """A payment ceiling the person typed on the term card, with the line that tells it."""
 
-    @classmethod
-    def of(cls, profile: Profile) -> Self:
-        return cls(profile=profile, missing=list(profile.missing()))
+    payment_ceiling: Decimal = Field(gt=0)
 
 
-class ProfileUpdate(BaseModel):
-    """The fields to replace; a field left out keeps its value."""
+class TermConfirmation(BaseModel):
+    """The term confirmed on the term card, with the payment ceiling typed beside it, if any."""
+
+    term_months: int = Field(ge=MIN_TERM, le=MAX_TERM)
+    payment_ceiling: Decimal | None = Field(default=None, gt=0)
+
+
+class FinancesUpdate(BaseModel):
+    """The figures to replace; a figure left out keeps its value."""
 
     model_config = ConfigDict(extra="forbid")
 
-    savings: str | None = None
     net_fixed_income: str | None = None
-    variable_income: str | None = None
-    variable_income_minimum: str | None = None
     fixed_expenses: str | None = None
-    existing_loan_payments: str | None = None
 
     def sent(self) -> dict[str, object]:
-        """The fields the body named, an explicit null included, which the profile refuses."""
+        """The figures the body named, an explicit null included, which the finances refuse."""
         return self.model_dump(exclude_unset=True)
