@@ -19,9 +19,9 @@ export const CHECKS_HEADING = 'הבדיקות שלי'
 export const TABS_LABEL = 'חלקי העמוד'
 
 export const TABS = [
+  { pane: 'side', label: 'בדיקות' },
   { pane: 'chat', label: 'שיחה' },
   { pane: 'card', label: 'המלצה' },
-  { pane: 'side', label: 'בדיקות' },
 ] as const
 
 export const loadFailed = (message: string) => `לא הצלחנו לטעון את הבדיקות: ${message}`

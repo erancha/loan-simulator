@@ -43,7 +43,7 @@ the two fields in place. The side column is 300px, so an entry's title fits its 
 term its second. The card starts at 470px; dragging the border between it and the conversation, or
 the arrow keys on that border, narrows it to 380px or widens it up to what leaves the conversation
 360px (`check/CardResizer.tsx`), and the browser keeps the width. The conversation takes the rest.
-Below 900px a tab bar ("שיחה", "המלצה", "בדיקות") shows one of the three at a time
+Below 900px a tab bar ("בדיקות", "שיחה", "המלצה") shows one of the three at a time
 (`frontend/src/styles/global.css`).
 
 ## Data flow
