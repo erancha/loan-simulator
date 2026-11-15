@@ -561,6 +561,8 @@ fieldset.field.changed {
   background: var(--panel);
   color: var(--ink);
   font: inherit;
+  /* The longest sample request fits the two rows on a phone at this size. */
+  font-size: calc(1em - 2px);
   resize: vertical;
 }
 
