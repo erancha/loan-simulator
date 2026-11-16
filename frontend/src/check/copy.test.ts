@@ -6,6 +6,7 @@ import {
   checkTitle,
   questionLabel,
   skipLine,
+  withLastMonth,
 } from './copy.ts'
 
 const now = new Date(2026, 9, 29, 22, 40)
@@ -62,4 +63,15 @@ test('checkTitle names the purpose and the amount', () => {
 
 test('a loan without a purpose is titled כללי', () => {
   expect(checkTitle({ purpose: null, amount: '100000' })).toBe('כללי - הלוואה בסך 100,000₪')
+})
+
+test("a reply's line of months gains the loan's last month, once", () => {
+  const today = new Date(2026, 10, 16)
+  expect(withLastMonth('סכום ההלוואה: 60,000 ₪\nמספר החודשים: 24\nבדקתי', today)).toBe(
+    'סכום ההלוואה: 60,000 ₪\nמספר החודשים: 24 (עד 11/2028)\nבדקתי',
+  )
+  expect(withLastMonth('מספר החודשים: 24 (עד 11/2028)', today)).toBe(
+    'מספר החודשים: 24 (עד 11/2028)',
+  )
+  expect(withLastMonth('ל-24 חודשים', today)).toBe('ל-24 חודשים')
 })

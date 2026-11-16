@@ -11,6 +11,7 @@ import {
   SEND_BUTTON,
   THINKING,
   cloneLine,
+  withLastMonth,
 } from './copy.ts'
 import { ArchiveNote } from './ArchiveNote.tsx'
 import { CloneNote } from './CloneNote.tsx'
@@ -88,6 +89,8 @@ export function Chat({
 }: Props) {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
+  // The date the replies' term lines count the loan's last month from, taken as the chat opens.
+  const [today] = useState(() => new Date())
   const running = turn === 'running'
   const messages = entries.filter(isMessage)
   const last = messages.at(-1)
@@ -218,7 +221,7 @@ export function Chat({
                 <CloneNote cloneId={entry.cloneId} onOpenCheck={onOpenCheck} />
               ) : (
                 <p className={`bubble bubble-${entry.role}`}>
-                  {entry.role === 'assistant' ? withValues(entry.text) : entry.text}
+                  {entry.role === 'assistant' ? withValues(withLastMonth(entry.text, today)) : entry.text}
                   {!entry.complete && <span className="caret" aria-hidden="true" />}
                 </p>
               )}

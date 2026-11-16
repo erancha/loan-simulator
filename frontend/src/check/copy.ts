@@ -76,12 +76,31 @@ export function termText(months: number): string {
 /** The title over the decision line: it sums up the loan being looked for. */
 export const DECISION_TITLE = 'מה מחפשים'
 
+/** The loan's last month as MM/YYYY, for a loan that starts the month after `today`. */
+export function lastMonthText(termMonths: number, today: Date): string {
+  const last = new Date(today.getFullYear(), today.getMonth() + termMonths, 1)
+  return `${String(last.getMonth() + 1).padStart(2, '0')}/${last.getFullYear()}`
+}
+
+/** The term line of a reply's data block, "מספר החודשים: 60", unless it names its last month. */
+const REPLY_TERM_LINE = /מספר החודשים: (\d+)(?!\d| \(עד)/g
+
+/** A reply with its term line followed by the loan's last month, as the card's decision shows. */
+export function withLastMonth(text: string, today: Date): string {
+  return text.replace(
+    REPLY_TERM_LINE,
+    (line: string, months: string) => `${line} (עד ${lastMonthText(Number(months), today)})`,
+  )
+}
+
 export function decisionText(
   loanAmount: string,
   termMonths: number,
   monthlyPayment: string,
+  today: Date,
 ): string {
-  return `הלוואה של ${loanAmount} ל-${termText(termMonths)}, כ-${monthlyPayment} בחודש.`
+  const term = `${termText(termMonths)} (עד ${lastMonthText(termMonths, today)})`
+  return `הלוואה של ${loanAmount} ל-${term}, כ-${monthlyPayment} בחודש.`
 }
 
 /** Under the decision of a recommendation made without a payment ceiling. */

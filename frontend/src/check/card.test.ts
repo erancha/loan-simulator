@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { CheckEvent } from '../api/types.ts'
 import {
   ceilingSet,
@@ -10,6 +10,15 @@ import {
 } from '../test/fixtures.ts'
 import { buildCard } from './card.ts'
 import { initialState, reduce } from './events.ts'
+
+// The loan starts the month after the card is shown: shown in 11/2026, 36 months run to 11/2029.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date(2026, 10, 16))
+})
+afterEach(() => {
+  vi.useRealTimers()
+})
 
 function stateOf(...events: CheckEvent[]) {
   return events.reduce(reduce, initialState)
@@ -74,7 +83,7 @@ test('options before a recommendation: listed under others with no decision', ()
 test('the reference recommendation', () => {
   const card = buildCard(stateOf(optionPrime36, optionFixed36, recommendationPrime))
   expect(card.decision).toBe(
-    'הלוואה של 29,000 ₪ ל-36 חודשים, כ-904 ₪ בחודש.',
+    'הלוואה של 29,000 ₪ ל-36 חודשים (עד 11/2029), כ-904 ₪ בחודש.',
   )
   expect(card.recommended).toEqual([PRIME_CARD, FIXED_CARD])
   expect(card.others).toBeNull()

@@ -281,6 +281,7 @@ export function buildCard(state: CheckState): CardModel {
       formatShekels(recommendation.loan_amount),
       preferred.loan.tracks[0].term_months,
       formatShekels(preferred.figures.first_payment),
+      new Date(),
     ),
     ...checkOf(state, recommendation, preferred),
     ceiling,

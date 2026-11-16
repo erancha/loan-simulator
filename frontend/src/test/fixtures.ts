@@ -273,8 +273,10 @@ export const recommendationPrime: EventOf<'recommendation.presented'> = {
   } satisfies RecommendationPresented,
 }
 
-/** The card's decision sentence for `recommendationPrime`. */
-export const REFERENCE_DECISION = 'הלוואה של 29,000 ₪ ל-36 חודשים, כ-904 ₪ בחודש.'
+/** The card's decision sentence for `recommendationPrime`; its last month follows the date the
+ * test runs on. */
+export const REFERENCE_DECISION =
+  /^הלוואה של 29,000 ₪ ל-36 חודשים \(עד \d{2}\/\d{4}\), כ-904 ₪ בחודש\.$/
 
 export function checkArchived(seq: number): EventOf<'check.archived'> {
   return {
