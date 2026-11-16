@@ -14,6 +14,8 @@ from typing import Any, Protocol, runtime_checkable
 
 MESSAGE_USER = "message.user"
 MESSAGE_DELTA = "message.delta"
+# Live only: a streamed reply the page drops, since it will be rewritten.
+MESSAGE_RETRACTED = "message.retracted"
 MESSAGE_ASSISTANT = "message.assistant"
 TURN_STATUS = "turn.status"
 TURN_FAILED = "turn.failed"

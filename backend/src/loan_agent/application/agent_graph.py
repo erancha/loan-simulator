@@ -8,6 +8,7 @@ ask_term or ask_offer; each check's conversation is one checkpoint thread.
 - delete_conversation, copy_conversation: remove a check's saved conversation, or start
   another check's with its messages
 - last_message: the last message of a check's conversation
+- people_said: the texts of the person's own messages, whose English words a reply may repeat
 - SYSTEM_PROMPT: the Hebrew instructions sent ahead of the messages on every model call, followed
   by the turn_state block of the check's stored loan, ceiling and finances
 - The check tools' argument schemas, with money as decimal strings like the engine's own schema
@@ -17,6 +18,7 @@ the model can only act on the check it is talking about.
 """
 
 import json
+import logging
 import re
 from collections.abc import Sequence
 from importlib.resources import files
@@ -33,14 +35,15 @@ from langgraph.prebuilt import InjectedState, ToolNode, tools_condition
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from loan_agent.application.check_tools import (
-    ENGLISH_WORD,
     ChartSeries,
     CheckTools,
     ToolDeps,
     ToolError,
+    english_words,
 )
 from loan_agent.application.turn_state import turn_state
-from loan_agent.domain.models import OptionSource
+
+log = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (files(__package__) / "prompts" / "system_he.md").read_text(encoding="utf-8")
 
@@ -206,27 +209,36 @@ class LoanArgs(_Args):
 
 class SaveOptionArgs(_Args):
     loan: LoanArgs
-    source: OptionSource = Field(
-        description="'published_average' for a track priced from the Bank of Israel average "
-        "(suggest_tracks), 'offer' for a real offer the person received"
+
+
+class SaveOfferArgs(_Args):
+    tracks: list[TrackArgs] = Field(
+        min_length=1,
+        description="Every track the offer names, each for the whole loan amount: a lender's "
+        "tracks are alternatives, and each is saved as an option of its own",
     )
-    lender: str | None = Field(default=None, description="Who made the offer; offers only")
+    lender: str | None = Field(default=None, description="Who made the offer")
     offer_date: str | None = Field(
-        default=None, description="Date of the offer, ISO like 2026-10-20; offers only"
+        default=None, description="Date of the offer, ISO like 2026-10-20"
     )
     max_term_months: int | None = Field(
         default=None,
         description="The longest term of an offer that leaves the term open ('up to 84 months'), "
-        "with term_months the term to save, which a refusal names; omit when the offer fixes "
-        "the term or the person chose it",
+        "with each track's term_months the term to save, which a refusal names; omit when the "
+        "offer fixes the term or the person chose it",
     )
 
 
 class PresentRecommendationArgs(_Args):
-    preferred_option_id: str = Field(description="option_id from save_option")
+    preferred_option_id: str = Field(description="option_id from save_option or save_offer")
     reasoning: str = Field(description="Why this option fits the person, in Hebrew")
     alternative_option_id: str | None = Field(
         default=None, description="option_id of a second choice, if any"
+    )
+    person_preference: str | None = Field(
+        default=None,
+        description="What the person said that makes the preferred option suit them although "
+        "another of its kind costs less in total, in their words; omit it otherwise",
     )
 
 
@@ -374,16 +386,19 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
         told = {name: value for name, value in fields.items() if value is not None}
         return await _tools_for(config, deps).update_finances(**told)
 
-    async def save_option(
-        loan: LoanArgs,
-        source: str,
+    async def save_option(loan: LoanArgs, config: RunnableConfig) -> str:
+        return await _tools_for(config, deps).save_option(loan.model_dump(exclude_none=True))
+
+    async def save_offer(
+        tracks: list[TrackArgs],
         config: RunnableConfig,
         lender: str | None = None,
         offer_date: str | None = None,
         max_term_months: int | None = None,
     ) -> str:
-        return await _tools_for(config, deps).save_option(
-            loan.model_dump(exclude_none=True), source, lender, offer_date, max_term_months
+        offered = [track.model_dump(exclude_none=True) for track in tracks]
+        return await _tools_for(config, deps).save_offer(
+            offered, lender, offer_date, max_term_months
         )
 
     async def present_recommendation(
@@ -391,9 +406,10 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
         reasoning: str,
         config: RunnableConfig,
         alternative_option_id: str | None = None,
+        person_preference: str | None = None,
     ) -> str:
         return await _tools_for(config, deps).present_recommendation(
-            preferred_option_id, reasoning, alternative_option_id
+            preferred_option_id, reasoning, alternative_option_id, person_preference
         )
 
     async def show_chart(series: str, months: int, config: RunnableConfig) -> str:
@@ -461,11 +477,20 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
         StructuredTool.from_function(
             coroutine=save_option,
             name="save_option",
-            description="Price a loan of the check's loan amount with the engine and keep it as "
-            "an option of this check. Returns its option_id and figures. An offer with "
-            "max_term_months is refused at any term but the one the engine's search over its "
-            "own track gives.",
+            description="Price an example track from suggest_tracks, for the check's loan "
+            "amount, with the engine and keep it as an option of this check. Returns its "
+            "option_id and figures. A real offer is saved with save_offer.",
             args_schema=SaveOptionArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=save_offer,
+            name="save_offer",
+            description="Save a real offer the person received, with every track it names in "
+            "one call: each track is priced for the check's loan amount and kept as an option "
+            "of its own, and when one is refused none is saved. Returns each track's option_id "
+            "and figures. With max_term_months a track is refused at any term but the one the "
+            "engine's search over that track gives.",
+            args_schema=SaveOfferArgs,
         ),
         StructuredTool.from_function(
             coroutine=present_recommendation,
@@ -473,8 +498,9 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
             description="Present the recommendation card: the preferred option and an optional "
             "alternative, with your reasoning. Without a ceiling the card says it is not yet "
             "checked against what the person can pay. Refused, with the reason and the remedy "
-            "to offer, when a named option's worst-case payment is above the ceiling, and when "
-            "an example is preferred over a real offer.",
+            "to offer, when a named option's worst-case payment is above the ceiling, when "
+            "an example is preferred over a real offer, and when another option of the "
+            "preferred one's kind and term fits and costs less in total.",
             args_schema=PresentRecommendationArgs,
         ),
         StructuredTool.from_function(
@@ -563,13 +589,21 @@ def _require_new_calls(reply: AIMessage, messages: Sequence[BaseMessage]) -> Non
         raise RepeatedToolCallsError(f"the model repeated the same calls: {names}")
 
 
-def _correction_for(reply: AIMessage, messages: Sequence[BaseMessage]) -> str | None:
+def people_said(messages: Sequence[BaseMessage]) -> list[str]:
+    """The texts of the person's own messages in a conversation."""
+    return [message.text for message in messages if isinstance(message, HumanMessage)]
+
+
+def _correction_for(reply: AIMessage, messages: Sequence[BaseMessage], check_id: str) -> str | None:
     """What the model must redo before its reply reaches the conversation: a recommendation
-    written without its tool, or English words. A reply is redone once, whatever the second one
-    says, so a turn never loops on a correction."""
+    written without its tool, or English words the person did not write themselves, which are
+    logged as a warning so their source can be found. A reply is redone once, whatever the
+    second one says, so a turn never loops on a correction."""
     if _recommends_without_the_tool(reply, messages):
         return _REDO_THE_RECOMMENDATION
-    if ENGLISH_WORD.search(reply.text):
+    english = english_words(reply.text, people_said(messages))
+    if english:
+        log.warning("reply rejected for English words %s in check %s", ", ".join(english), check_id)
         return _REWRITE_IN_HEBREW
     return None
 
@@ -611,7 +645,7 @@ def build_agent_graph(
         prefix = [SystemMessage(SYSTEM_PROMPT), SystemMessage(block)]
         conversation = [*prefix, *state["messages"]]
         reply = await bound.ainvoke(conversation, config)
-        correction = _correction_for(reply, state["messages"])
+        correction = _correction_for(reply, state["messages"], configurable[_CHECK_ID])
         if correction is not None:
             reply = await bound.ainvoke([*conversation, reply, HumanMessage(correction)], config)
         _require_new_calls(reply, state["messages"])

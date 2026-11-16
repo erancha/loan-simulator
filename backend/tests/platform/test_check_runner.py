@@ -193,6 +193,24 @@ async def test_reply_streams_the_text_so_far_then_stores_the_complete_message(wo
     assert "message.delta" not in [type for type, _ in await stored(world, check.id)]
 
 
+async def test_a_draft_with_english_words_is_retracted_from_the_page(world: World) -> None:
+    model = ScriptedChatModel(replies=[AIMessage("ההפרש slight בסך הכול"), AIMessage(REPLY)])
+    checks = runner(world, model)
+    check = await checks.create(PERSON)
+
+    async with world.bus.subscribe(check_channel(check.id)) as queue:
+        await checks.send(PERSON, check.id, "שלום")
+        await checks.drain()
+        live = published(queue)
+
+    (retracted,) = [event["data"] for event in live if event["type"] == "message.retracted"]
+    deltas = [event["data"] for event in live if event["type"] == "message.delta"]
+    drafts = [delta["text"] for delta in deltas if delta["message_id"] == retracted["message_id"]]
+    assert all("slight" not in text for text in drafts)
+    assistant = [event["data"]["text"] for event in live if event["type"] == "message.assistant"]
+    assert assistant == [REPLY]
+
+
 async def test_tool_call_chunks_are_not_published(world: World) -> None:
     async def sized() -> str:
         return "loan_amount: 80000"
@@ -506,16 +524,11 @@ async def test_saved_sibling_of_a_failed_call_is_reported_as_possibly_done(world
             await asyncio.sleep(0)
         raise EngineError("engine unreachable")
 
-    save = {
-        "loan": {"tracks": [PRIME_TRACK]},
-        "source": "offer",
-        "lender": "Bank",
-        "offer_date": "2026-10-20",
-    }
+    save = {"tracks": [PRIME_TRACK], "lender": "Bank", "offer_date": "2026-10-20"}
     parallel = AIMessage(
         content="",
         tool_calls=[
-            {"name": "save_option", "args": save, "id": "call-save", "type": "tool_call"},
+            {"name": "save_offer", "args": save, "id": "call-save", "type": "tool_call"},
             {
                 "name": "size_loan",
                 "args": {"goal_price": "1"},

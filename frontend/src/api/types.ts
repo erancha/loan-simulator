@@ -215,6 +215,7 @@ export type TurnStatus = 'running' | 'idle'
 export const CHECK_EVENT_TYPES = [
   'message.user',
   'message.delta',
+  'message.retracted',
   'message.assistant',
   'loan.set',
   'term.set',
@@ -241,7 +242,8 @@ interface Sequenced<Type extends EventTypeName, Data> {
   at?: string
 }
 
-/** `message.delta` is the only event without a sequence number; its text is cumulative. */
+/** `message.delta` and `message.retracted` are the events without a sequence number; a delta's
+ * text is cumulative. */
 /** A market series to draw: the prime in annual percent, or the CPI's monthly change in percent;
  * values are decimal strings, oldest month first. */
 export interface ChartShown {
@@ -253,6 +255,8 @@ export interface ChartShown {
 export type CheckEvent =
   | Sequenced<'message.user', { text: string }>
   | { type: 'message.delta'; data: { message_id: string; text: string }; seq: null }
+  /** Live only: a streamed reply the page drops, since the assistant rewrites it. */
+  | { type: 'message.retracted'; data: { message_id: string }; seq: null }
   | Sequenced<'message.assistant', { message_id: string; text: string }>
   | Sequenced<'loan.set', LoanRequest>
   | Sequenced<'term.set', { term_months: number }>

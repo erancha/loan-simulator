@@ -12,11 +12,12 @@ import {
   OFFER_MAX_TRACKS,
   OFFER_MONTHS_INVALID,
   OFFER_MONTHS_LABEL,
-  OFFER_RATE_INVALID,
   OFFER_REMOVE_TRACK,
+  OFFER_TRACK_REPEATED,
   offerKindBox,
   offerLine,
   offerRateBox,
+  offerRateInvalid,
 } from './copy.ts'
 import type { QuestionEntry } from './events.ts'
 import { QuestionBubble } from './QuestionBubble.tsx'
@@ -72,7 +73,7 @@ test('an empty form marks the missing boxes and sends nothing', async () => {
   const onAnswer = form(EMPTY)
   await user.click(proceed())
   expect(screen.getByText(OFFER_LENDER_MISSING)).toBeInTheDocument()
-  expect(screen.getByText(OFFER_RATE_INVALID)).toBeInTheDocument()
+  expect(screen.getByText(offerRateInvalid('prime_plus'))).toBeInTheDocument()
   expect(screen.getByText(OFFER_MONTHS_INVALID)).toBeInTheDocument()
   expect(onAnswer).not.toHaveBeenCalled()
 })
@@ -103,7 +104,7 @@ test('a minus typed on a prime row turns it into prime minus; a fixed rate keeps
   await user.type(rateBox(2), '-3')
   expect(rateBox(2)).toHaveValue('-3')
   await user.click(proceed())
-  expect(screen.getByText(OFFER_RATE_INVALID)).toBeInTheDocument()
+  expect(screen.getByText(offerRateInvalid('fixed'))).toBeInTheDocument()
   expect(onAnswer).not.toHaveBeenCalled()
 })
 
@@ -166,7 +167,34 @@ test('a percentage above 30 and a lender of spaces are refused', async () => {
   await user.type(rateBox(1), '31')
   await user.click(proceed())
   expect(screen.getByText(OFFER_LENDER_MISSING)).toBeInTheDocument()
-  expect(screen.getByText(OFFER_RATE_INVALID)).toBeInTheDocument()
+  expect(screen.getByText(offerRateInvalid('prime_plus'))).toBeInTheDocument()
+  expect(onAnswer).not.toHaveBeenCalled()
+})
+
+test('a margin under prime is refused above 1.5, where it would pass the Bank of Israel rate', async () => {
+  const user = userEvent.setup()
+  const onAnswer = form({ ...EMPTY, lender: 'הבנק', max_term_months: 60 })
+  await user.selectOptions(kindBox(1), 'prime_minus')
+  await user.type(rateBox(1), '1.6')
+  await user.click(proceed())
+  expect(screen.getByText(offerRateInvalid('prime_minus'))).toHaveTextContent('בין 0 ל-1.5')
+  expect(onAnswer).not.toHaveBeenCalled()
+  await user.clear(rateBox(1))
+  await user.type(rateBox(1), '1.5')
+  await user.click(proceed())
+  expect(onAnswer.mock.calls[0][0].line).toContain('(1) פריים מינוס 1.5%, לא צמוד למדד.')
+})
+
+test('a track that repeats an earlier row is refused', async () => {
+  const user = userEvent.setup()
+  const onAnswer = form({ ...EMPTY, lender: 'הארי פוטר', max_term_months: 77 })
+  await user.selectOptions(kindBox(1), 'prime_minus')
+  await user.type(rateBox(1), '1.2')
+  await user.click(screen.getByRole('button', { name: OFFER_ADD_TRACK }))
+  await user.selectOptions(kindBox(2), 'prime_minus')
+  await user.type(rateBox(2), '1.20')
+  await user.click(proceed())
+  expect(screen.getByText(OFFER_TRACK_REPEATED)).toBeInTheDocument()
   expect(onAnswer).not.toHaveBeenCalled()
 })
 

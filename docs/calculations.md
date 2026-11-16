@@ -62,7 +62,8 @@ window as long as its term. The constants live in `domain/assumptions.py`.
 
 The base path gives today's payment and the expected total cost. The rate is held flat at
 today's value: the fixed rate, or the current Bank of Israel rate + 1.5 + the track's spread for
-a prime track. A CPI-linked track is indexed by 2% a year, `(1.02)^(1/12) - 1` per month, the
+a prime track. The spread runs from -1.5, prime minus its whole margin, which leaves the
+Bank of Israel rate itself, up to 20. A CPI-linked track is indexed by 2% a year, `(1.02)^(1/12) - 1` per month, the
 middle of the Bank of Israel's 1-3% inflation target.
 
 ### Windows
@@ -195,5 +196,5 @@ An offer that leaves the term open ("up to 84 months") goes through the same sea
 own rate: 6-month steps below its maximum, then the maximum itself. Without a ceiling it is the
 first term whose first payment is under 1,000 ₪ (`propose_offer_term`); with one, the first that
 fits it (`shortest_comfortable_offer_term`); in either case the maximum when none does. A longer
-term only adds interest, so the offer is kept at that term, and `save_option` refuses it at any
-other.
+term only adds interest, so the offer is kept at that term, and `save_offer` refuses it at any
+other. Each track of an offer is searched on its own, since each is saved as an option of its own.

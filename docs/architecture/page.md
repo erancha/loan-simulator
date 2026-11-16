@@ -77,7 +77,8 @@ values for screen readers. The question is live while it is the last entry and n
 the person's next message closes it; a running turn hides its controls until the turn ends. A closed
 question stays in the conversation as text. Stored events carry a sequence number and are applied
 once; a partial reply (`message.delta`) carries the whole reply so far and is dropped when its
-complete message has already arrived. The conversation and the card both render from that state. A
+complete message has already arrived, and `message.retracted` removes a partial reply the
+assistant is rewriting. The conversation and the card both render from that state. A
 401 on any call returns the page to sign-in. The browser retries a dropped stream by itself but
 closes it for good on a response it will not retry; the page treats any such close, a 401 among
 them, as signed out.
@@ -166,7 +167,8 @@ while the conversation and the figures panel keep working.
 
 **Options after the latest recommendation.** The reducer keeps the ids of options saved after the
 latest recommendation that it does not name. The card lists the recommended and alternative
-options first. The remaining options form one group, titled "הצעות חדשות, עוד לא נכללו בהמלצה"
+options first. The remaining options form one group, real offers before samples and each
+cheapest in total first, titled "הצעות חדשות, עוד לא נכללו בהמלצה"
 when every one of them was saved after the latest recommendation and "אפשרויות נוספות" when any
 is older. Before any recommendation every option sits in that group under "האפשרויות שנבדקו", and
 the card has no decision sentence. The group leaves out a sample made for a term other than the
@@ -231,7 +233,9 @@ in a moment.
 
 The agent serves the built page. When `AGENT_FRONTEND_DIST` names a folder, `_mount_frontend` in
 `platform/app.py` mounts it at `/` after the API routers, so API paths win, and refuses to start
-when the folder has no `index.html`. The page and the API share one origin, which the sign-in
+when the folder has no `index.html`. Its HTML goes out with `Cache-Control: no-cache`, so the
+first load after a deploy runs the new build; the other files carry a content hash in their
+names, so a cached copy is never stale. The page and the API share one origin, which the sign-in
 cookie needs ([sign-in.md](../sign-in.md)).
 
 `backend/Dockerfile` has a Node stage that installs the lockfile and runs the build, and copies

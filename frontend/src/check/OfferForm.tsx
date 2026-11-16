@@ -15,14 +15,15 @@ import {
   OFFER_MONTHS_LABEL,
   OFFER_MONTHS_UNIT,
   OFFER_NOTE,
-  OFFER_RATE_INVALID,
   OFFER_REMOVE_TRACK,
+  OFFER_TRACK_REPEATED,
   OFFER_TRACKS_LABEL,
   type OfferKind,
   type OfferTrack,
   offerKindBox,
   offerLine,
   offerRateBox,
+  offerRateInvalid,
   questionText,
   TERM_MIN_MONTHS,
 } from './copy.ts'
@@ -56,14 +57,14 @@ function rowOf(track: OfferTrackDraft): Omit<Row, 'key'> {
 
 /**
  * The percentage in a box, "3,5 %" read as "3.5" and a stray separator at either end dropped, as a
- * phone's keyboard leaves one; null when it is no percent the engine prices.
+ * phone's keyboard leaves one; null when it is no percent the engine prices for the row's kind.
  */
-function typedRate(text: string): string | null {
+function typedRate(kind: OfferKind, text: string): string | null {
   const rate = text
     .replace(/[\s%]/g, '')
     .replace(',', '.')
     .replace(/^[.,]+|[.,]+$/g, '')
-  return /^\d+(\.\d+)?$/.test(rate) && Number(rate) <= OFFER_MAX_RATE ? rate : null
+  return /^\d+(\.\d+)?$/.test(rate) && Number(rate) <= OFFER_MAX_RATE[kind] ? rate : null
 }
 
 /**
@@ -75,6 +76,24 @@ function typedRow(kind: OfferKind, text: string): Partial<Row> {
   return kind === 'fixed' || unsigned === text
     ? { rate: text }
     : { kind: 'prime_minus', rate: unsigned }
+}
+
+/**
+ * Whether a row offers the same track as an earlier one: the same kind, percentage and linkage,
+ * "1.2" and "1.20" being one percentage. A lender's tracks are alternatives, so a repeat adds none.
+ */
+function repeatsAnEarlierRow(rows: Row[], rates: (string | null)[], index: number): boolean {
+  const rate = rates[index]
+  if (rate === null) return false
+  return rows
+    .slice(0, index)
+    .some(
+      (earlier, at) =>
+        earlier.kind === rows[index].kind &&
+        earlier.linked === rows[index].linked &&
+        rates[at] !== null &&
+        Number(rates[at]) === Number(rate),
+    )
 }
 
 /** The whole number of months in a box; null when it is none an offer can allow. */
@@ -119,9 +138,11 @@ export function OfferForm({ entry, question, live, onAnswer }: Props) {
   const [busy, setBusy] = useState(false)
 
   const named = lender.trim()
-  const rates = rows.map((row) => typedRate(row.rate))
+  const rates = rows.map((row) => typedRate(row.kind, row.rate))
+  const repeated = rows.map((_row, index) => repeatsAnEarlierRow(rows, rates, index))
   const period = typedMonths(months)
-  const refused = named === '' || rates.includes(null) || period === null
+  const refused =
+    named === '' || rates.includes(null) || repeated.includes(true) || period === null
 
   function change(key: number, update: Partial<Row>) {
     setRows(rows.map((row) => (row.key === key ? { ...row, ...update } : row)))
@@ -219,8 +240,9 @@ export function OfferForm({ entry, question, live, onAnswer }: Props) {
                 )}
               </div>
               {tried && rates[index] === null && (
-                <p className="field-error">{OFFER_RATE_INVALID}</p>
+                <p className="field-error">{offerRateInvalid(row.kind)}</p>
               )}
+              {tried && repeated[index] && <p className="field-error">{OFFER_TRACK_REPEATED}</p>}
             </div>
           ))}
           {rows.length < OFFER_MAX_TRACKS && (

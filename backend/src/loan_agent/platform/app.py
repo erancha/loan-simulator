@@ -31,9 +31,10 @@ from typing import Any
 
 import structlog
 from fastapi import FastAPI, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
+from starlette.types import Scope
 
 from loan_agent.adapters.chat_model import build_chat_model
 from loan_agent.adapters.engine_mcp import McpLoanEngine
@@ -259,4 +260,16 @@ def _mount_frontend(app: FastAPI, dist: Path) -> None:
     """Serves the built page's folder at /; refuses a folder without index.html."""
     if not (dist / "index.html").is_file():
         raise FileNotFoundError(f"AGENT_FRONTEND_DIST={dist} has no index.html; build the frontend")
-    app.mount("/", StaticFiles(directory=dist, html=True), name="frontend")
+    app.mount("/", _PageFiles(directory=dist, html=True), name="frontend")
+
+
+class _PageFiles(StaticFiles):
+    """The built page's files. Its HTML is revalidated on every load, so the first load after a
+    deploy runs the new build; the other files are named by their content hash, so a cached copy
+    is never stale."""
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        response = await super().get_response(path, scope)
+        if response.media_type == "text/html":
+            response.headers["Cache-Control"] = "no-cache"
+        return response

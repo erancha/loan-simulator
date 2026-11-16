@@ -3,21 +3,23 @@ payment ceiling and the person's finances, to ask the person a question and to p
 recommendation, with the guardrail that keeps a recommendation honest.
 
 - ToolDeps: the ports, the clock and the id generator the tools act through
-- CheckTools: set_loan, set_term, set_ceiling, update_finances, save_option and
-  present_recommendation, each returning a compact key: value summary for the model and emitting
-  an event for the page; ask, ask_term and ask_offer, emitting a question for the page and
-  returning ASKED_RESULT, after which the turn ends; show_chart, emitting a market series for
-  the page
+- CheckTools: set_loan, set_term, set_ceiling, update_finances, save_option (an example),
+  save_offer (each track of a real offer as an option of its own) and present_recommendation,
+  each returning a compact key: value summary for the model and emitting an event for the page;
+  ask, ask_term and ask_offer, emitting a question for the page and returning ASKED_RESULT,
+  after which the turn ends; show_chart, emitting a market series for the page
 - The guardrail in present_recommendation: every named option borrows the loan amount; with a
   ceiling, every one's worst-case recurring payment fits it, and a refusal names the remedy to
-  offer the person; an example never beats a real offer
+  offer the person; an example never beats a real offer; the preferred option is the cheapest of
+  its source and term that fits, unless the person said what makes a dearer one suit them
 - ToolError: a refusal whose message tells the model what is wrong and what to do next
-- ENGLISH_WORD: what marks text the person would see as not Hebrew
+- ENGLISH_WORD, english_words: what marks text the person would see as not Hebrew, and the
+  English words of a reply that the person did not write themselves
 - summary, finances_figures: the key: value text the model reads, and the finances' part of it
 """
 
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
@@ -38,7 +40,13 @@ from loan_agent.domain.models import (
     OptionSource,
     Recommendation,
 )
-from loan_agent.ports.engine import EngineError, LoanEngine, MarketPoint, ProposedTerm
+from loan_agent.ports.engine import (
+    EngineError,
+    LoanEngine,
+    MarketPoint,
+    ProposedTerm,
+    Simulation,
+)
 from loan_agent.ports.events import (
     CEILING_SET,
     CHART_SHOWN,
@@ -54,8 +62,6 @@ from loan_agent.ports.repositories import (
     OptionRepository,
     RecommendationRepository,
 )
-
-_SOURCES: tuple[str, ...] = get_args(OptionSource)
 
 ChartSeries = Literal["prime", "cpi"]
 _CHART_SERIES: tuple[str, ...] = get_args(ChartSeries)
@@ -315,84 +321,116 @@ class CheckTools:
             return summary(data)
         return await self._with_recheck(data)
 
-    async def save_option(
+    async def save_option(self, loan: Mapping[str, object]) -> str:
+        """Saves an example priced from the Bank of Israel average."""
+        (saved,) = await self._save_options([loan], "published_average", None, None, None)
+        return summary(saved)
+
+    async def save_offer(
         self,
-        loan: Mapping[str, object],
-        source: str,
+        tracks: Sequence[Mapping[str, object]],
         lender: str | None = None,
         offer_date: str | None = None,
         max_term_months: int | None = None,
     ) -> str:
-        if source not in _SOURCES:
-            raise ToolError(f"source must be one of {', '.join(_SOURCES)}, not {source!r}")
-        if source != "offer" and max_term_months is not None:
-            raise ToolError("max_term_months belongs to a real offer; omit it for an example")
+        """Saves each track a lender offered as an option of its own, for the whole loan amount:
+        the tracks of an offer are alternatives the person chooses between, and the engine
+        prices a loan of one track."""
+        if not tracks:
+            raise ToolError("tracks is empty; list every track the offer names")
+        for later, track in enumerate(tracks):
+            if track in tracks[:later]:
+                raise ToolError(
+                    f"tracks[{later}] repeats tracks[{tracks.index(track)}]; list each track once"
+                )
+        loans = [{"tracks": [track]} for track in tracks]
+        saved = await self._save_options(loans, "offer", lender, offer_date, max_term_months)
+        lines: dict[str, object] = {
+            f"track {number}": _inline(option) for number, option in enumerate(saved, start=1)
+        }
+        return summary({**lines, "next_step": _COMPARE_THE_OFFER})
+
+    async def _save_options(
+        self,
+        loans: Sequence[Mapping[str, object]],
+        source: OptionSource,
+        lender: str | None,
+        offer_date: str | None,
+        max_term_months: int | None,
+    ) -> list[dict[str, object]]:
+        """Prices every loan before saving any, so a refusal of one saves none of them. Each is
+        refused when it borrows other than the check's loan amount, when an offer that leaves
+        its term open is not at the term _offer_term gives, and when an option of the same terms
+        and figures is already saved. Returns each saved option's id, figures and comparisons
+        with the options of its term."""
+        tool = "save_offer" if source == "offer" else "save_option"
         offered = None if offer_date is None else _offer_date(offer_date)
         check = await self._check()
-        requested = _require_loan(check, "save_option")
-        try:
-            simulation = await self._deps.engine.simulate(loan)
-        except EngineError as error:
-            raise ToolError(
-                f"The engine refused the loan: {error}; correct the loan and call save_option again"
-            ) from None
-        principal = _principal(loan)
-        if principal != requested.amount:
-            raise ToolError(
-                f"this loan borrows {principal}, not the check's loan amount of "
-                f"{requested.amount}; save it with a principal of {requested.amount}. If the "
-                "person wants another amount, call set_loan first"
+        requested = _require_loan(check, tool)
+        kept = await self._deps.options.list(self._check_id)
+        priced: list[tuple[Option, Simulation]] = []
+        for index, loan in enumerate(loans):
+            where = f"tracks[{index}]: " if source == "offer" else ""
+            try:
+                simulation = await self._deps.engine.simulate(loan)
+            except EngineError as error:
+                raise ToolError(
+                    f"{where}The engine refused the loan: {error}; correct it and call {tool} again"
+                ) from None
+            principal = _principal(loan)
+            if principal != requested.amount:
+                raise ToolError(
+                    f"{where}this loan borrows {principal}, not the check's loan amount of "
+                    f"{requested.amount}; save it with a principal of {requested.amount}. If the "
+                    "person wants another amount, call set_loan first"
+                )
+            if max_term_months is not None:
+                term = await self._offer_term(check, loan, max_term_months)
+                (track,) = cast(list[Mapping[str, object]], loan["tracks"])
+                if track["term_months"] != term:
+                    raise ToolError(
+                        f"{where}this offer allows up to {max_term_months} months and the term "
+                        f"to save is {term}; save it with term_months {term}. If the person "
+                        "chose this term themselves, omit max_term_months"
+                    )
+            option = Option(
+                id=self._deps.new_id(),
+                check_id=self._check_id,
+                loan=loan,
+                source=source,
+                lender=lender,
+                offer_date=offered,
+                max_term_months=max_term_months,
+                summary=simulation.figures,
+                created_at=self._deps.clock(),
             )
-        if max_term_months is not None:
-            term = await self._offer_term(check, loan, max_term_months)
-            (track,) = cast(list[Mapping[str, object]], loan["tracks"])
-            if track["term_months"] != term:
-                raise ToolError(
-                    f"this offer allows up to {max_term_months} months and the term to save is "
-                    f"{term}; save it with term_months {term}. If the person chose this term "
-                    "themselves, omit max_term_months"
-                )
-        offer_terms = (source, lender, offered, max_term_months)
-        for existing in await self._deps.options.list(self._check_id):
-            same_terms = (
-                existing.source,
-                existing.lender,
-                existing.offer_date,
-                existing.max_term_months,
-            ) == offer_terms
-            if same_terms and existing.summary == simulation.figures:
-                raise ToolError(
-                    f"this option is already saved as option {existing.id}, with the same figures; "
-                    "use that option rather than saving it again"
-                )
-        option = Option(
-            id=self._deps.new_id(),
-            check_id=self._check_id,
-            loan=loan,
-            source=cast(OptionSource, source),
-            lender=lender,
-            offer_date=offered,
-            max_term_months=max_term_months,
-            summary=simulation.figures,
-            created_at=self._deps.clock(),
-        )
-        await self._deps.options.add(option)
-        await self._deps.sink.emit(
-            self._check_id,
-            OPTION_SAVED,
-            {**_option_data(option), "result": simulation.structured},
-        )
-        saved = {"option_id": option.id, **_whole_shekels(asdict(option.summary))}
-        comparisons = [
-            _comparison(option, other)
-            for other in await self._deps.options.list(self._check_id)
-            if other.id != option.id and _terms(other) == _terms(option)
-        ]
-        if comparisons:
-            saved["compared"] = "; ".join(comparisons)
-        if source == "offer":
-            return summary({**saved, "next_step": _COMPARE_THE_OFFER})
-        return summary(saved)
+            for existing in kept:
+                if _same_option(existing, option):
+                    raise ToolError(
+                        f"{where}this option is already saved as option {existing.id}, with the "
+                        "same figures; use that option rather than saving it again"
+                    )
+            priced.append((option, simulation))
+        for option, simulation in priced:
+            await self._deps.options.add(option)
+            await self._deps.sink.emit(
+                self._check_id,
+                OPTION_SAVED,
+                {**_option_data(option), "result": simulation.structured},
+            )
+        every = await self._deps.options.list(self._check_id)
+        saved = []
+        for option, _ in priced:
+            figures = {"option_id": option.id, **_whole_shekels(asdict(option.summary))}
+            comparisons = [
+                _comparison(option, other)
+                for other in every
+                if other.id != option.id and _terms(other) == _terms(option)
+            ]
+            if comparisons:
+                figures["compared"] = "; ".join(comparisons)
+            saved.append(figures)
+        return saved
 
     async def _offer_term(
         self, check: Check, loan: Mapping[str, object], max_term_months: int
@@ -473,9 +511,12 @@ class CheckTools:
         preferred_option_id: str,
         reasoning: str,
         alternative_option_id: str | None = None,
+        person_preference: str | None = None,
     ) -> str:
         """Without a ceiling the recommendation is on the merits and recorded unchecked; with
-        one, it is checked against it. Only options for the check's term count: an example of
+        one, it is checked against it. The preferred option is the cheapest in total of those
+        of its source and term that fit, unless person_preference holds what the person said
+        that makes a dearer one suit them. Only options for the check's term count: an example of
         another term is refused, and offers count at any term, since the term's save prices them
         at it. A named option above the ceiling is refused while a saved option for the term
         fits; when none does, the person's term stands, so the recommendation is presented above
@@ -527,6 +568,18 @@ class CheckTools:
             )
         if preferred.source == "published_average":
             _require_no_fitting_offer(options, loan.amount, ceiling)
+        if person_preference is not None and not person_preference.strip():
+            raise ToolError(
+                "person_preference is empty; omit it, or give what the person said that makes "
+                "the preferred option suit them"
+            )
+        if above_ceiling is None and person_preference is None:
+            _require_the_cheapest(preferred, options, ceiling)
+        shorter = (
+            None
+            if ceiling is None or above_ceiling is not None
+            else await self._shorter_term(preferred, ceiling)
+        )
 
         recommendation = Recommendation(
             check_id=self._check_id,
@@ -559,9 +612,38 @@ class CheckTools:
             "payment_ceiling": ceiling,
             "checked": recommendation.checked,
         }
+        data["preferred_figures"] = _figures(preferred)
+        if alternative is not None:
+            data["alternative_figures"] = _figures(alternative)
+        if ceiling is not None and above_ceiling is None:
+            data["ceiling_margin"] = _margin(preferred, ceiling)
         if above_ceiling is not None:
             data["next_step"] = above_ceiling
+        elif shorter is not None:
+            data["next_step"] = shorter
         return summary(data)
+
+    async def _shorter_term(self, preferred: Option, ceiling: Decimal) -> str | None:
+        """When the preferred option fits the ceiling and its term may move (an example, or an
+        offer that leaves its term open), the shortest term at which its track still fits, by
+        the engine's offer search, with the interest it saves; None when no shorter term fits."""
+        if preferred.source == "offer" and preferred.max_term_months is None:
+            return None
+        (track,) = cast(list[Mapping[str, object]], preferred.loan["tracks"])
+        found = await self._deps.engine.offer_term(track, ceiling)
+        if not found.comfortable or found.term_months >= cast(int, track["term_months"]):
+            return None
+        shorter = {**track, "term_months": found.term_months}
+        figures = (await self._deps.engine.simulate({"tracks": [shorter]})).figures
+        saving = (preferred.summary.total_paid - figures.total_paid).quantize(Decimal(1))
+        return (
+            f"the preferred option also fits the ceiling at {found.term_months} months, with a "
+            f"worst-case monthly payment of {figures.risk_payment.quantize(Decimal(1))} and "
+            f"{saving} less in total. Say so in one sentence of the reply with both figures, "
+            f"then end the turn with ask_term with term_months {found.term_months}, so the "
+            "person confirms the shorter term on the term card or keeps theirs; never offer it "
+            "in the reply's text alone. If they keep their term, do not offer it again"
+        )
 
     async def _above_ceiling(
         self,
@@ -737,6 +819,57 @@ def _require_no_fitting_offer(
 ENGLISH_WORD = re.compile(r"[A-Za-z]{2,}")
 
 
+def _require_the_cheapest(
+    preferred: Option, options: list[Option], ceiling: Decimal | None
+) -> None:
+    """Refuses a preferred option that costs more in total than another of its source and term
+    that fits the ceiling, or any such option while the check has none, naming the cheapest."""
+    cheaper = [
+        option
+        for option in options
+        if option.source == preferred.source
+        and _terms(option) == _terms(preferred)
+        and (ceiling is None or _fits(option, ceiling))
+        and option.summary.total_paid < preferred.summary.total_paid
+    ]
+    if cheaper:
+        cheapest = min(cheaper, key=lambda option: option.summary.total_paid)
+        saving = (preferred.summary.total_paid - cheapest.summary.total_paid).quantize(Decimal(1))
+        raise ToolError(
+            f"option {cheapest.id} costs {saving} less in total than the preferred option"
+            f"{'' if ceiling is None else ' and fits the ceiling'}; prefer it and keep this one as "
+            "the alternative. Prefer the dearer one only for something the person said, passing "
+            "their words as person_preference"
+        )
+
+
+def _figures(option: Option) -> str:
+    """The option's term and figures as they stand now, amounts to the shekel, so a reply about
+    a recommendation never quotes figures from before a term change."""
+    (term,) = set(_terms(option))
+    return _inline({"term_months": term, **_whole_shekels(asdict(option.summary))})
+
+
+def _inline(values: Mapping[str, object]) -> str:
+    """Several values on one line of a summary, as "key value" pairs."""
+    return ", ".join(f"{key} {_summary_value(value)}" for key, value in values.items())
+
+
+def _margin(option: Option, ceiling: Decimal) -> str:
+    """How far the option's worst-case recurring payment is below the ceiling, in shekels and as
+    a share of the ceiling."""
+    margin = ceiling - option.summary.risk_payment
+    share = (margin / ceiling * 100).quantize(Decimal(1), ROUND_HALF_UP)
+    return f"{margin.quantize(Decimal(1), ROUND_HALF_UP)} ({share}%)"
+
+
+def english_words(text: str, people_said: Iterable[str]) -> list[str]:
+    """The English words of text the person reads, other than words the person wrote themselves,
+    such as a lender's name, sorted and each once."""
+    theirs = {word for said in people_said for word in ENGLISH_WORD.findall(said)}
+    return sorted(set(ENGLISH_WORD.findall(text)) - theirs)
+
+
 def _require_hebrew(argument: str, text: object) -> None:
     """Refuses text the person sees when it has an English word; None is an omitted argument."""
     if text is None:
@@ -806,6 +939,13 @@ NEGLIGIBLE_PAYMENT_SHARE = Decimal("0.02")
 SLIGHT_TOTAL_SHARE = Decimal("0.03")
 
 
+def _same_option(existing: Option, option: Option) -> bool:
+    def terms(of: Option) -> tuple[object, ...]:
+        return (of.source, of.lender, of.offer_date, of.max_term_months, of.summary)
+
+    return terms(existing) == terms(option)
+
+
 def _terms(option: Option) -> list[object]:
     return [
         track["term_months"] for track in cast(list[Mapping[str, object]], option.loan["tracks"])
@@ -817,18 +957,19 @@ def _comparison(option: Option, other: Option) -> str:
     how it should weigh in the person's reading: a negligible payment gap is not mentioned; a
     slight total gap is said with "במקצת", since the total still decides; a clear gap plainly."""
     mine, theirs = option.summary, other.summary
-    payment = _gap(mine.first_payment, theirs.first_payment, NEGLIGIBLE_PAYMENT_SHARE, "negligible")
-    total = _gap(mine.total_paid, theirs.total_paid, SLIGHT_TOTAL_SHARE, "slight")
+    payment = _gap(mine.first_payment, theirs.first_payment, NEGLIGIBLE_PAYMENT_SHARE, "זניח")
+    total = _gap(mine.total_paid, theirs.total_paid, SLIGHT_TOTAL_SHARE, "במקצת")
     return f"against option {other.id}: first_payment {payment}, total_paid {total}"
 
 
 def _gap(mine: Decimal, theirs: Decimal, share: Decimal, small: str) -> str:
-    """The gap with its direction and class: small below the share of the larger figure."""
+    """The gap with its direction and class: small below the share of the larger figure. The
+    words are Hebrew, since the model quotes them in the person's reply."""
     gap = mine - theirs
     if gap == 0:
-        return f"equal ({small})"
-    direction = "lower" if gap < 0 else "higher"
-    weight = small if abs(gap) < share * max(mine, theirs) else "clear"
+        return f"שווה ({small})"
+    direction = "נמוך" if gap < 0 else "גבוה"
+    weight = small if abs(gap) < share * max(mine, theirs) else "ברור"
     return f"{abs(gap).quantize(Decimal(1))} {direction} ({weight})"
 
 

@@ -7,8 +7,11 @@ import type {
 } from '../api/types.ts'
 import { answerLine, INPUT_LABEL, questionLabel } from '../check/copy.ts'
 
-/** Every event the server stores for a check; deltas are live only, so a recording has none. */
-export type StoredEvent = Exclude<CheckEvent, { type: 'message.delta' }>
+/**
+ * Every event the server stores for a check; deltas and retractions are live only, so a recording
+ * has none.
+ */
+export type StoredEvent = Exclude<CheckEvent, { type: 'message.delta' | 'message.retracted' }>
 
 /**
  * One check's stored events in seq order, as sql-helper.sh --demo-check writes them. A recorded

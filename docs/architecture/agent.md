@@ -94,7 +94,8 @@ The model sees two sets of tools. An agent tool's result is a compact `key: valu
 | Agent | `set_ceiling` | Saves the monthly payment the person stated as the ceiling, replacing any ceiling the check held. Refuses 0 or less. |
 | Agent | `update_finances` | Saves net fixed income or fixed expenses on this check; once both are known, the engine's `assess_affordability` derives the ceiling, which replaces any ceiling the check held. |
 | Agent | `ask` | Puts one question on the person's screen: a loan, ceiling or finances field, the offer to clone the check, or free text with two or more optional choices, under an optional Hebrew lead-in. Refuses a field the check already holds, the clone offer while the check has no recommendation, an English word in the text the person would see, and every question of a model message that asks more than one. |
-| Agent | `save_option` | Simulates a loan through the engine and saves it as an option. Refuses a loan whose principal is not the check's loan amount; an option already saved with the same source, lender, date, maximum and figures, naming it; and an offer saved with `max_term_months` at any term but the check's confirmed term, or the maximum when that is shorter; before a term is confirmed, the one the engine's offer search gives (below). The maximum is stored with the offer, so a later term change can price it again. Its result for an offer tells the model to recommend again. Its result also compares the option with each saved option of the same term and classes each gap: a first-payment gap under 2% of the larger is negligible and not mentioned; a total-cost gap under 3% is slight and worded "במקצת", since the total still decides; anything larger is clear. |
+| Agent | `save_option` | Simulates an example track from `suggest_tracks` through the engine and saves it as an option. Refuses a loan whose principal is not the check's loan amount, and an option already saved with the same source and figures, naming it. Its result compares the option with each saved option of the same term and classes each gap: a first-payment gap under 2% of the larger is "זניח" and not mentioned; a total-cost gap under 3% is "במקצת" and worded so, since the total still decides; anything larger is "ברור". The classes are Hebrew because the model quotes them. |
+| Agent | `save_offer` | Saves a real offer with every track it names in one call, refusing a track listed twice. A lender's tracks are alternatives for the whole loan amount, so each is simulated and saved as an option of its own; every track is priced before any is saved, so a refusal of one, which names the track, saves none. It refuses what `save_option` refuses, with the lender, date and maximum in the comparison of a repeated option, and a track saved with `max_term_months` at any term but the check's confirmed term, or the maximum when that is shorter; before a term is confirmed, the one the engine's offer search gives for that track (below). The maximum is stored with each option, so a later term change can price it again. Its result gives each track's option and comparisons as `save_option` does, and tells the model to recommend again. |
 | Agent | `show_chart` | Fetches the prime or the CPI's monthly change for the latest months from the engine and puts it in the conversation as a chart. |
 | Agent | `present_recommendation` | Saves a preferred option and an optional alternative as the recommendation, through the guardrail. |
 
@@ -152,7 +153,10 @@ person asked for is the amount recommended: nothing sizes it. It refuses when:
   once at the end, so it is not a recurring payment;
 - the preferred option is an example while a real offer of the loan amount exists that fits the
   ceiling, or any such offer while the check has no ceiling: an example is an average nobody can
-  take.
+  take;
+- another option of the preferred one's source and term fits the ceiling, or the check has none,
+  and costs less in total, unless `person_preference` carries what the person said that makes the
+  dearer one suit them. The refusal names the cheapest such option.
 
 A refusal for an option above the ceiling says which argument to change. When the preferred
 option is above it, the refusal names the saved options for the term that fit. When only the
@@ -167,8 +171,20 @@ capital; else that no loan the simulator prices fits. The result tells the model
 the amount nor the term until the person chooses, and that a kept term leaves the recommendation
 standing.
 
-Without a ceiling the recommendation is on the loans' merits: the prompt has the model prefer the
-cheapest in total paid unless the person stated a preference another option suits better. Within
+A presented recommendation's result gives the preferred and the alternative option's term and
+figures as they stand, `preferred_figures` and `alternative_figures`, and the reply quotes only
+those, so it never repeats figures from before a term change. With a ceiling, it also gives
+`ceiling_margin`: how far the
+preferred option's worst-case payment is below the ceiling, in shekels and as a share of it, so
+the reply states the distance in numbers. When the preferred option's term may move (an example,
+or an offer that leaves its term open), the engine's offer search finds the shortest term at
+which its track still fits; a shorter one comes back as a `next_step` with its worst-case payment
+and the interest it saves, telling the model to end the turn with the term card for it
+(`ask_term`), where the person confirms it or keeps their term. A term confirmed before the ceiling was
+known is otherwise never revisited.
+
+Without a ceiling the recommendation is on the loans' merits: the cheapest in total paid, unless
+the person stated a preference another option suits better. Within
 those rules the model may argue for any option on the person's stated preferences. A
 recommendation is stored with the loan amount and the ceiling it was checked against, or none, so
 it reads as checked or unchecked; the `recommendation.presented` event says which. An error from
@@ -182,10 +198,13 @@ the model is told once to redo it. The second reply stands, because a reply abou
 recommendation may share the heading. A discarded reply is only ever streamed live, never stored.
 
 The person reads Hebrew only, while the prompt and the tools' results name tools and fields in
-English. One pattern, two Latin letters in a row, guards every text the person sees: a reply
-with a match is discarded and rewritten once in the same way, and `ask` and
-`present_recommendation` refuse a question, a choice, a lead-in or a reasoning with a match, so
-the model calls again in Hebrew.
+English; the words a reply may quote, such as a gap's class, are Hebrew in the results. One
+pattern, two Latin letters in a row, guards every text the person sees. A reply with a match
+the person did not write themselves, such as a lender's name, is discarded and rewritten once in
+the same way, and the words are logged as a warning with the check's id. The runner stops
+streaming such a reply at the word and sends `message.retracted`, so the page drops it. `ask`
+and `present_recommendation` refuse a question, a choice, a lead-in or a reasoning with a match,
+so the model calls again in Hebrew.
 
 ## Turns and the turn cap
 
@@ -239,6 +258,7 @@ person may send another message.
 |---|---|
 | `message.user` | The person's message. |
 | `message.delta` | The reply's whole text so far while the model writes it. Live only, never stored. |
+| `message.retracted` | A reply being written that showed an English word, which the page drops while the model rewrites it. Live only, never stored. |
 | `message.assistant` | A complete model message with text, under the message id its fragments carry. |
 | `loan.set`, `term.set` | A tool saved the loan or the confirmed term. |
 | `ceiling.set` | The person stated a ceiling; carries it with the source `stated`. |

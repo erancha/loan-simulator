@@ -56,10 +56,10 @@ def test_rates_are_bounded() -> None:
     for rate in ("0", "30"):
         assert make_track(annual_rate=Decimal(rate)).annual_rate == Decimal(rate)
     prime = {"rate_kind": "prime", "annual_rate": None}
-    for spread in ("-5.01", "20.01"):
+    for spread in ("-1.51", "20.01"):
         with pytest.raises(ValidationError, match="prime_spread"):
             make_track(**prime, prime_spread=Decimal(spread))
-    for spread in ("-5", "20"):
+    for spread in ("-1.5", "20"):
         assert make_track(**prime, prime_spread=Decimal(spread)).prime_spread == Decimal(spread)
 
 

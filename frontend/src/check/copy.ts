@@ -384,15 +384,23 @@ export const offerKindBox = (row: number) => `סוג המסלול ${row}`
 export const offerRateBox = (row: number) => `אחוז של מסלול ${row}`
 
 export const OFFER_MAX_TRACKS = 4
-/** The highest annual percent the engine prices for fixed interest; a prime margin's box is held
- * to it too. */
-export const OFFER_MAX_RATE = 30
+/**
+ * The highest percent a row of each kind takes. The engine prices fixed interest up to 30%, and a
+ * margin over prime is held to it too. Prime is the Bank of Israel rate plus 1.5 (the engine's
+ * PRIME_MARGIN), so a margin under prime goes no lower than the Bank of Israel rate itself.
+ */
+export const OFFER_MAX_RATE: Record<OfferKind, number> = {
+  prime_plus: 30,
+  prime_minus: 1.5,
+  fixed: 30,
+}
 /** An offer's longest period is a limit, not the loan's term, so it may pass the term's range. */
 export const OFFER_MAX_MONTHS = 360
 
 export const OFFER_LENDER_MISSING = 'חסר שם הגוף המלווה'
-export const OFFER_RATE_INVALID = `צריך אחוז בין 0 ל-${OFFER_MAX_RATE}`
+export const offerRateInvalid = (kind: OfferKind) => `צריך אחוז בין 0 ל-${OFFER_MAX_RATE[kind]}`
 export const OFFER_FIX_ABOVE = 'צריך לתקן את המסומן למעלה'
+export const OFFER_TRACK_REPEATED = 'המסלול הזה כבר מופיע למעלה'
 export const OFFER_MONTHS_INVALID = `צריך מספר חודשים שלם, ${TERM_MIN_MONTHS} לפחות`
 
 /** A track of the offer form once valid: `rate` is an unsigned decimal string. */

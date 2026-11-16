@@ -108,8 +108,8 @@ async def ready_for_recommendation(world: World) -> None:
     await world.tools.set_loan(None, "80000")
     await world.tools.set_term(48)
     world.engine.simulations = [PRIME_SIMULATION, BALLOON_SIMULATION]
-    await world.tools.save_option({"tracks": [PRIME_TRACK]}, "published_average")
-    await world.tools.save_option({"tracks": [BALLOON_TRACK]}, "offer", "Bank", "2026-10-20")
+    await world.tools.save_option({"tracks": [PRIME_TRACK]})
+    await world.tools.save_offer([BALLOON_TRACK], "Bank", "2026-10-20")
     world.sink.events.clear()
     world.engine.calls.clear()
     world.clock.value = NOW + timedelta(minutes=5)
@@ -412,14 +412,12 @@ async def test_a_ceiling_change_asks_to_recheck_the_recommendation(world: World)
     assert "present_recommendation" in derived
 
 
-async def test_save_option_stores_engine_figures_and_emits_structured(world: World) -> None:
+async def test_save_offer_stores_engine_figures_and_emits_structured(world: World) -> None:
     await world.tools.set_loan(None, "80000")
     world.engine.simulations = [PRIME_SIMULATION]
     world.engine.calls.clear()
 
-    summary = await world.tools.save_option(
-        {"tracks": [PRIME_TRACK]}, "offer", lender="Bank", offer_date="2026-10-20"
-    )
+    summary = await world.tools.save_offer([PRIME_TRACK], lender="Bank", offer_date="2026-10-20")
 
     assert world.engine.calls == [("simulate", {"tracks": [PRIME_TRACK]})]
     (option,) = await world.options.list(CHECK)
@@ -436,73 +434,106 @@ async def test_save_option_stores_engine_figures_and_emits_structured(world: Wor
     assert event.data["option_id"] == "option-1"
     assert event.data["result"] == PRIME_SIMULATION.structured
     assert event.data["figures"] == PRIME_SIMULATION.figures.to_json()
-    lines = summary.splitlines()
-    assert "option_id: option-1" in lines
+    track, next_step = summary.splitlines()
+    assert track.startswith("track 1: option_id option-1, ")
     # The model reads amounts to the shekel, as the person does.
-    assert {"first_payment: 1888", "worst_peak_payment: 2039", "total_paid: 90623"} <= set(lines)
+    for figure in ("first_payment 1888", "worst_peak_payment 2039", "total_paid 90623"):
+        assert figure in track
     assert "schedule" not in summary
-    assert "present_recommendation" in summary
+    assert "present_recommendation" in next_step
+
+
+async def test_save_offer_saves_every_track_as_an_option_of_its_own(world: World) -> None:
+    await world.tools.set_loan(None, "80000")
+    world.engine.simulations = [PRIME_SIMULATION, BALLOON_SIMULATION]
+    world.engine.calls.clear()
+
+    summary = await world.tools.save_offer([PRIME_TRACK, BALLOON_TRACK], "Fund", "2026-10-20")
+
+    assert world.engine.calls == [
+        ("simulate", {"tracks": [PRIME_TRACK]}),
+        ("simulate", {"tracks": [BALLOON_TRACK]}),
+    ]
+    prime, balloon = await world.options.list(CHECK)
+    assert (prime.loan, balloon.loan) == ({"tracks": [PRIME_TRACK]}, {"tracks": [BALLOON_TRACK]})
+    assert {(option.source, option.lender) for option in (prime, balloon)} == {("offer", "Fund")}
+    assert len(world.events_of("option.saved")) == 2
+    lines = summary.splitlines()
+    assert lines[0].startswith("track 1: option_id option-1, ")
+    assert lines[1].startswith("track 2: option_id option-2, ")
+    # Each track is compared with its sibling, which is saved by the same call.
+    assert "against option option-2" in lines[0]
+    assert "present_recommendation" in lines[-1]
+
+
+async def test_save_offer_saves_none_of_its_tracks_when_one_is_refused(world: World) -> None:
+    await world.tools.set_loan(None, "80000")
+    world.engine.simulations = [PRIME_SIMULATION, BALLOON_SIMULATION]
+    smaller = {**BALLOON_TRACK, "principal": "60000"}
+
+    with pytest.raises(ToolError, match=r"tracks\[1\]: this loan borrows 60000"):
+        await world.tools.save_offer([PRIME_TRACK, smaller], "Fund")
+
+    assert await world.options.list(CHECK) == []
+    assert world.events_of("option.saved") == []
+
+
+async def test_save_offer_refuses_a_track_listed_twice_naming_both(world: World) -> None:
+    await world.tools.set_loan(None, "80000")
+    world.engine.simulations = [PRIME_SIMULATION, BALLOON_SIMULATION, PRIME_SIMULATION]
+
+    with pytest.raises(ToolError, match=r"tracks\[2\] repeats tracks\[0\]; list each track once"):
+        await world.tools.save_offer([PRIME_TRACK, BALLOON_TRACK, PRIME_TRACK], "Fund")
+
+    assert await world.options.list(CHECK) == []
 
 
 async def test_save_option_needs_no_finances(world: World) -> None:
     await world.tools.set_loan(None, "80000")
     world.engine.simulations = [PRIME_SIMULATION]
 
-    summary = await world.tools.save_option({"tracks": [PRIME_TRACK]}, "published_average")
+    summary = await world.tools.save_option({"tracks": [PRIME_TRACK]})
 
     assert [option.source for option in await world.options.list(CHECK)] == ["published_average"]
     assert "present_recommendation" not in summary
     assert "assess" not in [name for name, _ in world.engine.calls]
 
 
-async def test_save_option_refuses_a_principal_other_than_the_loan(world: World) -> None:
+async def test_save_offer_refuses_a_principal_other_than_the_loan(world: World) -> None:
     await world.tools.set_loan(None, "60000")
     world.engine.simulations = [PRIME_SIMULATION]
 
     with pytest.raises(ToolError, match="80000.*60000"):
-        await world.tools.save_option({"tracks": [PRIME_TRACK]}, "offer")
+        await world.tools.save_offer([PRIME_TRACK])
 
     assert await world.options.list(CHECK) == []
 
 
-async def test_save_option_needs_a_loan(world: World) -> None:
+async def test_save_offer_needs_a_loan(world: World) -> None:
     with pytest.raises(ToolError, match="set_loan"):
-        await world.tools.save_option({"tracks": [PRIME_TRACK]}, "offer")
+        await world.tools.save_offer([PRIME_TRACK])
 
     assert world.engine.calls == []
 
 
-async def test_save_option_engine_error_reaches_model(world: World) -> None:
+async def test_save_offer_engine_error_reaches_model(world: World) -> None:
     await world.tools.set_loan(None, "80000")
     world.engine.simulate_error = EngineError("tracks.0.term_months: must be at most 84")
 
     with pytest.raises(ToolError, match="tracks.0.term_months: must be at most 84"):
-        await world.tools.save_option({"tracks": [PRIME_TRACK]}, "offer", "Bank", "2026-10-20")
+        await world.tools.save_offer([PRIME_TRACK], "Bank", "2026-10-20")
 
     assert await world.options.list(CHECK) == []
 
 
-@pytest.mark.parametrize(
-    ("source", "offer_date", "field"),
-    [("bank", None, "source"), ("offer", "20/10/2026", "offer_date")],
-)
-async def test_save_option_rejects_bad_argument_naming_field(
-    world: World, source: str, offer_date: str | None, field: str
-) -> None:
+async def test_save_offer_rejects_an_offer_date_that_is_not_iso(world: World) -> None:
     await world.tools.set_loan(None, "80000")
     world.engine.calls.clear()
 
-    with pytest.raises(ToolError, match=field):
-        await world.tools.save_option({"tracks": [PRIME_TRACK]}, source, None, offer_date)
+    with pytest.raises(ToolError, match="offer_date"):
+        await world.tools.save_offer([PRIME_TRACK], None, "20/10/2026")
 
     assert world.engine.calls == []
-
-
-async def test_the_maximum_is_refused_on_an_example(world: World) -> None:
-    with pytest.raises(ToolError, match="belongs to a real offer"):
-        await world.tools.save_option(
-            {"tracks": [PRIME_TRACK]}, "published_average", None, None, 84
-        )
 
 
 async def test_an_offer_up_to_a_maximum_uses_the_first_payment_search_without_a_ceiling(
@@ -510,10 +541,10 @@ async def test_an_offer_up_to_a_maximum_uses_the_first_payment_search_without_a_
 ) -> None:
     await world.tools.set_loan(None, "80000")
     world.engine.simulations = [PRIME_SIMULATION]
-    long_offer = {"tracks": [{**PRIME_TRACK, "term_months": 84}]}
+    long_offer = [{**PRIME_TRACK, "term_months": 84}]
 
     with pytest.raises(ToolError, match="save it with term_months 24"):
-        await world.tools.save_option(long_offer, "offer", "Fund", None, 84)
+        await world.tools.save_offer(long_offer, "Fund", None, 84)
 
     name, asked = world.engine.calls[-1]
     assert name == "propose_offer_term"
@@ -529,7 +560,7 @@ async def test_an_offer_up_to_a_maximum_uses_the_comfortable_search_with_a_ceili
     world.engine.offer_terms = OfferTerm(term_months=48, comfortable=True)
     world.engine.simulations = [PRIME_SIMULATION]
 
-    await world.tools.save_option({"tracks": [PRIME_TRACK]}, "offer", "Fund", None, 84)
+    await world.tools.save_offer([PRIME_TRACK], "Fund", None, 84)
 
     name, asked = world.engine.calls[-1]
     assert name == "offer_term"
@@ -547,7 +578,7 @@ async def test_the_engine_refusing_an_offer_term_reaches_the_model(world: World)
     world.engine.offer_term_error = EngineError("term_months too long")
 
     with pytest.raises(ToolError, match="term_months too long"):
-        await world.tools.save_option({"tracks": [PRIME_TRACK]}, "offer", "Fund", None, 84)
+        await world.tools.save_offer([PRIME_TRACK], "Fund", None, 84)
 
 
 async def test_an_open_offer_is_priced_at_the_confirmed_term(world: World) -> None:
@@ -557,9 +588,8 @@ async def test_an_open_offer_is_priced_at_the_confirmed_term(world: World) -> No
     world.engine.calls.clear()
 
     with pytest.raises(ToolError, match="save it with term_months 72"):
-        await world.tools.save_option({"tracks": [PRIME_TRACK]}, "offer", "Fund", None, 84)
-    at_72 = {"tracks": [{**PRIME_TRACK, "term_months": 72}]}
-    await world.tools.save_option(at_72, "offer", "Fund", None, 84)
+        await world.tools.save_offer([PRIME_TRACK], "Fund", None, 84)
+    await world.tools.save_offer([{**PRIME_TRACK, "term_months": 72}], "Fund", None, 84)
 
     assert "propose_offer_term" not in [name for name, _ in world.engine.calls]
     (saved,) = await world.options.list(CHECK)
@@ -572,15 +602,15 @@ async def test_an_offer_shorter_than_the_term_is_priced_at_its_maximum(world: Wo
     world.engine.simulations = [PRIME_SIMULATION]
 
     with pytest.raises(ToolError, match="save it with term_months 60"):
-        await world.tools.save_option({"tracks": [PRIME_TRACK]}, "offer", "Fund", None, 60)
+        await world.tools.save_offer([PRIME_TRACK], "Fund", None, 60)
 
 
 async def test_a_new_term_prices_the_open_offers_again_and_leaves_fixed_ones(world: World) -> None:
     await world.tools.set_loan(None, "80000")
     await world.tools.set_term(48)
     world.engine.simulations = [PRIME_SIMULATION, PRIME_SIMULATION, PRIME_SIMULATION]
-    await world.tools.save_option({"tracks": [PRIME_TRACK]}, "offer", "Open", None, 84)
-    await world.tools.save_option({"tracks": [PRIME_TRACK]}, "offer", "Fixed")
+    await world.tools.save_offer([PRIME_TRACK], "Open", None, 84)
+    await world.tools.save_offer([PRIME_TRACK], "Fixed")
     world.engine.calls.clear()
     world.sink.events.clear()
 
@@ -602,7 +632,7 @@ async def test_an_offer_the_engine_cannot_price_at_the_new_term_saves_nothing(
     await world.tools.set_loan(None, "80000")
     await world.tools.set_term(48)
     world.engine.simulations = [PRIME_SIMULATION]
-    await world.tools.save_option({"tracks": [PRIME_TRACK]}, "offer", "Open", None, 84)
+    await world.tools.save_offer([PRIME_TRACK], "Open", None, 84)
     world.engine.simulate_error = EngineError("rate not priced")
 
     with pytest.raises(ToolError, match="rate not priced"):
@@ -626,13 +656,13 @@ async def test_a_saved_option_is_compared_with_the_others_of_its_term(world: Wor
     await world.tools.set_loan(None, "24000")
     fixed, prime = {**PRIME_TRACK, "principal": "24000"}, {**PRIME_TRACK, "principal": "24000"}
     world.engine.simulations = [figures_of("751", "27035"), figures_of("748", "26935")]
-    await world.tools.save_option({"tracks": [fixed]}, "published_average")
+    await world.tools.save_option({"tracks": [fixed]})
 
-    result = await world.tools.save_option({"tracks": [prime]}, "published_average")
+    result = await world.tools.save_option({"tracks": [prime]})
 
     assert (
-        "compared: against option option-1: first_payment 3 lower (negligible), "
-        "total_paid 100 lower (slight)"
+        "compared: against option option-1: first_payment 3 נמוך (זניח), "
+        "total_paid 100 נמוך (במקצת)"
     ) in result
 
 
@@ -646,13 +676,113 @@ async def test_a_clear_gap_is_marked_clear_and_another_term_is_not_compared(
         figures_of("900", "30000"),
         figures_of("500", "29000"),
     ]
-    await world.tools.save_option({"tracks": [track]}, "published_average")
-    clear = await world.tools.save_option({"tracks": [track]}, "published_average")
+    await world.tools.save_option({"tracks": [track]})
+    clear = await world.tools.save_option({"tracks": [track]})
     longer = {**track, "term_months": track["term_months"] + 12}
-    other_term = await world.tools.save_option({"tracks": [longer]}, "published_average")
+    other_term = await world.tools.save_option({"tracks": [longer]})
 
-    assert "first_payment 149 higher (clear), total_paid 2965 higher (clear)" in clear
+    assert "first_payment 149 גבוה (ברור), total_paid 2965 גבוה (ברור)" in clear
     assert "compared" not in other_term
+
+
+async def two_offer_tracks(world: World) -> None:
+    """A loan of 24,000 and one lender's two tracks for it: option-1 costs 27,035 in total and
+    option-2 26,935."""
+    await world.tools.set_loan(None, "24000")
+    world.engine.simulations = [figures_of("751", "27035"), figures_of("748", "26935")]
+    track = {**PRIME_TRACK, "principal": "24000"}
+    await world.tools.save_offer([track, {**track, "prime_spread": "1"}], "Fund")
+
+
+async def test_recommendation_refuses_a_dearer_option_while_a_cheaper_one_fits(
+    world: World,
+) -> None:
+    await two_offer_tracks(world)
+
+    with pytest.raises(ToolError, match="option option-2 costs 100 less in total"):
+        await world.tools.present_recommendation("option-1", REASONING)
+
+    assert world.events_of(RECOMMENDATION_PRESENTED) == []
+
+
+async def test_a_dearer_option_is_recommended_for_what_the_person_said(world: World) -> None:
+    await two_offer_tracks(world)
+
+    await world.tools.present_recommendation(
+        "option-1", REASONING, person_preference="אני שונאת הפתעות"
+    )
+
+    (presented,) = world.events_of(RECOMMENDATION_PRESENTED)
+    assert presented["preferred"]["option_id"] == "option-1"
+
+
+async def fitting_with_room(world: World, offered: OfferTerm, **offer: object) -> str:
+    """A loan of 24,000 at 48 months under a ceiling of 3,000, its one option, an offer from Fund
+    with a worst-case payment of 2,039, presented; the engine's search answers offered."""
+    await world.tools.set_loan(None, "24000")
+    await world.tools.set_term(48)
+    await world.tools.set_ceiling("3000")
+    world.engine.simulations = [figures_of("751", "27035"), figures_of("1100", "26400")]
+    world.engine.offer_terms = offered
+    track = {**PRIME_TRACK, "principal": "24000"}
+    await world.tools.save_offer([track], "Fund", **offer)
+    return await world.tools.present_recommendation("option-1", REASONING)
+
+
+async def test_a_fitting_recommendation_names_its_margin_under_the_ceiling(world: World) -> None:
+    result = await fitting_with_room(world, OfferTerm(term_months=48, comfortable=True))
+
+    assert "ceiling_margin: 961 (32%)" in result.splitlines()
+    assert "next_step" not in result
+
+
+async def test_room_under_the_ceiling_offers_the_shortest_term_that_still_fits(
+    world: World,
+) -> None:
+    result = await fitting_with_room(
+        world, OfferTerm(term_months=24, comfortable=True), max_term_months=84
+    )
+
+    asked = [args for name, args in world.engine.calls if name == "offer_term"][-1]
+    assert asked == {
+        "track": {**PRIME_TRACK, "principal": "24000"},
+        "payment_ceiling": Decimal(3000),
+    }
+    assert world.engine.calls[-1] == (
+        "simulate",
+        {"tracks": [{**PRIME_TRACK, "principal": "24000", "term_months": 24}]},
+    )
+    (next_step,) = [line for line in result.splitlines() if line.startswith("next_step")]
+    assert "at 24 months" in next_step
+    assert "635 less in total" in next_step
+    assert "end the turn with ask_term with term_months 24" in next_step
+
+
+async def test_an_offer_with_a_fixed_term_is_not_offered_a_shorter_one(world: World) -> None:
+    result = await fitting_with_room(world, OfferTerm(term_months=24, comfortable=True))
+
+    assert "offer_term" not in [name for name, _ in world.engine.calls]
+    assert "next_step" not in result
+
+
+async def test_a_recommendation_gives_the_named_options_current_figures(world: World) -> None:
+    await ready_for_recommendation(world)
+
+    result = await world.tools.present_recommendation(
+        "option-2", REASONING, alternative_option_id="option-1"
+    )
+
+    lines = result.splitlines()
+    assert any(
+        line.startswith("preferred_figures: term_months 48, first_payment ") for line in lines
+    )
+    (alternative,) = [line for line in lines if line.startswith("alternative_figures: ")]
+    assert alternative == (
+        "alternative_figures: term_months 48, first_payment 1888, peak_payment 1888, "
+        "worst_peak_payment 2039, worst_start 2022-04-01, worst_end 2026-03-01, balloon_due none, "
+        f"total_paid 90623, rate_as_of {PRIME_SIMULATION.figures.rate_as_of}, "
+        f"cpi_as_of {PRIME_SIMULATION.figures.cpi_as_of}"
+    )
 
 
 async def test_recommendation_needs_a_loan(world: World) -> None:
@@ -738,7 +868,7 @@ async def test_an_option_of_another_term_is_neither_recommended_nor_offered_as_f
     await ready_for_recommendation(world)
     shorter = {**PRIME_TRACK, "term_months": 36}
     world.engine.simulations = [worst_case(PRIME_SIMULATION, "900")]
-    await world.tools.save_option({"tracks": [shorter]}, "published_average")
+    await world.tools.save_option({"tracks": [shorter]})
     await world.tools.set_ceiling("1000")
     world.engine.comfortable_terms = 84
 
@@ -840,7 +970,7 @@ async def test_a_zero_ceiling_keeps_an_open_offer_at_its_longest_term(world: Wor
     world.engine.simulations = [PRIME_SIMULATION]
 
     with pytest.raises(ToolError, match="save it with term_months 84"):
-        await world.tools.save_option({"tracks": [PRIME_TRACK]}, "offer", "Fund", None, 84)
+        await world.tools.save_offer([PRIME_TRACK], "Fund", None, 84)
 
     assert "offer_term" not in [name for name, _ in world.engine.calls]
 
@@ -882,6 +1012,8 @@ async def test_an_example_is_preferred_when_the_offer_is_above_the_ceiling(world
         BALLOON_SIMULATION.figures, peak_payment=Decimal(99999), worst_peak_payment=None
     )
     world.options.rows[CHECK][1] = replace(world.options.rows[CHECK][1], summary=above)
+    # The example fits with room, so the engine also prices it at the shorter term it finds.
+    world.engine.simulations = [PRIME_SIMULATION]
 
     await world.tools.present_recommendation("option-1", REASONING)
 
@@ -1033,10 +1165,10 @@ async def test_save_option_refuses_an_option_already_saved_with_the_same_figures
 ) -> None:
     await world.tools.set_loan(None, "80000")
     world.engine.simulations = [PRIME_SIMULATION, PRIME_SIMULATION, PRIME_SIMULATION]
-    await world.tools.save_option({"tracks": [PRIME_TRACK]}, "offer", "Fund", "2026-10-20")
+    await world.tools.save_offer([PRIME_TRACK], "Fund", "2026-10-20")
 
     with pytest.raises(ToolError, match="already saved as option option-1"):
-        await world.tools.save_option({"tracks": [PRIME_TRACK]}, "offer", "Fund", "2026-10-20")
-    await world.tools.save_option({"tracks": [PRIME_TRACK]}, "offer", "Bank", "2026-10-20")
+        await world.tools.save_offer([PRIME_TRACK], "Fund", "2026-10-20")
+    await world.tools.save_offer([PRIME_TRACK], "Bank", "2026-10-20")
 
     assert [option.lender for option in await world.options.list(CHECK)] == ["Fund", "Bank"]

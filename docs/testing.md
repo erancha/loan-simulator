@@ -63,7 +63,7 @@ saved loan, an amount the engine does not price, the term card's 60 months for a
 ceiling and the ceiling deciding a car's term with one, the first-payment search without a ceiling,
 the worst-case search with one, a term outside 6 to 84 months, and that the term the last card
 showed is refused as a new card while another term gets one. The comparison tests prove the classes
-of a gap (negligible, slight, clear) on the figures of a real conversation, and that options of
+of a gap (זניח, במקצת, ברור) on the figures of a real conversation, and that options of
 another term are not compared. The offer tests prove an open offer priced at the confirmed term or
 at its shorter maximum, a term change that prices open offers again and leaves fixed ones, an engine
 refusal there that saves nothing, and an option saved again with the same figures refused while

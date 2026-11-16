@@ -4,6 +4,7 @@
  * The stream replays stored events and then continues live, and a reconnect replays again, so
  * stored events (with a seq) are applied once. `message.delta` has no seq and carries the whole
  * reply so far; its complete `message.assistant` may arrive later, or already have been applied.
+ * `message.retracted`, also without a seq, removes a reply that is still being written.
  */
 import type {
   ChartShown,
@@ -149,6 +150,13 @@ function apply(state: CheckState, event: CheckEvent): CheckState {
         messages: upsertAssistant(state.messages, message_id, text, false),
       }
     }
+    case 'message.retracted':
+      return {
+        ...state,
+        messages: state.messages.filter(
+          (m) => !(m.id === event.data.message_id && isMessage(m) && !m.complete),
+        ),
+      }
     case 'message.assistant':
       return {
         ...state,

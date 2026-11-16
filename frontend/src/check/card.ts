@@ -211,6 +211,14 @@ function forTheTerm(option: OptionSaved, state: CheckState): boolean {
   return term === null || option.loan.tracks.every((track) => track.term_months === term)
 }
 
+/** The options by total cost, lowest first; options of equal cost keep their saved order. */
+function cheapestFirst(options: OptionSaved[]): OptionSaved[] {
+  return options.toSorted((a, b) => {
+    if (exceeds(a.figures.total_paid, b.figures.total_paid)) return 1
+    return exceeds(b.figures.total_paid, a.figures.total_paid) ? -1 : 0
+  })
+}
+
 export function buildCard(state: CheckState): CardModel {
   const recommendation = state.recommendation
   const named: Array<{ option: OptionSaved; label: OptionCard['label'] }> = []
@@ -227,16 +235,16 @@ export function buildCard(state: CheckState): CardModel {
     }
   }
   const namedIds = named.map(({ option }) => option.option_id)
-  // Real offers lead: a person can take one, and a sample is only a yardstick for it. A sample
-  // made for another term, before the term changed here or in the check this one was cloned
-  // from, measures nothing the person is now deciding, so it drops out; an offer keeps its
-  // lender's term.
+  // Real offers lead, cheapest first: a person can take one, and a sample is only a yardstick
+  // for it. A sample made for another term, before the term changed here or in the check this
+  // one was cloned from, measures nothing the person is now deciding, so it drops out; an offer
+  // keeps its lender's term.
   const unnamed = [...state.options.values()].filter(
     (o) => !namedIds.includes(o.option_id) && (o.source === 'offer' || forTheTerm(o, state)),
   )
   const otherOptions = [
-    ...unnamed.filter((o) => o.source === 'offer'),
-    ...unnamed.filter((o) => o.source === 'published_average'),
+    ...cheapestFirst(unnamed.filter((o) => o.source === 'offer')),
+    ...cheapestFirst(unnamed.filter((o) => o.source === 'published_average')),
   ]
   const shown = [...named.map(({ option }) => option), ...otherOptions]
 

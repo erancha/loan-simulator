@@ -1,6 +1,7 @@
 """The agent loop runs the model and its tools until the model answers, keeps each check's
 conversation in checkpoints keyed by that check, and shows the model tool summaries only."""
 
+import logging
 import re
 from dataclasses import dataclass
 from decimal import Decimal
@@ -66,6 +67,7 @@ CHECK_TOOL_NAMES = {
     "set_ceiling",
     "update_finances",
     "save_option",
+    "save_offer",
     "present_recommendation",
     "ask",
     "show_chart",
@@ -188,12 +190,13 @@ async def test_tool_call_runs_and_model_sees_summary_only(world: World) -> None:
 async def test_guardrail_refusal_reaches_model_which_retries(world: World) -> None:
     await world.checks.set_loan(CHECK, LoanRequest("רכב", Decimal(80000)))
     await world.checks.set_ceiling(CHECK, Decimal(1500), "stated")
-    world.engine.simulations = [PRIME_SIMULATION, BALLOON_SIMULATION]
+    # The third prices the accepted option at the shorter term the engine's search finds.
+    world.engine.simulations = [PRIME_SIMULATION, BALLOON_SIMULATION, BALLOON_SIMULATION]
     model = ScriptedChatModel(
         replies=[
             calls(
-                ("save_option", {"loan": {"tracks": [PRIME_TRACK]}, "source": "published_average"}),
-                ("save_option", {"loan": {"tracks": [PRIME_TRACK]}, "source": "published_average"}),
+                ("save_option", {"loan": {"tracks": [PRIME_TRACK]}}),
+                ("save_option", {"loan": {"tracks": [PRIME_TRACK]}}),
             ),
             calls(
                 (
@@ -299,16 +302,13 @@ async def test_model_is_bound_to_engine_and_check_tools(world: World) -> None:
     assert {tool.name for tool in model.tools} == {"simulate_loan", *CHECK_TOOL_NAMES}
 
 
-async def test_save_option_schema_types_money_as_decimal_strings(world: World) -> None:
+async def test_save_offer_schema_types_money_as_decimal_strings(world: World) -> None:
     model = ScriptedChatModel(
         replies=[
             calls(
                 (
-                    "save_option",
-                    {
-                        "loan": {"tracks": [{**PRIME_TRACK, "principal": 80000.5}]},
-                        "source": "offer",
-                    },
+                    "save_offer",
+                    {"tracks": [{**PRIME_TRACK, "principal": 80000.5}]},
                 )
             ),
             AIMessage("אתקן"),
@@ -394,9 +394,13 @@ async def test_every_tool_the_system_prompt_names_is_bound(world: World) -> None
     state_keys = {
         line.split(":")[0] for line in (await turn_state(PERSON, CHECK, world.deps)).splitlines()
     }
+    # Keys of a tool's result that the prompt tells the model how to use.
+    result_keys = {"ceiling_margin", "preferred_figures", "alternative_figures"}
     named_tools = (
-        identifiers - set(get_args(OptionSource)) - set(get_args(QuestionField)) - tool_fields
-    ) - state_keys
+        (identifiers - set(get_args(OptionSource)) - set(get_args(QuestionField)) - tool_fields)
+        - state_keys
+        - result_keys
+    )
     assert "present_recommendation" in named_tools
     assert named_tools <= {tool.name for tool in model.tools}
     assert re.search(r"\bask\b", SYSTEM_PROMPT)
@@ -668,7 +672,7 @@ async def test_a_recommendation_from_an_earlier_turn_does_not_back_this_ones_tex
     world.engine.simulations = [PRIME_SIMULATION]
     first = ScriptedChatModel(
         replies=[
-            calls(("save_option", {"loan": {"tracks": [PRIME_TRACK]}, "source": "offer"})),
+            calls(("save_offer", {"tracks": [PRIME_TRACK]})),
             calls(
                 (
                     "present_recommendation",
@@ -708,15 +712,37 @@ async def test_a_reply_with_an_english_word_is_rewritten_once(world: World) -> N
 
 
 async def test_an_english_word_is_rewritten_only_once(world: World) -> None:
-    model = ScriptedChatModel(
-        replies=[AIMessage("קיבלתי הצעה מ-Max"), AIMessage("קיבלתי הצעה מ-Max")]
-    )
+    model = ScriptedChatModel(replies=[AIMessage("price: 1"), AIMessage("price: 1")])
     graph = run(world, model)
 
-    state = await graph.ainvoke(said("הצעה מ-Max"), check_config(PERSON, CHECK))
+    state = await graph.ainvoke(said("שלום"), check_config(PERSON, CHECK))
 
     assert len(model.received) == 2
-    assert state["messages"][-1].content == "קיבלתי הצעה מ-Max"
+    assert state["messages"][-1].content == "price: 1"
+
+
+async def test_an_english_name_the_person_wrote_stands(world: World) -> None:
+    model = ScriptedChatModel(replies=[AIMessage("קיבלתי הצעה מ-Max")])
+    graph = run(world, model)
+
+    await graph.ainvoke(said("הצעה מ-Max"), check_config(PERSON, CHECK))
+
+    assert len(model.received) == 1
+
+
+async def test_a_rewritten_reply_is_logged_as_a_warning_naming_its_english_words(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    model = ScriptedChatModel(
+        replies=[AIMessage("ההפרש slight, price 3"), AIMessage("ההפרש במקצת, מחיר 3")]
+    )
+
+    with caplog.at_level(logging.WARNING):
+        await run(world, model).ainvoke(said("שלום"), check_config(PERSON, CHECK))
+
+    (record,) = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert "price, slight" in record.getMessage()
+    assert CHECK in record.getMessage()
 
 
 async def test_a_hebrew_reply_with_numbers_and_shekels_stands(world: World) -> None:

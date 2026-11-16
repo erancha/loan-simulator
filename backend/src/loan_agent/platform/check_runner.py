@@ -31,6 +31,8 @@ person always meets it after the first recommendation.
 
 A turn streams the model's text to open pages as live message.delta events, each carrying the
 whole text of its message so far, so a page that joins mid-reply catches up from the next one.
+A reply that shows an English word the person did not write is withdrawn with a live
+message.retracted at that word, since the graph has it rewritten before it is stored.
 It stores each complete model message with text as message.assistant under the same message id,
 so a page that replays the log sees complete messages only. A turn ends with turn.status idle,
 preceded by turn.failed when it raised or was cut short by a restart; the error itself goes to the
@@ -41,6 +43,7 @@ turn continues from there.
 import asyncio
 import uuid
 from collections.abc import Callable, Coroutine, Mapping
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import cast
@@ -55,9 +58,10 @@ from loan_agent.application.agent_graph import (
     check_config,
     copy_conversation,
     delete_conversation,
+    people_said,
     record_exchange,
 )
-from loan_agent.application.check_tools import CheckTools, ToolDeps
+from loan_agent.application.check_tools import CheckTools, ToolDeps, english_words
 from loan_agent.application.finances_saving import save_finances
 from loan_agent.application.market_answer import PRIME_MONTHS, market_answer
 from loan_agent.domain.errors import (
@@ -74,6 +78,7 @@ from loan_agent.ports.events import (
     CHECK_RESTORED,
     MESSAGE_ASSISTANT,
     MESSAGE_DELTA,
+    MESSAGE_RETRACTED,
     MESSAGE_USER,
     QUESTION_ASKED,
     TURN_FAILED,
@@ -117,6 +122,18 @@ TOOL_CALL_OUTCOME_UNKNOWN = (
     "something (finances, a loan, an option), ask the person whether it already appears on "
     "their page."
 )
+
+
+@dataclass
+class _Draft:
+    """What one turn has streamed of the model's replies."""
+
+    # The person's own messages in the check, whose English words a reply may repeat.
+    people: list[str]
+    # Key: model message id; value: the text its chunks have streamed so far.
+    streamed: dict[str, str] = field(default_factory=dict)
+    # Ids of replies withdrawn from the page for an English word.
+    retracted: set[str] = field(default_factory=set)
 
 
 class CheckRunner:
@@ -323,14 +340,14 @@ class CheckRunner:
         try:
             unfinished = await self._close_unfinished_tool_calls(config)
             turn_input = MessagesState(messages=[*unfinished, HumanMessage(text)])
-            # Key: model message id; value: the text its chunks have streamed so far.
-            streamed: dict[str, str] = {}
+            earlier = (await self._graph.aget_state(config)).values.get("messages", [])
+            draft = _Draft(people=[*people_said(earlier), text])
             async for part in self._graph.astream(
                 turn_input, config, stream_mode=["messages", "updates"], version="v2"
             ):
                 if part["type"] == "messages":
                     message, _metadata = part["data"]
-                    await self._publish_text_so_far(check_id, message, streamed)
+                    await self._publish_text_so_far(check_id, message, draft)
                 elif part["type"] == "updates":
                     await self._store_replies(check_id, part["data"])
                 else:
@@ -437,15 +454,23 @@ class CheckRunner:
             )
         return closing
 
-    async def _publish_text_so_far(
-        self, check_id: str, chunk: BaseMessage, streamed: dict[str, str]
-    ) -> None:
+    async def _publish_text_so_far(self, check_id: str, chunk: BaseMessage, draft: _Draft) -> None:
+        """Publishes a reply's text so far, until an English word the person did not write
+        appears in it: the graph will have the reply rewritten, so the page drops it then and
+        is sent none of the rest."""
         said = _model_text(chunk)
-        if said is not None:
-            message_id = said["message_id"]
-            streamed[message_id] = streamed.get(message_id, "") + said["text"]
-            so_far = {"message_id": message_id, "text": streamed[message_id]}
-            await self._sink.publish_live(check_id, MESSAGE_DELTA, so_far)
+        if said is None or said["message_id"] in draft.retracted:
+            return
+        message_id = said["message_id"]
+        text = draft.streamed.get(message_id, "") + said["text"]
+        draft.streamed[message_id] = text
+        if english_words(text, draft.people):
+            draft.retracted.add(message_id)
+            await self._sink.publish_live(check_id, MESSAGE_RETRACTED, {"message_id": message_id})
+            return
+        await self._sink.publish_live(
+            check_id, MESSAGE_DELTA, {"message_id": message_id, "text": text}
+        )
 
     async def _store_replies(self, check_id: str, update: Mapping[str, MessagesState]) -> None:
         for node_update in update.values():

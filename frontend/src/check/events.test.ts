@@ -49,6 +49,11 @@ test('delta then complete: one message, text replaced, complete flips', () => {
   expect(done.messages).toEqual([{ id: 'a1', role: 'assistant', text: 'היי שם', complete: true }])
 })
 
+test('a retracted draft leaves the conversation', () => {
+  const retracted: CheckEvent = { type: 'message.retracted', data: { message_id: 'a1' }, seq: null }
+  expect(play([delta('a1', 'ההפרש'), retracted]).messages).toEqual([])
+})
+
 test('delta after complete is ignored', () => {
   const state = play([assistantMessage(1, 'a1', 'סופי'), delta('a1', 'ס')])
   expect(state.messages).toEqual([{ id: 'a1', role: 'assistant', text: 'סופי', complete: true }])
