@@ -337,6 +337,20 @@ async def test_engine_tool_error_reaches_model(world: World) -> None:
     assert error in model.received[1]
 
 
+async def test_tool_call_holding_a_nul_character_is_refused_before_it_runs(world: World) -> None:
+    model = ScriptedChatModel(
+        replies=[calls(("suggest_tracks", {"principal": "1\x00"})), AIMessage("אשלח שוב")]
+    )
+    graph = run(world, model, [failing_engine_tool(RuntimeError("the tool ran"))])
+
+    state = await graph.ainvoke(said("כמה ללוות?"), check_config(PERSON, CHECK))
+
+    (refusal,) = tool_messages(state["messages"])
+    assert refusal.status == "error"
+    assert "NUL" in str(refusal.content)
+    assert refusal in model.received[1]
+
+
 async def test_unexpected_tool_failure_ends_the_turn(world: World) -> None:
     model = ScriptedChatModel(replies=[calls(("suggest_tracks", {"principal": "1"}))])
     graph = run(world, model, [failing_engine_tool(RuntimeError("engine unreachable"))])
@@ -709,6 +723,16 @@ async def test_a_reply_with_an_english_word_is_rewritten_once(world: World) -> N
     assert len(model.received) == 2
     assert "English" in model.received[1][-1].content
     assert state["messages"][-1].content == "מטרה: מכונית, מחיר 50,000 ₪"
+
+
+async def test_a_reply_holding_a_nul_character_is_rewritten(world: World) -> None:
+    model = ScriptedChatModel(replies=[AIMessage("מטרה: מכו\x00נית"), AIMessage("מטרה: מכונית")])
+    graph = run(world, model)
+
+    state = await graph.ainvoke(said("שלום"), check_config(PERSON, CHECK))
+
+    assert "NUL" in model.received[1][-1].content
+    assert [message.content for message in state["messages"][1:]] == ["מטרה: מכונית"]
 
 
 async def test_an_english_word_is_rewritten_only_once(world: World) -> None:

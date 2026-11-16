@@ -2,7 +2,9 @@
 the check tools until it has a reply for the person or has asked them a question through ask,
 ask_term or ask_offer; each check's conversation is one checkpoint thread.
 
-- build_agent_graph: the model node and the tool node over the thread's messages, as an AgentGraph
+- build_agent_graph: the model node and the tool node over the thread's messages, as an
+  AgentGraph; a reply's tool calls skip the tool node and are refused when an argument holds a
+  NUL character
 - check_config: the run configuration naming the person and the check, with the turn's step
   limit
 - delete_conversation, copy_conversation: remove a check's saved conversation, or start
@@ -31,7 +33,7 @@ from langchain_core.tools import BaseTool, StructuredTool, ToolException
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.prebuilt import InjectedState, ToolNode, tools_condition
+from langgraph.prebuilt import InjectedState, ToolNode
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from loan_agent.application.check_tools import (
@@ -79,6 +81,11 @@ _REWRITE_IN_HEBREW = (
     "Your reply was discarded and the person did not see it: it has English words, and the "
     "person reads Hebrew only. Write the same reply again entirely in Hebrew, with the exact "
     "wording the instructions give; keep only a name the person wrote in English as they wrote it."
+)
+
+_REWRITE_WITHOUT_NUL = (
+    "Your reply was discarded and the person did not see it: its text holds a NUL character "
+    "(\\u0000), which cannot be stored. Write the same reply again without that character."
 )
 
 _USER_ID = "user_id"
@@ -597,11 +604,14 @@ def people_said(messages: Sequence[BaseMessage]) -> list[str]:
 
 def _correction_for(reply: AIMessage, messages: Sequence[BaseMessage], check_id: str) -> str | None:
     """What the model must redo before its reply reaches the conversation: a recommendation
-    written without its tool, or English words the person did not write themselves, which are
+    written without its tool, a NUL character in its text, which Postgres cannot store in the
+    reply's event, or English words the person did not write themselves, which are
     logged as a warning so their source can be found. A reply is redone once, whatever the
     second one says, so a turn never loops on a correction."""
     if _recommends_without_the_tool(reply, messages):
         return _REDO_THE_RECOMMENDATION
+    if "\x00" in reply.text:
+        return _REWRITE_WITHOUT_NUL
     english = english_words(reply.text, people_said(messages))
     if english:
         log.warning("reply rejected for English words %s in check %s", ", ".join(english), check_id)
@@ -631,6 +641,46 @@ def _tool_error_text(error: ToolError | ToolException) -> str:
     return str(error)
 
 
+_NUL_REFUSED = (
+    "no call of this reply ran: its arguments hold a NUL character (\\u0000), which cannot be "
+    "stored; send the calls again with the same arguments and without that character"
+)
+
+
+def _holds_nul(value: Any) -> bool:
+    """Whether a tool call's argument, or any text nested in it, holds a NUL character."""
+    if isinstance(value, str):
+        return "\x00" in value
+    if isinstance(value, dict):
+        return any(_holds_nul(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_holds_nul(item) for item in value)
+    return False
+
+
+def _after_model(state: MessagesState) -> Literal["tools", "refuse_nul", "__end__"]:
+    """Sends a reply's tool calls to the tools, unless an argument holds a NUL character.
+    Postgres stores no NUL in text or JSON, so a tool that saved such an argument would end the
+    turn after other calls of the same reply had written their records."""
+    reply = _last_ai_message(state)
+    if not reply.tool_calls:
+        return "__end__"
+    if any(_holds_nul(call["args"]) for call in reply.tool_calls):
+        return "refuse_nul"
+    return "tools"
+
+
+def _refuse_nul(state: MessagesState) -> MessagesState:
+    """Answers every tool call of the last reply with _NUL_REFUSED, so the model sends them
+    again."""
+    return {
+        "messages": [
+            ToolMessage(_NUL_REFUSED, name=call["name"], tool_call_id=call["id"], status="error")
+            for call in _last_ai_message(state).tool_calls
+        ]
+    }
+
+
 def build_agent_graph(
     model: BaseChatModel,
     engine_tools: Sequence[BaseTool],
@@ -655,7 +705,9 @@ def build_agent_graph(
     builder = StateGraph(MessagesState)
     builder.add_node("model", call_model)
     builder.add_node("tools", ToolNode(tools, handle_tool_errors=_tool_error_text))
+    builder.add_node("refuse_nul", _refuse_nul)
     builder.add_edge(START, "model")
-    builder.add_conditional_edges("model", tools_condition, ["tools", END])
+    builder.add_conditional_edges("model", _after_model, ["tools", "refuse_nul", END])
+    builder.add_edge("refuse_nul", "model")
     builder.add_conditional_edges("tools", _after_tools, ["model", END])
     return builder.compile(checkpointer=checkpointer)

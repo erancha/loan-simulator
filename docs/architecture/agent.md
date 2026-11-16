@@ -25,13 +25,17 @@ flowchart LR
 ## The loop
 
 A check is one conversation, and the conversation is one LangGraph thread, the unit of state the
-graph checkpoints and resumes, named by the check's id. The graph has two nodes. The model node
-sends the Hebrew system prompt (`application/prompts/system_he.md`) and the thread's messages to the
-chat model, which either answers or asks for tool calls; the tool node runs the calls and appends
-their results; the loop repeats until the model answers without a tool call or puts a question on
-the person's screen with `ask`, `ask_term` or `ask_offer`. A refused question goes back to the model
-like any other tool error. The system prompt fixes the agent's manner (Hebrew only, plain terms, a
-calm tone, every question through `ask`, `ask_term` or `ask_offer`) and the arc of the conversation,
+graph checkpoints and resumes, named by the check's id. The graph loops between two nodes. The
+model node sends the Hebrew system prompt (`application/prompts/system_he.md`) and the thread's
+messages to the chat model, which either answers or asks for tool calls; the tool node runs the
+calls and appends their results; the loop repeats until the model answers without a tool call or
+puts a question on the person's screen with `ask`, `ask_term` or `ask_offer`. A refused question
+goes back to the model like any other tool error. A reply whose tool calls hold a NUL character in
+an argument never reaches the tool node: every call of it is answered with a refusal and the model
+sends them again, because Postgres stores no NUL and a tool that saved one would end the turn. A
+reply with a NUL in its text is discarded and written again once, for the same reason. The system
+prompt fixes the agent's manner (Hebrew only, plain terms, a calm tone, every question through
+`ask`, `ask_term` or `ask_offer`) and the arc of the conversation,
 which starts from the loan:
 
 1. The person states the loan, as an amount or as a price and the own capital put in, with a
