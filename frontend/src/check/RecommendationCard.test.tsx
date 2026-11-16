@@ -9,6 +9,7 @@ import {
   optionPrime36,
   recommendationPrime,
   REFERENCE_DECISION,
+  withSeq,
 } from '../test/fixtures.ts'
 import { buildCard } from './card.ts'
 import { initialState, reduce } from './events.ts'
@@ -127,4 +128,21 @@ test('a line above the options says what a sample is, once, only when one is sho
 test('no cushion text remains', () => {
   const { container } = render(<RecommendationCard model={reference} />)
   expect(container.textContent).not.toMatch(/כרית|מקדמה|בטחון/)
+})
+
+test('the next-step title flashes while the recommendation rests on examples', () => {
+  render(<RecommendationCard model={modelOf(optionPrime36, optionFixed36, recommendationPrime)} />)
+  expect(screen.getByRole('heading', { name: 'מה הלאה' })).toHaveClass('attention-flash')
+})
+
+test('the next-step title rests once every option is a real offer', () => {
+  const recommendationOffer = withSeq(
+    {
+      ...recommendationPrime,
+      data: { ...recommendationPrime.data, preferred: optionOfferFixed.data, alternative: null },
+    },
+    8,
+  )
+  render(<RecommendationCard model={modelOf(optionOfferFixed, recommendationOffer)} />)
+  expect(screen.getByRole('heading', { name: 'מה הלאה' })).not.toHaveClass('attention-flash')
 })

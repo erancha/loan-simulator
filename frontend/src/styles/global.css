@@ -174,12 +174,22 @@ body {
   font-size: 0.9rem;
   cursor: pointer;
   font-weight: 700;
-  /* Five one-second flashes on load, between regular muted and bold red, draw the eye to the
-     details; the toggle then rests at its own bold muted style. */
-  animation: landing-more-flash 1s step-end 5;
 }
 
-@keyframes landing-more-flash {
+/* One-second flashes when the element appears, between regular muted and bold red, draw the
+   eye to it; the element then rests at its own style. */
+.landing-more,
+.attention-flash {
+  animation: attention-flash 1s step-end 5;
+}
+
+/* The card's next-step title flashes longer than the landing page's details toggle: it appears
+   below the options while the person is still reading them. */
+.attention-flash {
+  animation-iteration-count: 20;
+}
+
+@keyframes attention-flash {
   0% {
     font-weight: 400;
   }
@@ -191,7 +201,8 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .landing-more {
+  .landing-more,
+  .attention-flash {
     animation: none;
   }
 }

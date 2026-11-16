@@ -78,6 +78,7 @@ export function RecommendationCard({ model }: { model: CardModel }) {
     return <p className="card-empty">{EMPTY_CARD}</p>
   }
   const shown = others === null ? recommended : [...recommended, ...others.options]
+  const showsExamples = shown.some((option) => option.isExample)
   return (
     <div className="card">
       {decision !== null && (
@@ -91,7 +92,7 @@ export function RecommendationCard({ model }: { model: CardModel }) {
           </p>
         </section>
       )}
-      {shown.some((option) => option.isExample) && <p className="examples-note">{EXAMPLES_NOTE}</p>}
+      {showsExamples && <p className="examples-note">{EXAMPLES_NOTE}</p>}
       {recommended.map((option) => (
         <OptionCardView key={option.id} option={option} />
       ))}
@@ -99,7 +100,9 @@ export function RecommendationCard({ model }: { model: CardModel }) {
       {reasoning !== null && <p className="reasoning">{reasoning}</p>}
       {decision !== null && (
         <section className="next-step">
-          <h3 className="decision-title">{NEXT_STEP_TITLE}</h3>
+          <h3 className={showsExamples ? 'decision-title attention-flash' : 'decision-title'}>
+            {NEXT_STEP_TITLE}
+          </h3>
           <p>{NEXT_STEP}</p>
           <p>{OFFER_DETAILS}</p>
         </section>
