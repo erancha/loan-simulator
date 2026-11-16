@@ -23,6 +23,7 @@ import { CheckPage } from './CheckPage.tsx'
 const MESSAGES = '/api/checks/c1/messages'
 const FINANCES = '/api/checks/c1/finances'
 const MARKET = '/api/checks/c1/market-sample'
+const OFFER = '/api/checks/c1/offer-sample'
 const TERM = '/api/checks/c1/term'
 const TERM_CEILING = '/api/checks/c1/term-ceiling'
 
@@ -39,6 +40,7 @@ function stubApi(
     if (path === FINANCES && init?.method === 'PUT') return Promise.resolve(onFinances())
     if (path === MESSAGES && init?.method === 'POST') return Promise.resolve(onMessage())
     if (path === MARKET && init?.method === 'POST') return Promise.resolve(onMessage())
+    if (path === OFFER && init?.method === 'POST') return Promise.resolve(onMessage())
     if (path === TERM_CEILING && init?.method === 'POST') return Promise.resolve(onMessage())
     if (path === TERM && init?.method === 'PUT') return Promise.resolve(new Response(null, { status: 204 }))
     return Promise.reject(new Error(`unexpected request ${init?.method ?? 'GET'} ${path}`))
@@ -148,6 +150,29 @@ test('the market sample goes to its own route, any other text to the model', asy
   await waitFor(() => expect(screen.getByRole('textbox')).toHaveValue(''))
   expect(fetchStub.mock.calls.map(([path]) => path)).toEqual([MARKET])
   expect(sentTexts(fetchStub)).toEqual([])
+})
+
+test('the offer chip sentence goes to its own route, typed with more words to the model', async () => {
+  const fetchStub = stubApi()
+  renderPage()
+  emit(loanSet)
+  const input = screen.getByRole('textbox')
+  await userEvent.type(input, 'קיבלתי הצעה להלוואה מגוף מלווה{Enter}')
+  await waitFor(() => expect(input).toHaveValue(''))
+  await userEvent.type(input, 'קיבלתי הצעה להלוואה מגוף מלווה, מהבנק{Enter}')
+  await waitFor(() => expect(input).toHaveValue(''))
+
+  expect(fetchStub.mock.calls.map(([path]) => path)).toEqual([OFFER, MESSAGES])
+})
+
+test('the offer chip sentence on a check with no loan goes to the model, which asks for it', async () => {
+  const fetchStub = stubApi()
+  renderPage()
+  const input = screen.getByRole('textbox')
+  await userEvent.type(input, 'קיבלתי הצעה להלוואה מגוף מלווה{Enter}')
+  await waitFor(() => expect(input).toHaveValue(''))
+
+  expect(fetchStub.mock.calls.map(([path]) => path)).toEqual([MESSAGES])
 })
 
 test('a 429 shows when sending resumes and keeps the text', async () => {

@@ -80,6 +80,10 @@ def engine_fixture(name: str) -> dict[str, Any]:
 
 ASSESSED_BOUNDS = Bounds(
     payment_ceiling=Decimal("4700.00"),
+    income_share=Decimal("0.30"),
+    ceiling_by_income_share=Decimal("6000.00"),
+    disposable_share=Decimal("0.50"),
+    ceiling_by_disposable_income=Decimal("4700.00"),
     reasons=(
         "variable_income_minimum_counted",
         "ceiling_by_disposable_income",

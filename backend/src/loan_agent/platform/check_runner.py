@@ -5,6 +5,8 @@ Core building blocks:
 - CheckRunner.send: records the person's message and runs the turn as a background task
 - CheckRunner.send_term_ceiling: records the payment ceiling the person typed on the term card,
   saves it and shows a term card for it, with no model call
+- CheckRunner.send_offer_sample: records the page's offer chip sentence and answers it with the
+  offer form, with no model call
 - CheckRunner.send_market_sample: records the page's market-data sample and answers it from the
   engine's data with no model call, as a turn the conversation keeps
 - CheckRunner.delete: removes an idle check, its conversation and all it produced
@@ -97,6 +99,11 @@ TERM_CARD_FOR_CEILING = (
     "shortest term at which every example track's worst-case payment fits the ceiling, or 84 "
     "months when none does. The person's answer to that card arrives as the next message."
 )
+# What the model's conversation records of the offer chip.
+OFFER_FORM_SHOWN = (
+    "The screen showed the offer form with nothing filled in. The person's answer arrives as "
+    "the next message: a complete offer in words, at equal monthly payments."
+)
 # What the model's conversation records of the runner's question: the page words it itself.
 CEILING_ASKED = (
     "The screen asked the person for their payment ceiling (field payment_ceiling), with a skip "
@@ -166,6 +173,11 @@ class CheckRunner:
         """The page sends the market-data sample here, the person's own wording of it included;
         it counts as a message and raises as send does."""
         await self._start(user, check_id, text, self._answer_market)
+
+    async def send_offer_sample(self, user: User, check_id: str, text: str) -> None:
+        """The page sends the offer chip's sentence here; the offer form answers it with no model
+        call. It counts as a message and raises as send does."""
+        await self._start(user, check_id, text, self._answer_offer_sample)
 
     async def clone(self, user: User, check_id: str) -> Check:
         """Raises CheckNotFoundError for an unknown check or another person's, and
@@ -367,6 +379,19 @@ class CheckRunner:
             await record_exchange(self._graph, config, exchange)
         except Exception:
             log.exception("term ceiling failed", check_id=check_id)
+            await self._report_failure(check_id)
+            return
+        await self._sink.emit(check_id, TURN_STATUS, IDLE)
+
+    async def _answer_offer_sample(self, user_id: str, check_id: str, text: str) -> None:
+        config = check_config(user_id, check_id)
+        try:
+            unfinished = await self._close_unfinished_tool_calls(config)
+            await CheckTools(user_id, check_id, self._tool_deps).ask_offer(None, [], None)
+            exchange = [*unfinished, HumanMessage(text), AIMessage(OFFER_FORM_SHOWN)]
+            await record_exchange(self._graph, config, exchange)
+        except Exception:
+            log.exception("offer sample failed", check_id=check_id)
             await self._report_failure(check_id)
             return
         await self._sink.emit(check_id, TURN_STATUS, IDLE)

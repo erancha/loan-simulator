@@ -23,6 +23,13 @@ class EngineError(Exception):
 @dataclass(frozen=True)
 class Bounds:
     payment_ceiling: Decimal
+    """The lower of the two caps below, never below zero."""
+    income_share: Decimal
+    ceiling_by_income_share: Decimal
+    """income_share, a fraction, of the net fixed income."""
+    disposable_share: Decimal
+    ceiling_by_disposable_income: Decimal
+    """disposable_share, a fraction, of the net fixed income minus the fixed expenses."""
     reasons: tuple[str, ...]
     """The engine's reason codes for how the ceiling was set, in order."""
 

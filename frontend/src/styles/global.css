@@ -303,6 +303,11 @@ body {
   margin-bottom: 0.5lh;
 }
 
+.reply-value {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .chat-welcome {
   color: var(--mute);
 }
@@ -476,6 +481,51 @@ fieldset.field.changed {
 .term-form .field-error,
 .term-form .question-actions {
   grid-column: 1 / -1;
+}
+
+.offer-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.offer-form label,
+.offer-form .offer-note {
+  color: var(--mute);
+  font-size: 0.85rem;
+}
+
+.offer-form .offer-group {
+  margin-top: 6px;
+}
+
+.offer-track {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.offer-track select {
+  flex: 1 1 7em;
+  min-width: 0;
+}
+
+.offer-rate input,
+.offer-months input {
+  width: 4.5em;
+}
+
+.offer-track .offer-linked {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.offer-form .link-button {
+  align-self: flex-start;
 }
 
 .caret::after {

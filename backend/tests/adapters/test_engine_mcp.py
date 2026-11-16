@@ -227,6 +227,10 @@ async def test_assess_parses_bounds(engine: McpLoanEngine, stub: StubEngine) -> 
 
     assert bounds == Bounds(
         payment_ceiling=Decimal("4700.00"),
+        income_share=Decimal("0.30"),
+        ceiling_by_income_share=Decimal("6000.00"),
+        disposable_share=Decimal("0.50"),
+        ceiling_by_disposable_income=Decimal("4700.00"),
         reasons=(
             "variable_income_minimum_counted",
             "ceiling_by_disposable_income",

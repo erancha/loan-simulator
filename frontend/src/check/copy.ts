@@ -157,24 +157,17 @@ export const MARKET_SAMPLE = {
     'מה היו המדדים לצרכן ב-12 החודשים האחרונים?',
 }
 
-/** The real-offer sample, offered once a check has a recommendation; ?? marks each figure the
- * person fills in from their own offer. */
+/** The real-offer sample, offered once a check has a recommendation. It has nothing to fill in,
+ * so a tap sends it; the server answers it with the offer form and no model call. */
 export const OFFER_SAMPLE = {
   label: 'הצעה מגוף מלווה',
-  text:
-    'קיבלתי הצעה מ-?? (בנק, קרן השתלמות, חברת אשראי או גוף אחר). שני מסלולים אפשריים:' +
-    ' (1) פריים + ??%  (2) ריבית קבועה ??% צמודה למדד.\n' +
-    'לתקופה של עד ?? חודשים, בתשלומים חודשיים שווים.',
+  text: 'קיבלתי הצעה להלוואה מגוף מלווה',
+  sendsAtOnce: true,
 }
 
-/** Marks a figure in a sample that the person fills in. */
-export const PLACEHOLDER = '??'
-export const PLACEHOLDER_QUESTION = 'האם לשלוח בקשה עם סימני שאלה?'
-export const PLACEHOLDER_CONFIRM = 'לשלוח בכל זאת'
-export const PLACEHOLDER_CANCEL = 'ביטול'
-
 export const NEXT_STEP_TITLE = 'מה הלאה'
-export const NEXT_STEP = `להביא הצעות אמיתיות מ${OFFER_SOURCES}, ולכתוב אותן כאן בשיחה להשוואה.`
+export const NEXT_STEP =
+  `להביא הצעות אמיתיות מ${OFFER_SOURCES}, ולהזין אותן כאן בשיחה עם "${OFFER_SAMPLE.label}".`
 export const OFFER_DETAILS =
   'בכל הצעה כדאי לבקש: ריבית (או פריים ומרווח), הצמדה, מספר חודשים, שיטת החזר, עמלות, בלון, שם' +
   ' הגוף ותאריך.'
@@ -329,6 +322,7 @@ export function termLine(termMonths: number, firstPayment: string): string {
  * model's own sentence. */
 export function questionText(question: Question): string {
   if (question.kind === 'term') return termLine(question.term_months, question.first_payment)
+  if (question.kind === 'offer') return OFFER_FORM_TITLE
   if (question.offer_clone === true) return CLONE_QUESTION
   const { field } = question
   return field === null ? question.text : FIELD_COPY[field].text
@@ -336,15 +330,75 @@ export function questionText(question: Question): string {
 
 /** A field's label, the term card's line, the clone offer, or the model's own sentence. */
 export function questionLabel(question: Question): string {
-  if (question.kind === 'term') return questionText(question)
+  if (question.kind === 'term' || question.kind === 'offer') return questionText(question)
   if (question.offer_clone === true) return CLONE_QUESTION
   return question.field === null ? question.text : fieldLabel(question.field)
 }
 
-/** A field's hint; a free question and the term card have none. */
+/** A field's hint; a free question, the term card and the offer form have none. */
 export function questionHint(question: Question): string | null {
-  if (question.kind === 'term' || question.field === null) return null
+  if (question.kind === 'term' || question.kind === 'offer' || question.field === null) return null
   return FIELD_COPY[question.field].hint
+}
+
+export const OFFER_FORM_TITLE = 'פרטי ההצעה'
+export const OFFER_LENDER_LABEL = 'מי הגוף המלווה?'
+export const OFFER_TRACKS_LABEL = 'המסלולים שהוצעו'
+export const OFFER_MONTHS_LABEL = 'לכמה חודשים לכל היותר?'
+export const OFFER_MONTHS_UNIT = 'חודשים'
+export const OFFER_LINKED = 'צמוד למדד'
+export const OFFER_ADD_TRACK = '+ מסלול נוסף'
+export const OFFER_REMOVE_TRACK = 'הסרת המסלול'
+export const OFFER_CONTINUE = 'המשך'
+export const OFFER_NOTE = 'ההחזר מחושב בתשלומים חודשיים שווים, על סכום ההלוואה שבבדיקה.'
+
+/** How a track of an offer prices its interest: a margin over or under prime, or a fixed rate. */
+export type OfferKind = 'prime_plus' | 'prime_minus' | 'fixed'
+export const OFFER_KIND_LABEL: Record<OfferKind, string> = {
+  prime_plus: 'פריים פלוס',
+  prime_minus: 'פריים מינוס',
+  fixed: 'ריבית קבועה',
+}
+
+/** The names a screen reader gives the boxes of the form's track row, numbered from 1. */
+export const offerKindBox = (row: number) => `סוג המסלול ${row}`
+export const offerRateBox = (row: number) => `אחוז של מסלול ${row}`
+
+export const OFFER_MAX_TRACKS = 4
+/** The highest annual percent the engine prices for fixed interest; a prime margin's box is held
+ * to it too. */
+export const OFFER_MAX_RATE = 30
+/** An offer's longest period is a limit, not the loan's term, so it may pass the term's range. */
+export const OFFER_MAX_MONTHS = 360
+
+export const OFFER_LENDER_MISSING = 'חסר שם הגוף המלווה'
+export const OFFER_RATE_INVALID = `צריך אחוז בין 0 ל-${OFFER_MAX_RATE}`
+export const OFFER_FIX_ABOVE = 'צריך לתקן את המסומן למעלה'
+export const OFFER_MONTHS_INVALID = `צריך מספר חודשים שלם, ${TERM_MIN_MONTHS} לפחות`
+
+/** A track of the offer form once valid: `rate` is an unsigned decimal string. */
+export interface OfferTrack {
+  kind: OfferKind
+  rate: string
+  linked: boolean
+}
+
+/**
+ * The message the offer form sends: a complete offer in the words the model reads typed offers
+ * in. Every track says whether it is linked, so the model has nothing left to ask, and names
+ * its kind by the form's own label: a margin under prime written with a minus sign would read
+ * as a dash.
+ */
+export function offerLine(lender: string, tracks: OfferTrack[], months: number): string {
+  const listed = tracks.map(
+    (track, index) =>
+      `(${index + 1}) ${OFFER_KIND_LABEL[track.kind]} ${track.rate}%, ` +
+      (track.linked ? OFFER_LINKED : `לא ${OFFER_LINKED}`),
+  )
+  return (
+    `קיבלתי הצעה מגוף מלווה, ${lender}: ${listed.join(' ')}.` +
+    ` לתקופה של עד ${months} ${OFFER_MONTHS_UNIT}, בתשלומים חודשיים שווים.`
+  )
 }
 
 /** A market chart's title, by series. */

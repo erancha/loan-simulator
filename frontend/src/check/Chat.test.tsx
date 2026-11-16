@@ -411,18 +411,21 @@ test('a cloned check ends with the handoff note, whose button opens the copy', a
   expect(onOpenCheck).toHaveBeenCalledWith('copy')
 })
 
-test('once a check has a recommendation, a real-offer sample fills in a template to complete', async () => {
-  renderChat({ recommended: true })
+test('once a check has a recommendation, the real-offer sample sends its sentence at once', async () => {
+  const { onSend } = renderChat({ recommended: true })
   expect(screen.queryByRole('button', { name: 'הלוואה' })).not.toBeInTheDocument()
   await userEvent.click(screen.getByRole('button', { name: 'הצעה מגוף מלווה' }))
 
-  const lines = (screen.getByRole('textbox') as HTMLTextAreaElement).value.split('\n')
-  expect(lines).toEqual([
-    'קיבלתי הצעה מ-?? (בנק, קרן השתלמות, חברת אשראי או גוף אחר). שני מסלולים אפשריים:' +
-      ' (1) פריים + ??%  (2) ריבית קבועה ??% צמודה למדד.',
-    'לתקופה של עד ?? חודשים, בתשלומים חודשיים שווים. ',
-  ])
-  expect(screen.getByRole('button', { name: 'הצעה מגוף מלווה' })).toBeInTheDocument()
+  expect(onSend).toHaveBeenCalledWith('קיבלתי הצעה להלוואה מגוף מלווה')
+  expect(screen.getByRole('textbox')).toHaveValue('')
+})
+
+test('the market sample fills the input and waits for the person to send', async () => {
+  const { onSend } = renderChat({ recommended: true })
+  await userEvent.click(screen.getByRole('button', { name: 'פריים ומדדים' }))
+
+  expect(onSend).not.toHaveBeenCalled()
+  expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toContain('ריבית הפריים')
 })
 
 test('no real-offer sample before a recommendation', () => {
@@ -430,20 +433,9 @@ test('no real-offer sample before a recommendation', () => {
   expect(screen.queryByRole('button', { name: 'הצעה מגוף מלווה' })).not.toBeInTheDocument()
 })
 
-test('a message with ?? left in it is sent only after the person confirms', async () => {
+test('a message with ?? in it sends without asking', async () => {
   const { onSend } = renderChat()
-  const input = screen.getByRole('textbox')
-  await userEvent.type(input, 'פריים + ??%{Enter}')
-
-  expect(onSend).not.toHaveBeenCalled()
-  expect(screen.getByText('האם לשלוח בקשה עם סימני שאלה?')).toBeInTheDocument()
-  await userEvent.click(screen.getByRole('button', { name: 'ביטול' }))
-  expect(screen.queryByText('האם לשלוח בקשה עם סימני שאלה?')).not.toBeInTheDocument()
-  expect(input).toHaveValue('פריים + ??%')
-  expect(input).toHaveFocus()
-
-  await userEvent.click(screen.getByRole('button', { name: 'שליחה' }))
-  await userEvent.click(screen.getByRole('button', { name: 'לשלוח בכל זאת' }))
+  await userEvent.type(screen.getByRole('textbox'), 'פריים + ??%{Enter}')
   expect(onSend).toHaveBeenCalledWith('פריים + ??%')
 })
 

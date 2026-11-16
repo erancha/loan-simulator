@@ -59,6 +59,10 @@ class McpLoanEngine:
         result = await self._call("assess_affordability", {"profile": dict(profile)})
         return Bounds(
             payment_ceiling=_money(result, "payment_ceiling"),
+            income_share=Decimal(result["income_share"]),
+            ceiling_by_income_share=_money(result, "ceiling_by_income_share"),
+            disposable_share=Decimal(result["disposable_share"]),
+            ceiling_by_disposable_income=_money(result, "ceiling_by_disposable_income"),
             reasons=tuple(result["reasons"]),
         )
 

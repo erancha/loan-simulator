@@ -25,7 +25,7 @@ Compose. This repo holds the loan engine, the agent and the page.
   a stated monthly limit, the shortest term that fits it; otherwise 60 months for a car, or the
   shortest term whose first payment is under 1,000 ₪, up to 84 months), which the person
   confirms, changes, or replaces with a monthly limit, and then compares two example tracks, a fixed
-  and a prime one, or the real offers the person collected.
+  and a prime one, or the real offers the person collected and entered in a short form.
 - **An optional payment ceiling**: the person may state the highest monthly payment that suits
   them, or ask for help, and the engine derives one from their net income and fixed expenses.
   These figures belong to the check and show as one line above its conversation once given. A

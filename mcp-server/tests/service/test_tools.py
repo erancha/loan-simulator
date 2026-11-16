@@ -64,6 +64,10 @@ async def test_assess_affordability_reference_user(
     assert result.structured_content == {
         "payment_ceiling": "1550.00",
         "counted_income": "8600.00",
+        "income_share": "0.30",
+        "ceiling_by_income_share": "2580.00",
+        "disposable_share": "0.50",
+        "ceiling_by_disposable_income": "1550.00",
         "reasons": ["ceiling_by_disposable_income"],
     }
 

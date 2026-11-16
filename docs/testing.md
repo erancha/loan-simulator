@@ -76,8 +76,9 @@ fits, else a recommendation presented above the ceiling with its remedy, a longe
 loan when 84 months do not fit, and none for a ceiling too low for any loan; an example never beats
 a real offer, and a balloon is judged on its recurring payment. The ask tool's tests prove the
 emitted question and its fixed result, and its refusals: a field the check already holds, named with
-its value, and English in the text. The state block's tests prove the loan, term, ceiling and
-recommendation states, and the previous check's finances.
+its value, and English in the text. The offer form's tool tests prove the question it emits, with
+what the person said or with nothing, and its refusal of a check with no loan. The state block's
+tests prove the loan, term, ceiling and recommendation states, and the previous check's finances.
 
 The agent graph runs against a scripted fake chat model, which proves tool wiring, that every tool
 the system prompt names is bound, ask among them, that it lists the same loan sources as the page,
@@ -108,6 +109,7 @@ the handoff event left on the source and not copied to a later clone, the refusa
 archived check, archiving by the person and restoring, the runner's streaming and failure events, a
 turn after a model failure, the turn step limit, a turn ended at the third identical tool call, the
 market-data sample answered from the data with no model call and kept in the conversation, the
+offer chip answered with the offer form and no model call and recorded for the next turn, the
 ceiling typed on the term card saved with a card for it and no model call, the ceiling question the
 runner asks once after a recommendation without a ceiling, and not over a question of the model's,
 restart recovery, settings validation, and that the migration builds the tables, matches the ORM,
@@ -157,9 +159,10 @@ runs, Enter against Shift+Enter, the text kept when a send is refused, and that 
 new and streamed text and content that grows by itself until the reader scrolls up. It also proves
 that a question is its own turn with a control only while live, that a question ending the
 conversation is announced with its lead-in and label, that the opening line stays first, and
-that a sample fills the input without sending until the model asks its first question, and that
-the market-data sample stays after a tap. `marketSample.test.ts` proves which wordings of the
-sample count as the sample.
+that a sample fills the input without sending until the model asks its first question, that the
+market-data sample stays after a tap, and that the offer chip sends its sentence on the tap.
+`serverSamples.test.ts` proves which wordings count as the market-data sample and as the offer
+chip's sentence.
 
 **Question bubble.** `QuestionBubble.test.tsx` proves each control and the line it sends: a money
 answer saved and sent, a loan amount sent without a save, purpose choices with no text box, free
@@ -182,6 +185,13 @@ one request with its line, that another term with a new ceiling saves both befor
 another number typed in the chat goes to the model as text. For the figures panel it proves that it
 stays hidden until the check has figures, that an edited figure is saved and followed by its update
 line, and that a running turn or an archived check offers no edit.
+
+**Offer form.** `OfferForm.test.tsx` proves the message the form words from a lender, its tracks
+and the longest period; that an empty box, a percentage above 30, a lender of spaces or a period
+that is no whole number of months in range is marked and nothing is sent; that a comma or a
+percent sign in a percentage is read as the number; that the boxes start with what the assistant
+passed, a margin under prime as "פריים מינוס"; that rows are added up to four and removed; and
+that an answered form shows no boxes.
 
 **Shell and sign-in.** `Shell.test.tsx` proves the header and sign-out, the empty state and creating
 a check, the list's titles, terms and markers, the archived checks folded in their own group

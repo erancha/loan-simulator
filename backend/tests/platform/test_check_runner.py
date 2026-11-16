@@ -47,6 +47,7 @@ from loan_agent.domain.errors import (
 from loan_agent.domain.models import Check, Finances, LoanRequest, Option, Recommendation, User
 from loan_agent.platform.check_runner import (
     FAILURE_MESSAGE,
+    OFFER_FORM_SHOWN,
     TERM_CARD_FOR_CEILING,
     TOOL_CALL_OUTCOME_UNKNOWN,
     CheckRunner,
@@ -812,6 +813,59 @@ async def test_the_market_sample_is_answered_from_the_data_with_no_model_call(wo
     assert [data["series"] for type, data in events if type == "chart.shown"] == ["prime", "cpi"]
     assert world.engine.calls == [("market_series", {"months": 60})]
     assert model.received == []
+
+
+OFFER_SAMPLE = "קיבלתי הצעה להלוואה מגוף מלווה"
+
+
+async def test_offer_sample_shows_the_form_without_a_model_call(world: World) -> None:
+    model = ScriptedChatModel(replies=[AIMessage(REPLY)])
+    checks = runner(world, model)
+    check = await checks.create(PERSON)
+    await world.checks.set_loan(check.id, LoanRequest("רכב", Decimal(60000)))
+
+    await checks.send_offer_sample(PERSON, check.id, OFFER_SAMPLE)
+    await checks.drain()
+
+    events = await stored(world, check.id)
+    assert [type for type, _ in events] == [
+        "message.user",
+        "turn.status",
+        "question.asked",
+        "turn.status",
+    ]
+    assert events[2][1] == {
+        "question": {"kind": "offer", "lender": None, "tracks": [], "max_term_months": None},
+        "lead_in": None,
+    }
+    assert model.received == []
+
+
+async def test_the_next_turn_reads_that_the_offer_form_was_shown(world: World) -> None:
+    model = ScriptedChatModel(replies=[AIMessage(REPLY)])
+    checks = runner(world, model)
+    check = await checks.create(PERSON)
+    await world.checks.set_loan(check.id, LoanRequest("רכב", Decimal(60000)))
+    await checks.send_offer_sample(PERSON, check.id, OFFER_SAMPLE)
+    await checks.drain()
+
+    await checks.send(PERSON, check.id, "קיבלתי הצעה מגוף מלווה, הבנק: (1) פריים + 1%")
+    await checks.drain()
+
+    said = [message for message in model.received[0] if not isinstance(message, SystemMessage)]
+    assert [type(message) for message in said] == [HumanMessage, AIMessage, HumanMessage]
+    assert (said[0].content, said[1].content) == (OFFER_SAMPLE, OFFER_FORM_SHOWN)
+
+
+async def test_an_offer_sample_on_a_check_with_no_loan_reports_a_failed_turn(world: World) -> None:
+    checks = runner(world, ScriptedChatModel(replies=[]))
+    check = await checks.create(PERSON)
+
+    await checks.send_offer_sample(PERSON, check.id, OFFER_SAMPLE)
+    await checks.drain()
+
+    types = [type for type, _ in await stored(world, check.id)]
+    assert types == ["message.user", "turn.status", "turn.failed", "turn.status"]
 
 
 async def test_the_next_turn_reads_the_market_answer(world: World) -> None:

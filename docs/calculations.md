@@ -133,9 +133,10 @@ payments on existing loans. The ceiling is the lower of two caps, never below 0:
 - 50% of the net fixed income minus the fixed expenses: half of what remains after the fixed
   costs, so the other half stays for variable spending and shocks.
 
-The result names which cap applied (income share on a tie) and whether nothing is left. For
-12,000 ₪ of income and 6,000 ₪ of expenses the caps are 3,600 and 3,000, so the ceiling is
-3,000 ₪.
+The result carries both caps with their shares, and names which cap applied (income share on a
+tie) and whether nothing is left. For 12,000 ₪ of income and 6,000 ₪ of expenses the caps are
+3,600 and 3,000, so the ceiling is 3,000 ₪. The agent hands the two caps to the model at every
+call, and the first recommendation's message shows the person the calculation.
 
 ### Fits the ceiling
 

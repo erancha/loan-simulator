@@ -1,6 +1,10 @@
 {
   "payment_ceiling": "4700.00",
   "counted_income": "20000.00",
+  "income_share": "0.30",
+  "ceiling_by_income_share": "6000.00",
+  "disposable_share": "0.50",
+  "ceiling_by_disposable_income": "4700.00",
   "reasons": [
     "variable_income_minimum_counted",
     "ceiling_by_disposable_income",

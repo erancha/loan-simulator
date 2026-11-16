@@ -5,8 +5,9 @@ recommendation, with the guardrail that keeps a recommendation honest.
 - ToolDeps: the ports, the clock and the id generator the tools act through
 - CheckTools: set_loan, set_term, set_ceiling, update_finances, save_option and
   present_recommendation, each returning a compact key: value summary for the model and emitting
-  an event for the page; ask and ask_term, emitting a question for the page and returning
-  ASKED_RESULT, after which the turn ends; show_chart, emitting a market series for the page
+  an event for the page; ask, ask_term and ask_offer, emitting a question for the page and
+  returning ASKED_RESULT, after which the turn ends; show_chart, emitting a market series for
+  the page
 - The guardrail in present_recommendation: every named option borrows the loan amount; with a
   ceiling, every one's worst-case recurring payment fits it, and a refusal names the remedy to
   offer the person; an example never beats a real offer
@@ -16,7 +17,7 @@ recommendation, with the guardrail that keeps a recommendation honest.
 """
 
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
@@ -170,6 +171,27 @@ class CheckTools:
             "kind": "term",
             "term_months": proposed.term_months,
             "first_payment": str(proposed.first_payment),
+        }
+        await self._deps.sink.emit(
+            self._check_id, QUESTION_ASKED, {"question": question, "lead_in": None}
+        )
+        return ASKED_RESULT
+
+    async def ask_offer(
+        self,
+        lender: str | None,
+        tracks: Sequence[Mapping[str, object]],
+        max_term_months: int | None,
+    ) -> str:
+        """Shows the offer form with whatever the person already said filled in. The values are
+        a starting point for the boxes: the form validates what the person submits, and
+        save_option what the model saves from it."""
+        _require_loan(await self._check(), "ask_offer")
+        question = {
+            "kind": "offer",
+            "lender": lender,
+            "tracks": [dict(track) for track in tracks],
+            "max_term_months": max_term_months,
         }
         await self._deps.sink.emit(
             self._check_id, QUESTION_ASKED, {"question": question, "lead_in": None}

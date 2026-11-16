@@ -72,6 +72,7 @@ test('a recommendation names every source of real offers and what to ask them', 
   render(<RecommendationCard model={reference} />)
   const next = screen.getByRole('heading', { name: 'מה הלאה' }).closest('section')
   expect(next).toHaveTextContent(OFFER_SOURCES)
+  expect(next).toHaveTextContent('"הצעה מגוף מלווה"')
   expect(next).toHaveTextContent('בכל הצעה כדאי לבקש')
 })
 

@@ -56,6 +56,11 @@ export function saveTerm(
   })
 }
 
+/** Sends the offer chip's sentence, which the server answers with the offer form and no model. */
+export function sendOfferSample(id: string, text: string): Promise<void> {
+  return apiPost(`/api/checks/${id}/offer-sample`, { text })
+}
+
 /** Sends the market-data sample, which the server answers from the market data with no model. */
 export function sendMarketSample(id: string, text: string): Promise<void> {
   return apiPost(`/api/checks/${id}/market-sample`, { text })

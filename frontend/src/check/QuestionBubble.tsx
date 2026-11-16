@@ -27,12 +27,14 @@ import {
 } from './copy.ts'
 import type { QuestionEntry } from './events.ts'
 import { FieldHint } from './FieldHint.tsx'
+import { OfferForm } from './OfferForm.tsx'
 import { rejectionText } from './rejection.ts'
 
 /**
  * The person's message for the question and what goes with it: finances figures, or a confirmed
  * term with any ceiling typed beside it, saved before the line; or a new ceiling alone from the
- * term card, which the server saves and answers with a term card for it.
+ * term card, which the server saves and answers with a term card for it. The offer form's answer
+ * is its line alone, with no update: the model saves the offer from the line.
  */
 export type Answer =
   | { line: string; update: Partial<Finances> | null }
@@ -59,8 +61,11 @@ function isFinancesField(field: QuestionField): field is keyof Finances {
   return FINANCES_FIELDS.has(field)
 }
 
-/** A question with a field of its own or the model's own sentence: everything but the term card. */
-type FieldQuestion = Exclude<Question, { kind: 'term' }>
+/**
+ * A question with a field of its own or the model's own sentence: everything but the term card
+ * and the offer form.
+ */
+type FieldQuestion = Exclude<Question, { kind: 'term' | 'offer' }>
 
 interface Props {
   entry: QuestionEntry
@@ -123,16 +128,23 @@ function MoneyBox(props: {
 
 /**
  * A question the model asked, as an assistant bubble: the lead-in, the label and, while live, a
- * control fitted to the question. The term card confirms or changes the proposed term; every
- * other question is a field's, handled by FieldBubble.
+ * control fitted to the question. The term card confirms or changes the proposed term, and the
+ * offer form takes a lender's offer; every other question is a field's, handled by FieldBubble.
  */
 export function QuestionBubble(props: Props) {
   const { question } = props.entry
-  return question.kind === 'term' ? (
-    <TermBubble {...props} termMonths={question.term_months} />
-  ) : (
-    <FieldBubble {...props} question={question} />
-  )
+  if (question.kind === 'term') return <TermBubble {...props} termMonths={question.term_months} />
+  if (question.kind === 'offer') {
+    return (
+      <OfferForm
+        entry={props.entry}
+        question={question}
+        live={props.live}
+        onAnswer={props.onAnswer}
+      />
+    )
+  }
+  return <FieldBubble {...props} question={question} />
 }
 
 /** The ceiling box's text for an amount: whole shekels, grouped; empty for none. */

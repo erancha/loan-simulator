@@ -32,8 +32,10 @@ from loan_agent.application.agent_graph import (
     RECOMMENDATION_HEADING,
     SYSTEM_PROMPT,
     AskArgs,
+    AskOfferArgs,
     AskQuestion,
     AskTermArgs,
+    OfferTrackArgs,
     PresentRecommendationArgs,
     QuestionField,
     SaveOptionArgs,
@@ -59,6 +61,7 @@ SIMULATION_SUMMARY = "first_payment: 1887.99\nworst_peak_payment: 2038.63"
 CHECK_TOOL_NAMES = {
     "set_loan",
     "ask_term",
+    "ask_offer",
     "set_term",
     "set_ceiling",
     "update_finances",
@@ -358,6 +361,11 @@ def test_system_prompt_names_the_same_purpose_choices_as_the_page() -> None:
     assert ", ".join(f"'{choice}'" for choice in choices) in SYSTEM_PROMPT
 
 
+def test_system_prompt_and_track_schema_say_a_margin_under_prime_is_negative() -> None:
+    assert "פריים מינוס" in SYSTEM_PROMPT
+    assert "-0.25" in str(TrackArgs.model_fields["prime_spread"].description)
+
+
 async def test_every_tool_the_system_prompt_names_is_bound(world: World) -> None:
     def stand_in(name: str) -> BaseTool:
         async def engine_call() -> str:
@@ -372,6 +380,8 @@ async def test_every_tool_the_system_prompt_names_is_bound(world: World) -> None
     tool_fields = {
         *SetLoanArgs.model_fields,
         *AskTermArgs.model_fields,
+        *AskOfferArgs.model_fields,
+        *OfferTrackArgs.model_fields,
         *SetTermArgs.model_fields,
         *SetCeilingArgs.model_fields,
         *UpdateFinancesArgs.model_fields,
@@ -422,6 +432,40 @@ async def test_ask_ends_the_turn_after_the_tool_node(world: World) -> None:
             "text": None,
             "choices": None,
             "offer_clone": False,
+        },
+        "lead_in": None,
+    }
+
+
+async def test_ask_offer_ends_the_turn_with_the_form_on_the_screen(world: World) -> None:
+    await world.checks.set_loan(CHECK, LoanRequest("רכב", Decimal(60000)))
+    track = {"rate_kind": "prime", "rate": "0.5", "cpi_linked": False}
+    model = ScriptedChatModel(
+        replies=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "ask_offer",
+                        "args": {"lender": "קרן הפנסיה", "tracks": [track]},
+                        "id": "call-offer-0",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage("never reached"),
+        ]
+    )
+    graph = run(world, model)
+    state = await graph.ainvoke(said("קיבלתי הצעה מקרן הפנסיה"), check_config(PERSON, CHECK))
+    assert len(model.received) == 1
+    assert state["messages"][-1].content == ASKED_RESULT
+    assert world.sink.events[-1].data == {
+        "question": {
+            "kind": "offer",
+            "lender": "קרן הפנסיה",
+            "tracks": [track],
+            "max_term_months": None,
         },
         "lead_in": None,
     }

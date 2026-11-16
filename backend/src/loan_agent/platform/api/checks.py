@@ -3,8 +3,8 @@ check's panel, and send a message that starts a turn.
 
 Core building blocks:
 - router: POST/GET /api/checks, GET/DELETE /api/checks/{id}, POST /api/checks/{id}/clone,
-  /archive and /restore, POST /api/checks/{id}/messages, /market-sample and /term-ceiling, PUT
-  /api/checks/{id}/finances and /term
+  /archive and /restore, POST /api/checks/{id}/messages, /market-sample, /offer-sample and
+  /term-ceiling, PUT /api/checks/{id}/finances and /term
 - register_error_handlers: another person's check answers 404 like an unknown one; a message, a
   clone, an archive, a delete, a finances save or a term save while a turn runs answers 409, as do
   a message, a finances save or a term save to an archived check, a second archive, and a restore
@@ -145,6 +145,15 @@ async def delete_check(check_id: str, user: CurrentUser, runner: Runner) -> None
 async def send_message(check_id: str, body: Message, user: CurrentUser, runner: Runner) -> None:
     """Accepted once the message is stored; the reply arrives on the check's event stream."""
     await runner.send(user, check_id, body.text)
+
+
+@router.post("/{check_id}/offer-sample", status_code=status.HTTP_202_ACCEPTED)
+async def send_offer_sample(
+    check_id: str, body: Message, user: CurrentUser, runner: Runner
+) -> None:
+    """The page's offer chip, answered with the offer form and no model call; the form arrives on
+    the event stream as a question does, and the errors are a message's."""
+    await runner.send_offer_sample(user, check_id, body.text)
 
 
 @router.post("/{check_id}/market-sample", status_code=status.HTTP_202_ACCEPTED)

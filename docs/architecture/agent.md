@@ -25,14 +25,14 @@ flowchart LR
 ## The loop
 
 A check is one conversation, and the conversation is one LangGraph thread, the unit of state the
-graph checkpoints and resumes, named by the check's id.
-The graph has two nodes. The model node sends the Hebrew system prompt
-(`application/prompts/system_he.md`) and the thread's messages to the chat model, which either
-answers or asks for tool calls; the tool node runs the calls and appends their results; the loop
-repeats until the model answers without a tool call or puts a question on the person's screen
-with `ask` or `ask_term`. A refused question goes back to the model like any other tool error.
-The system prompt fixes the agent's manner (Hebrew only, plain terms, a calm tone, every question
-through `ask` or `ask_term`) and the arc of the conversation, which starts from the loan:
+graph checkpoints and resumes, named by the check's id. The graph has two nodes. The model node
+sends the Hebrew system prompt (`application/prompts/system_he.md`) and the thread's messages to the
+chat model, which either answers or asks for tool calls; the tool node runs the calls and appends
+their results; the loop repeats until the model answers without a tool call or puts a question on
+the person's screen with `ask`, `ask_term` or `ask_offer`. A refused question goes back to the model
+like any other tool error. The system prompt fixes the agent's manner (Hebrew only, plain terms, a
+calm tone, every question through `ask`, `ask_term` or `ask_offer`) and the arc of the conversation,
+which starts from the loan:
 
 1. The person states the loan, as an amount or as a price and the own capital put in, with a
    purpose if they name one. The loan is the price less the own capital; neither is stored.
@@ -87,6 +87,8 @@ The model sees two sets of tools. An agent tool's result is a compact `key: valu
 | Engine | `market_series` | Today's prime and the latest months of the prime and of the CPI's monthly change. |
 | Agent | `set_loan` | Saves the loan: its amount and an optional purpose, and a payment ceiling the person named in the same message, saved as stated before the term card proposes a term. Refuses an empty purpose, a ceiling of 0 or less, an amount of 0 or less, and an amount outside the principal limits the engine prices, naming them. When the check's recommendation is for another amount, its result tells the model to save options of the new amount and recommend again. |
 | Agent | `ask_term` | Puts the term card on the person's screen. Without a term it proposes one (below); with the number of months the person typed, it shows that term's first payment. Refuses a term outside 6 to 84 months, a check with no loan, and the term the last card already showed, which the person's answer confirms, so the model calls `set_term` instead of showing the same card again. |
+| Agent | `ask_offer` | Puts the offer form on the person's screen, with the lender, tracks and longest term the person already said filled in, when a message about a real offer lacks one of them. Refuses a check with no loan. |
+| Agent | (runner) | `POST /api/checks/{id}/offer-sample`, where the page sends the offer chip's sentence, tapped or typed, once the check has a loan, shows the empty offer form through `ask_offer` with no model call, and records in the conversation that the form is on the screen. |
 | Agent | (runner) | `POST /api/checks/{id}/term-ceiling`, from the term card's ceiling box, saves the ceiling as stated through `set_ceiling` and shows a new card through `ask_term` with no term, with no model call, and records both in the conversation. |
 | Agent | `set_term` | Saves a term the person typed in the conversation with no card open. A term confirmed on the card is saved by the page through `PUT /api/checks/{id}/term`, which runs the same tool code and saves a ceiling typed beside it as stated, before the line "אישור: N חודשים" reaches the model. Either way it prices every offer that leaves its term open again at the new term, up to the offer's maximum, before saving anything, and names those offers in its result. |
 | Agent | `set_ceiling` | Saves the monthly payment the person stated as the ceiling, replacing any ceiling the check held. Refuses 0 or less. |
@@ -241,7 +243,7 @@ person may send another message.
 | `loan.set`, `term.set` | A tool saved the loan or the confirmed term. |
 | `ceiling.set` | The person stated a ceiling; carries it with the source `stated`. |
 | `finances.updated` | A figure was saved; carries both figures, the ones missing, and the check's ceiling and its source after the save. |
-| `question.asked` | The model asked one question, or put up the term card (kind `term`, with the term and its first payment); the page renders it with a control. |
+| `question.asked` | The model asked one question, or put up the term card (kind `term`, with the term and its first payment) or the offer form (kind `offer`, with what the person already said); the page renders it with a control. |
 | `chart.shown` | A market series for the page to draw: which series, its date and its monthly values. |
 | `check.cloned` | Left on the source check after a clone, naming the copy; the page adds a handoff note to the source's conversation, with a button to the copy, and the source stays open. A clone does not copy it. |
 | `option.saved` | An option was saved; carries the engine's full result. |

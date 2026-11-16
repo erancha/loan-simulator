@@ -284,6 +284,45 @@ async def test_another_term_after_a_card_gets_its_own_card(world: World) -> None
     assert isinstance(second, dict) and second["question"]["term_months"] == 48
 
 
+async def test_ask_offer_puts_the_form_on_the_screen_with_what_was_said(world: World) -> None:
+    await world.tools.set_loan("רכב", "60000")
+    track = {"rate_kind": "prime", "rate": "0.5", "cpi_linked": False}
+
+    result = await world.tools.ask_offer("קרן הפנסיה", [track], 84)
+
+    assert result == ASKED_RESULT
+    assert world.events_of(QUESTION_ASKED) == [
+        {
+            "question": {
+                "kind": "offer",
+                "lender": "קרן הפנסיה",
+                "tracks": [track],
+                "max_term_months": 84,
+            },
+            "lead_in": None,
+        }
+    ]
+
+
+async def test_ask_offer_with_nothing_said_opens_an_empty_form(world: World) -> None:
+    await world.tools.set_loan(None, "60000")
+
+    await world.tools.ask_offer(None, [], None)
+
+    assert world.events_of(QUESTION_ASKED) == [
+        {
+            "question": {"kind": "offer", "lender": None, "tracks": [], "max_term_months": None},
+            "lead_in": None,
+        }
+    ]
+
+
+async def test_ask_offer_before_a_loan_names_set_loan(world: World) -> None:
+    with pytest.raises(ToolError, match="set_loan"):
+        await world.tools.ask_offer(None, [], None)
+    assert world.events_of(QUESTION_ASKED) == []
+
+
 async def test_ask_term_needs_a_loan(world: World) -> None:
     with pytest.raises(ToolError, match="set_loan"):
         await world.tools.ask_term(None)

@@ -67,7 +67,7 @@ The tools:
 | `shortest_comfortable_term` | The shortest term, in 6-month steps up to 84, at which every suggested track's worst-case payment is at or below a ceiling, or with `any_track` at least one; null when none is. |
 | `shortest_comfortable_offer_term` | The same search for one real offer, up to the longest term it allows. |
 | `largest_comfortable_loan` | The largest loan, in whole thousands of shekels, on which at least one suggested track's worst-case payment fits a ceiling at a given term; null when none does. |
-| `assess_affordability` | The payment ceiling from net fixed income and fixed expenses, with reason codes. |
+| `assess_affordability` | The payment ceiling from net fixed income and fixed expenses, with the two caps it is the lower of and reason codes. |
 
 The model calls the first three; the agent's own check code calls the rest, so the term card, the
 ceiling and the guardrail's remedies come from code rather than from the model's choice of tool

@@ -49,6 +49,7 @@ async def test_turn_state_of_a_new_check_has_nothing_yet(deps: ToolDeps) -> None
         "term_months: none",
         "payment_ceiling: none",
         "ceiling_source: none",
+        "ceiling_basis: none",
         "net_fixed_income: not told",
         "fixed_expenses: not told",
         "missing: net_fixed_income, fixed_expenses",
@@ -81,6 +82,9 @@ async def test_turn_state_reports_a_checked_recommendation_with_its_ceiling(
     deps: ToolDeps,
 ) -> None:
     await deps.checks.set_loan(CHECK, LoanRequest(None, Decimal(100000)))
+    await deps.checks.set_finances(
+        CHECK, Finances(net_fixed_income=Decimal(12000), fixed_expenses=Decimal(6000))
+    )
     await deps.checks.set_ceiling(CHECK, Decimal(3000), "finances")
     await deps.recommendations.save(
         Recommendation(CHECK, "option-1", None, "בתוך התקרה", Decimal(100000), Decimal(3000), NOW)
@@ -94,6 +98,27 @@ async def test_turn_state_reports_a_checked_recommendation_with_its_ceiling(
         "ceiling_source: finances",
         "recommendation: checked",
     } <= lines
+
+
+async def test_turn_state_explains_a_ceiling_derived_from_the_finances(deps: ToolDeps) -> None:
+    told = Finances(net_fixed_income=Decimal(20000), fixed_expenses=Decimal(10600))
+    await deps.checks.set_finances(CHECK, told)
+    await deps.checks.set_ceiling(CHECK, Decimal("4700.00"), "finances")
+
+    lines = (await turn_state(PERSON, CHECK, deps)).splitlines()
+
+    assert (
+        "ceiling_basis: the lower of 30% of net_fixed_income = 6000.00 and 50% of "
+        "(net_fixed_income minus fixed_expenses) = 4700.00"
+    ) in lines
+
+
+async def test_turn_state_gives_no_basis_for_a_stated_ceiling(deps: ToolDeps) -> None:
+    await deps.checks.set_ceiling(CHECK, Decimal(1500), "stated")
+
+    lines = (await turn_state(PERSON, CHECK, deps)).splitlines()
+
+    assert "ceiling_basis: none" in lines
 
 
 async def test_turn_state_offers_the_previous_checks_finances(deps: ToolDeps) -> None:

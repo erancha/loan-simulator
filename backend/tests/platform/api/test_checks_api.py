@@ -236,6 +236,21 @@ def test_the_market_sample_is_accepted_with_202_and_answered_without_the_model(
     ]
 
 
+def test_the_offer_sample_is_accepted_with_202_and_answered_without_the_model(
+    world: World, client: TestClient
+) -> None:
+    check_id = client.post("/api/checks").json()["id"]
+
+    response = client.post(f"/api/checks/{check_id}/offer-sample", json={"text": "קיבלתי הצעה"})
+    world.drain(client)
+
+    assert response.status_code == 202
+    assert [event.type for event in world.events.rows[check_id]][:2] == [
+        "message.user",
+        "turn.status",
+    ]
+
+
 def test_an_empty_message_is_422(client: TestClient) -> None:
     check_id = client.post("/api/checks").json()["id"]
     for route in ("messages", "market-sample"):

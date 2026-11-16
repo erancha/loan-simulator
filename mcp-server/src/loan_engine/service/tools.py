@@ -84,6 +84,17 @@ class Bounds(_Output):
         description="Highest monthly loan payment the person can carry, ₪ per month"
     )
     counted_income: Money = Field(description="Monthly income the ceiling is based on, ₪ per month")
+    income_share: Decimal = Field(description="Fraction of the income one loan payment may take")
+    ceiling_by_income_share: Money = Field(
+        description="The cap that is income_share of the income, ₪ per month"
+    )
+    disposable_share: Decimal = Field(
+        description="Fraction of the income left after fixed expenses a payment may take"
+    )
+    ceiling_by_disposable_income: Money = Field(
+        description="The cap that is disposable_share of the income minus the fixed expenses, "
+        "₪ per month; negative when the expenses exceed the income"
+    )
     reasons: list[affordability.Reason] = Field(description="How the ceiling was set, in order")
 
 
@@ -289,7 +300,8 @@ def register_tools(
     def assess_affordability(profile: Annotated[Profile, Field(description=_PROFILE)]) -> Bounds:
         """Call this once the person's monthly income and obligations are known, before any loan
         amount or payment is discussed. Returns the highest monthly payment the person can carry,
-        the income counted, and reason codes for how the payment was set.
+        the income counted, the two caps it is the lower of, each with its share, and reason
+        codes for how the payment was set.
         """
         return Bounds.model_validate(affordability.assess_affordability(profile))
 

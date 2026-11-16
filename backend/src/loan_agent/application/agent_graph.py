@@ -1,6 +1,6 @@
 """The agent loop: a language model leads the Hebrew conversation and calls the engine's tools and
-the check tools until it has a reply for the person or has asked them a question through ask or
-ask_term; each check's conversation is one checkpoint thread.
+the check tools until it has a reply for the person or has asked them a question through ask,
+ask_term or ask_offer; each check's conversation is one checkpoint thread.
 
 - build_agent_graph: the model node and the tool node over the thread's messages, as an AgentGraph
 - check_config: the run configuration naming the person and the check, with the turn's step
@@ -117,6 +117,34 @@ class SetLoanArgs(_Args):
     )
 
 
+class OfferTrackArgs(_Args):
+    rate_kind: Literal["fixed", "prime"] = Field(description="'fixed' or 'prime'")
+    rate: str | None = Field(
+        default=None,
+        pattern=_SIGNED_DECIMAL,
+        description="Annual percent of a fixed track ('3.5'), or the margin over prime of a prime "
+        "track ('0.5', '-0.25' under prime), as a decimal string; omit when the person did not "
+        "say it",
+    )
+    cpi_linked: bool = Field(
+        default=False,
+        description="true when the person said a fixed track is linked to the index; a prime "
+        "track is never linked",
+    )
+
+
+class AskOfferArgs(_Args):
+    lender: str | None = Field(default=None, description="Who made the offer, when said")
+    tracks: list[OfferTrackArgs] = Field(
+        default_factory=list, description="The tracks the person mentioned, when any"
+    )
+    max_term_months: int | None = Field(
+        default=None, description="The longest term the offer allows, months, when said"
+    )
+    # Filled by the tool node from the graph state and hidden from the model's schema.
+    state: Annotated[MessagesState, InjectedState]
+
+
 class AskTermArgs(_Args):
     term_months: int | None = Field(
         default=None,
@@ -159,8 +187,8 @@ class TrackArgs(_Args):
     prime_spread: str | None = Field(
         default=None,
         pattern=_SIGNED_DECIMAL,
-        description="Annual percent over prime ('1.5' means prime + 1.5%), as a decimal string; "
-        "prime tracks only",
+        description="Annual percent over prime ('1.5' means prime + 1.5%; '-0.25' means prime "
+        "minus 0.25%), as a decimal string; prime tracks only",
     )
     cpi_linked: bool = Field(description="true when the balance is linked to the consumer index")
     method: Literal["spitzer", "equal_principal", "balloon"] = Field(
@@ -325,6 +353,17 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
         _require_one_question(state)
         return await _tools_for(config, deps).ask_term(term_months)
 
+    async def ask_offer(
+        config: RunnableConfig,
+        state: Annotated[MessagesState, InjectedState],
+        lender: str | None = None,
+        tracks: list[OfferTrackArgs] | None = None,
+        max_term_months: int | None = None,
+    ) -> str:
+        _require_one_question(state)
+        said = [] if tracks is None else [track.model_dump() for track in tracks]
+        return await _tools_for(config, deps).ask_offer(lender, said, max_term_months)
+
     async def set_term(term_months: int, config: RunnableConfig) -> str:
         return await _tools_for(config, deps).set_term(term_months)
 
@@ -388,6 +427,16 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
             args_schema=AskTermArgs,
         ),
         StructuredTool.from_function(
+            coroutine=ask_offer,
+            name="ask_offer",
+            description="Call this when the person says they received a real offer and the "
+            "message does not hold the lender, every track's interest and the number of months. "
+            "Opens a form on the person's screen with what they said filled in, and the turn "
+            "ends; the answer arrives as the person's next message. Do not call it for an offer "
+            "that mentions a balloon, a fee, a fixed number of months or an amount cap.",
+            args_schema=AskOfferArgs,
+        ),
+        StructuredTool.from_function(
             coroutine=set_term,
             name="set_term",
             description="Save the term the person confirmed on the term card.",
@@ -448,13 +497,14 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
 
 
 # The tools that put a question on the person's screen and end the turn.
-_QUESTION_TOOLS = frozenset({"ask", "ask_term"})
+_QUESTION_TOOLS = frozenset({"ask", "ask_term", "ask_offer"})
 
 
 def _require_one_question(state: MessagesState) -> None:
     if _question_call_count(state) > 1:
         raise ToolException(
-            "one question per turn: call ask or ask_term once, with the one question to ask now"
+            "one question per turn: call ask, ask_term or ask_offer once, with the one question to "
+            "ask now"
         )
 
 
@@ -525,8 +575,8 @@ def _correction_for(reply: AIMessage, messages: Sequence[BaseMessage]) -> str | 
 
 
 def _after_tools(state: MessagesState) -> Literal["model", "__end__"]:
-    """Ends the turn once ask or ask_term put a question on the person's screen; a refused
-    question, like any other tool result, goes back to the model."""
+    """Ends the turn once ask, ask_term or ask_offer put a question on the person's screen; a
+    refused question, like any other tool result, goes back to the model."""
     asked = _question_call_ids(state)
     for message in reversed(state["messages"]):
         if isinstance(message, AIMessage):

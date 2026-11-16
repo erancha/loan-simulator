@@ -7,10 +7,6 @@ import {
   questionText,
   MARKET_SAMPLE,
   OFFER_SAMPLE,
-  PLACEHOLDER,
-  PLACEHOLDER_CANCEL,
-  PLACEHOLDER_CONFIRM,
-  PLACEHOLDER_QUESTION,
   SAMPLE_MESSAGES,
   SEND_BUTTON,
   THINKING,
@@ -21,7 +17,7 @@ import { CloneNote } from './CloneNote.tsx'
 import { isArchived, isMessage } from './events.ts'
 import type { ChatEntry, ChatMessage, CheckState } from './events.ts'
 import { formatTimestamp } from '../money.ts'
-import { withBold } from './emphasis.tsx'
+import { withBold, withValues } from './emphasis.tsx'
 import { MarketChart } from './MarketChart.tsx'
 import { QuestionBubble } from './QuestionBubble.tsx'
 import type { Answer } from './QuestionBubble.tsx'
@@ -108,7 +104,7 @@ export function Chat({
   const locked = running || sending
   const archived = isArchived({ messages: entries })
   // The opening samples help start a conversation, so they go once the model asks its first
-  // question; once there is a recommendation, the offer sample shows how to bring a real offer.
+  // question; once there is a recommendation, the offer sample opens the form for a real offer.
   // Market data is worth asking at any point and costs no model call, so that sample stays.
   const opening = !recommended && !entries.some((entry) => entry.role === 'question')
   const samples = [
@@ -168,24 +164,20 @@ export function Chat({
     lastTop.current = element.scrollTop
   }
 
-  // A sample's ?? marks a figure the person was to fill in, so a message still holding one asks
-  // before it goes.
-  const [confirmingPlaceholder, setConfirmingPlaceholder] = useState(false)
-
-  async function submit(confirmed = false) {
-    const text = draft.trim()
-    if (text === '' || locked) return
-    if (!confirmed && text.includes(PLACEHOLDER)) {
-      setConfirmingPlaceholder(true)
-      return
-    }
-    setConfirmingPlaceholder(false)
+  /** Resolves true when the text was sent. */
+  async function deliver(text: string): Promise<boolean> {
     setSending(true)
     try {
-      if (await onSend(text)) setDraft('')
+      return await onSend(text)
     } finally {
       setSending(false)
     }
+  }
+
+  async function submit() {
+    const text = draft.trim()
+    if (text === '' || locked) return
+    if (await deliver(text)) setDraft('')
   }
 
   function onSubmit(event: FormEvent) {
@@ -226,7 +218,7 @@ export function Chat({
                 <CloneNote cloneId={entry.cloneId} onOpenCheck={onOpenCheck} />
               ) : (
                 <p className={`bubble bubble-${entry.role}`}>
-                  {entry.role === 'assistant' ? withBold(entry.text) : entry.text}
+                  {entry.role === 'assistant' ? withValues(entry.text) : entry.text}
                   {!entry.complete && <span className="caret" aria-hidden="true" />}
                 </p>
               )}
@@ -258,6 +250,10 @@ export function Chat({
               className={fresh ? 'border-sweep sweep-after-input' : undefined}
               disabled={locked}
               onClick={() => {
+                if ('sendsAtOnce' in sample) {
+                  void deliver(sample.text)
+                  return
+                }
                 // The trailing space invites the person to type on after the sample.
                 setDraft(`${sample.text} `)
                 if (input.current === null) throw new Error('the input renders with the samples')
@@ -276,10 +272,7 @@ export function Chat({
             <textarea
             ref={input}
             value={draft}
-            onChange={(event) => {
-              setDraft(event.target.value)
-              setConfirmingPlaceholder(false)
-            }}
+            onChange={(event) => setDraft(event.target.value)}
             onKeyDown={onKeyDown}
             aria-label={INPUT_LABEL}
             placeholder={running ? INPUT_PLACEHOLDER.running : INPUT_PLACEHOLDER.idle}
@@ -291,24 +284,6 @@ export function Chat({
             {SEND_BUTTON}
           </button>
         </form>
-      )}
-      {confirmingPlaceholder && (
-        <div className="check-confirm">
-          <p>{PLACEHOLDER_QUESTION}</p>
-          <button type="button" className="primary" onClick={() => void submit(true)}>
-            {PLACEHOLDER_CONFIRM}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setConfirmingPlaceholder(false)
-              if (input.current === null) throw new Error('the input renders with the prompt')
-              input.current.focus()
-            }}
-          >
-            {PLACEHOLDER_CANCEL}
-          </button>
-        </div>
       )}
       {notice !== null && <p className="chat-notice" role="status">{notice}</p>}
     </div>

@@ -165,7 +165,8 @@ export type QuestionField =
 
 /**
  * A field the page asks for, free text with optional choices, the offer to clone the check, which
- * the page words itself, or the term to confirm with the first payment it gives. A stored
+ * the page words itself, the term to confirm with the first payment it gives, or a lender's offer
+ * to fill in, with what the person already said about it. A stored
  * question of the first two kinds may carry no `offer_clone`: the log keeps each question as the
  * app version that asked it wrote it.
  */
@@ -174,6 +175,22 @@ export type Question =
   | { kind?: undefined; field: null; text: string; choices: string[] | null; offer_clone?: false }
   | { kind?: undefined; field: null; text: null; choices: null; offer_clone: true }
   | { kind: 'term'; term_months: number; first_payment: string }
+  | {
+      kind: 'offer'
+      lender: string | null
+      tracks: OfferTrackDraft[]
+      max_term_months: number | null
+    }
+
+/**
+ * A track of an offer as far as the person described it. `rate` is the annual percent of a fixed
+ * track or the signed margin over prime of a prime track, as a decimal string; null when unsaid.
+ */
+export interface OfferTrackDraft {
+  rate_kind: 'fixed' | 'prime'
+  rate: string | null
+  cpi_linked: boolean
+}
 
 /** Hands the source check's conversation over to its copy. */
 export interface CheckCloned {

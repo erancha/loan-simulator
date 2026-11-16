@@ -122,13 +122,14 @@ function examplesOnly({ preferred, alternative }: RecommendationPresented): bool
 }
 
 /**
- * What the person typed for a message, or null for a tap (a skip or a choice), which types nothing.
- * An answer to a live question was typed into the question's own box, as its value alone: the
- * money box shows its own ₪. Any other message was typed into the chat's composer.
+ * What the person typed for a message, or null for a tap (a skip or a choice), which types nothing,
+ * and for an answer to the term card or the offer form, which is worded from several boxes.
+ * An answer to any other live question was typed into the question's own box, as its value alone:
+ * the money box shows its own ₪. Any other message was typed into the chat's composer.
  */
 function entryOf(text: string, live: Question | null): Entry | null {
   if (live === null) return { box: INPUT_LABEL, value: text }
-  if (live.kind === 'term') return null
+  if (live.kind === 'term' || live.kind === 'offer') return null
   const label = questionLabel(live)
   const prefix = answerLine(label, '')
   if (!text.startsWith(prefix)) return null
@@ -207,6 +208,7 @@ export function createDemoBackend(recording: Recording, pace: Pace, showEntry: S
     'GET /api/checks': () => json(checks()),
     [`POST /api/checks/${DEMO_CHECK_ID}/messages`]: () => new Response(null, { status: 202 }),
     [`POST /api/checks/${DEMO_CHECK_ID}/market-sample`]: () => new Response(null, { status: 202 }),
+    [`POST /api/checks/${DEMO_CHECK_ID}/offer-sample`]: () => new Response(null, { status: 202 }),
   }
 
   async function fetch(path: string, init?: RequestInit): Promise<Response> {

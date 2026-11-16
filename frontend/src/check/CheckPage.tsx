@@ -4,6 +4,7 @@ import {
   saveFinances,
   saveTerm,
   sendMarketSample,
+  sendOfferSample,
   sendMessage,
   sendTermCeiling,
 } from '../api/checks.ts'
@@ -20,7 +21,7 @@ import { RecommendationCard } from './RecommendationCard.tsx'
 import { isArchived, liveQuestion } from './events.ts'
 import type { CheckState } from './events.ts'
 import type { CheckSummary } from '../api/types.ts'
-import { isMarketSample } from './marketSample.ts'
+import { isMarketSample, isOfferSample } from './serverSamples.ts'
 import { useCheckEvents } from './useCheckEvents.ts'
 
 /** A 429's detail carries the ISO time the next message is allowed. */
@@ -110,7 +111,14 @@ export function CheckPage({
 
   /** Resolves true when the server accepted the text; a 409 means a turn is already running. */
   function send(text: string): Promise<boolean> {
-    return deliver(() => (isMarketSample(text) ? sendMarketSample : sendMessage)(checkId, text))
+    // The offer form needs the check's loan, so before one the sentence goes to the model, which
+    // asks for the loan.
+    const request = isMarketSample(text)
+      ? sendMarketSample
+      : isOfferSample(text) && state.loan !== null
+        ? sendOfferSample
+        : sendMessage
+    return deliver(() => request(checkId, text))
   }
 
   /** Runs a request that starts a turn, with a send's notices and its wait for the turn's end. */

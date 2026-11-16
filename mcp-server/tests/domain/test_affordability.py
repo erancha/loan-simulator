@@ -15,6 +15,13 @@ def test_reference_user_ceiling() -> None:
     assert bounds.reasons == ["ceiling_by_disposable_income"]
 
 
+def test_bounds_carry_both_caps_and_their_shares() -> None:
+    bounds = assess_affordability(make_profile(10000, 7000))
+    assert (bounds.income_share, bounds.ceiling_by_income_share) == (Decimal("0.30"), 3000)
+    assert (bounds.disposable_share, bounds.ceiling_by_disposable_income) == (Decimal("0.50"), 1500)
+    assert bounds.payment_ceiling == 1500
+
+
 def test_ceiling_by_income_share() -> None:
     bounds = assess_affordability(make_profile(8600, 1000))
     assert bounds.payment_ceiling == Decimal("2580.00")

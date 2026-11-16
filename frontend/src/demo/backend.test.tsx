@@ -17,7 +17,7 @@ import {
 import { createDemoBackend } from './backend.ts'
 import type { Entry, Recording } from './backend.ts'
 
-const REPLY = 'הנה ההמלצה: פריים ל-36 חודשים.'
+const REPLY = 'הנה ההמלצה: מסלול הפריים.'
 const PACE = { pauseMs: 0, typingMs: 0, typedChars: 8, entryMs: 0 }
 const noEntry = () => () => {}
 
@@ -86,6 +86,12 @@ test('the demo lists the check with the loan and term the replay has set so far'
       },
     })
   })
+})
+
+test('the demo accepts the offer chip, which a visitor may tap', async () => {
+  const backend = createDemoBackend(recording, PACE, noEntry)
+  const response = await backend.fetch('/api/checks/demo/offer-sample', { method: 'POST' })
+  expect(response.status).toBe(202)
 })
 
 test('the demo refuses a profile request, which the page never makes', async () => {

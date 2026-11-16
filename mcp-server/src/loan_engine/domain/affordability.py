@@ -1,6 +1,7 @@
 """The household payment ceiling, the only calculation that reads the borrower's finances.
 
-- Bounds: the highest monthly loan payment, the income it rests on and the reasons it was set
+- Bounds: the highest monthly loan payment, the income it rests on, the two caps it is the lower
+  of, each with its share, and the reasons it was set
 - assess_affordability(): the ceiling, the lower of a share of income and a share of what remains
   after fixed expenses, never below zero
 """
@@ -23,6 +24,11 @@ Reason = Literal[
 class Bounds:
     payment_ceiling: Decimal
     counted_income: Decimal
+    income_share: Decimal
+    ceiling_by_income_share: Decimal
+    disposable_share: Decimal
+    # Negative when the fixed expenses exceed the income.
+    ceiling_by_disposable_income: Decimal
     reasons: list[Reason]
 
 
@@ -36,4 +42,12 @@ def assess_affordability(profile: Profile) -> Bounds:
     ceiling = max(min(by_share, by_disposable), Decimal(0))
     if ceiling == 0:
         reasons.append("no_room_for_payment")
-    return Bounds(ceiling, income, reasons)
+    return Bounds(
+        payment_ceiling=ceiling,
+        counted_income=income,
+        income_share=INCOME_SHARE_CAP,
+        ceiling_by_income_share=by_share,
+        disposable_share=DISPOSABLE_SHARE_CAP,
+        ceiling_by_disposable_income=by_disposable,
+        reasons=reasons,
+    )
