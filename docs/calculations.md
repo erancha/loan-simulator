@@ -160,6 +160,11 @@ and has no split between them, so the same average prices both kinds. No publish
 CPI-linked consumer loans, so there is no typical linked track; a linked track enters only as a
 real offer.
 
+These tracks are examples, which illustrate a loan before any lender has quoted one; nobody can
+take them. The first real offer saved on a check deletes its examples, with a recommendation that
+names one, and no example is saved while the check holds an offer of its loan amount. From then on
+offers are compared only with each other, so no offer is ever measured against an example.
+
 ### Proposed term
 
 The term card's term is chosen by the agent from two constants of its own
@@ -178,7 +183,11 @@ The first payment shown on the card is the higher of the two tracks' first payme
 ### Remedies above the ceiling
 
 When the recommended options do not fit the ceiling and no saved option for the term does, the
-recommendation stands above the ceiling, and two searches give the person something concrete:
+recommendation stands above the ceiling. A check with real offers is measured by its offers alone:
+the remedy is the shortest term, within what each lender allows, at which an offer that leaves its
+term open fits (`shortest_comfortable_offer_term`), else asking the lenders for a longer term or
+borrowing less. A check with examples only gets two searches that give the person something
+concrete:
 
 - The shortest term up to 84 months at which at least one typical track fits
   (`shortest_comfortable_term` with `any_track`). For a prime track that is the payment in its

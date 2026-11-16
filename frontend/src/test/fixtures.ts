@@ -166,7 +166,7 @@ const primeTrack: Track = {
 
 export const optionPrime36 = savedOption({
   option_id: 'prime-36',
-  source: 'published_average',
+  source: 'example',
   lender: null,
   offer_date: null,
   track: primeTrack,
@@ -200,7 +200,7 @@ const fixedTrack: Track = {
 
 export const optionFixed36 = savedOption({
   option_id: 'fixed-36',
-  source: 'published_average',
+  source: 'example',
   lender: null,
   offer_date: null,
   track: fixedTrack,
@@ -236,7 +236,7 @@ export const optionOfferFixed = savedOption({
 
 export const optionBalloon = savedOption({
   option_id: 'balloon-36',
-  source: 'published_average',
+  source: 'example',
   lender: null,
   offer_date: null,
   track: { ...primeTrack, method: 'balloon', balloon_amount: '10000' },
@@ -277,6 +277,14 @@ export const recommendationPrime: EventOf<'recommendation.presented'> = {
  * test runs on. */
 export const REFERENCE_DECISION =
   /^הלוואה של 29,000 ₪ ל-36 חודשים \(עד \d{2}\/\d{4}\), כ-904 ₪ בחודש\.$/
+
+export function examplesRemoved(
+  seq: number,
+  option_ids: string[],
+  recommendation_removed: boolean,
+): EventOf<'examples.removed'> {
+  return { type: 'examples.removed', data: { option_ids, recommendation_removed }, seq }
+}
 
 export function checkArchived(seq: number): EventOf<'check.archived'> {
   return {

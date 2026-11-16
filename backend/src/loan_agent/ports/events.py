@@ -24,6 +24,8 @@ TERM_SET = "term.set"
 CEILING_SET = "ceiling.set"
 FINANCES_UPDATED = "finances.updated"
 OPTION_SAVED = "option.saved"
+# A check's examples go once it holds a real offer, with a recommendation that names one.
+EXAMPLES_REMOVED = "examples.removed"
 RECOMMENDATION_PRESENTED = "recommendation.presented"
 QUESTION_ASKED = "question.asked"
 CHART_SHOWN = "chart.shown"

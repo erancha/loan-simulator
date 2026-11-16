@@ -6,6 +6,7 @@ import {
   cpiChart,
   delta,
   ceilingSet,
+  examplesRemoved,
   finances,
   financesUpdated,
   loan,
@@ -89,6 +90,24 @@ test('a new recommendation clears optionsSinceRecommendation', () => {
     withSeq(recommendationPrime, 20),
   ])
   expect(state.optionsSinceRecommendation).toEqual([])
+})
+
+test('a real offer removes the examples and the recommendation that named one', () => {
+  const state = play([
+    optionPrime36,
+    optionFixed36,
+    recommendationPrime,
+    optionOfferFixed,
+    examplesRemoved(20, ['prime-36', 'fixed-36'], true),
+  ])
+  expect([...state.options.keys()]).toEqual(['offer-hapoalim'])
+  expect(state.recommendation).toBeNull()
+  expect(state.optionsSinceRecommendation).toEqual(['offer-hapoalim'])
+})
+
+test('removing examples keeps a recommendation that names none of them', () => {
+  const state = play([optionPrime36, recommendationPrime, examplesRemoved(20, ['fixed-36'], false)])
+  expect(state.recommendation).toBe(recommendationPrime.data)
 })
 
 test('status follows the last turn.status; turn.failed sets failure; message.user clears it', () => {

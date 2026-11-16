@@ -100,6 +100,8 @@ class OptionRepository(Protocol):
         """Raises KeyError for an option the check does not have."""
         ...
 
+    async def remove(self, check_id: str, option_ids: Collection[str]) -> None: ...
+
 
 @runtime_checkable
 class RecommendationRepository(Protocol):
@@ -108,6 +110,10 @@ class RecommendationRepository(Protocol):
         ...
 
     async def latest(self, check_id: str) -> Recommendation | None: ...
+
+    async def remove(self, check_id: str) -> None:
+        """Leaves the check with no recommendation; a check that has none is left as it is."""
+        ...
 
 
 @runtime_checkable

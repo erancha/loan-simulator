@@ -198,6 +198,19 @@ function apply(state: CheckState, event: CheckEvent): CheckState {
           : state.optionsSinceRecommendation,
       }
     }
+    case 'examples.removed': {
+      const { option_ids: removed, recommendation_removed } = event.data
+      const options = new Map(state.options)
+      for (const id of removed) options.delete(id)
+      return {
+        ...state,
+        options,
+        recommendation: recommendation_removed ? null : state.recommendation,
+        optionsSinceRecommendation: state.optionsSinceRecommendation.filter(
+          (id) => !removed.includes(id),
+        ),
+      }
+    }
     case 'recommendation.presented':
       return {
         ...state,

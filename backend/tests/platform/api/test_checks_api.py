@@ -97,12 +97,12 @@ def test_a_check_is_started_once_the_person_sends_it_a_message(
 @pytest.mark.parametrize(
     ("first", "second", "alternative", "examples_only"),
     [
-        ("published_average", "published_average", None, True),
-        ("published_average", "published_average", "o2", True),
-        ("offer", "published_average", "o2", False),
-        ("published_average", "offer", "o2", False),
-        ("published_average", "offer", None, True),
-        ("offer", "published_average", None, False),
+        ("example", "example", None, True),
+        ("example", "example", "o2", True),
+        ("offer", "example", "o2", False),
+        ("example", "offer", "o2", False),
+        ("example", "offer", None, True),
+        ("offer", "example", None, False),
     ],
 )
 def test_list_says_whether_the_recommendation_names_only_examples(

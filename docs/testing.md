@@ -63,22 +63,25 @@ saved loan, an amount the engine does not price, the term card's 60 months for a
 ceiling and the ceiling deciding a car's term with one, the first-payment search without a ceiling,
 the worst-case search with one, a term outside 6 to 84 months, and that the term the last card
 showed is refused as a new card while another term gets one. The comparison tests prove the classes
-of a gap (זניח, במקצת, ברור) on the figures of a real conversation, and that options of
-another term are not compared. The offer tests prove an open offer priced at the confirmed term or
-at its shorter maximum, a term change that prices open offers again and leaves fixed ones, an engine
-refusal there that saves nothing, and an option saved again with the same figures refused while
-another lender's is saved. The ceiling and finances tools prove a stated ceiling, a derived one that
-replaces it, a bad figure or an engine refusal that saves nothing, and the request to recommend
-again after a ceiling change. The guardrail's tests prove an unchecked recommendation without a
-ceiling and a checked one within it, an option of another amount, an example of another term refused
-and not named as fitting, and each answer above the ceiling: a refusal naming a saved option that
-fits, else a recommendation presented above the ceiling with its remedy, a longer term, the largest
-loan when 84 months do not fit, and none for a ceiling too low for any loan; an example never beats
-a real offer, and a balloon is judged on its recurring payment. The ask tool's tests prove the
-emitted question and its fixed result, and its refusals: a field the check already holds, named with
-its value, and English in the text. The offer form's tool tests prove the question it emits, with
-what the person said or with nothing, and its refusal of a check with no loan. The state block's
-tests prove the loan, term, ceiling and recommendation states, and the previous check's finances.
+of a gap (זניח, במקצת, ברור) on the figures of a real conversation, and that options of another term
+are not compared. The offer tests prove an open offer priced at the confirmed term or at its shorter
+maximum, a term change that prices open offers again and leaves fixed ones, an engine refusal there
+that saves nothing, and an option saved again with the same figures refused while another lender's
+is saved. The ceiling and finances tools prove a stated ceiling, a derived one that replaces it, a
+bad figure or an engine refusal that saves nothing, and the request to recommend again after a
+ceiling change. The guardrail's tests prove an unchecked recommendation without a ceiling and a
+checked one within it, an option of another amount, an example of another term refused and not named
+as fitting, and each answer above the ceiling: a refusal naming a saved option that fits, else a
+recommendation presented above the ceiling with its remedy, a longer term, the largest loan when 84
+months do not fit, and none for a ceiling too low for any loan; for a check with offers, the longer
+term an open offer allows or the turn to the lenders, with no example search; and a balloon is
+judged on its recurring payment. A saved offer deletes the check's examples with a recommendation
+that names one, and an example is refused once the check holds an offer. The ask tool's tests prove
+the emitted question and its fixed result, and its refusals: a field the check already holds, named
+with its value, and English in the text. The offer form's tool tests prove the question it emits,
+with what the person said or with nothing, and its refusal of a check with no loan. The state
+block's tests prove the loan, term, ceiling and recommendation states, and the previous check's
+finances.
 
 The agent graph runs against a scripted fake chat model, which proves tool wiring, that every tool
 the system prompt names is bound, ask among them, that it lists the same loan sources as the page,
@@ -131,8 +134,9 @@ over the app and the config, and, after the tests, the Vite build the Docker ima
 **Reducer.** `events.test.ts` replays recorded events into the state: a replay builds the
 conversation in order, a reply fragment is replaced by its complete message and ignored after it, a
 repeated sequence number changes nothing, a second save of one option keeps its place, options saved
-after a recommendation are tracked until the next recommendation, and a turn end is counted only
-when a running turn goes idle. Its liveness tests prove that a question becomes an entry that is
+after a recommendation are tracked until the next recommendation, removed examples leave the
+options with the recommendation when it named one, and a turn end is counted only when a running
+turn goes idle. Its liveness tests prove that a question becomes an entry that is
 live once the turn is idle, that no question is live while a turn runs, and that status and
 finances events leave it open while a person's message closes it. The loan, term, ceiling and
 finances events set the check's figures, and an archive and a restore add and drop the closing
@@ -141,8 +145,8 @@ note.
 **Card.** `card.test.ts` maps stored results to what the card shows: the decision sentence, the
 green and amber chips for each kind of track (prime, linked, balloon), the offer sources, the three
 group titles, the three check states (unchecked, fits with the ceiling and its source, above with
-both payments), the samples for another term left out of the group while offers stay, and the
-error for a recommended option that is not saved.
+both payments), the examples for another term left out of the group while offers stay, the other
+options cheapest first, and the error for a recommended option that is not saved.
 `RecommendationCard.test.tsx` renders the model: the labelled options, the chip that marks an
 example and not a real offer, the open and closable fold, and the empty states.
 

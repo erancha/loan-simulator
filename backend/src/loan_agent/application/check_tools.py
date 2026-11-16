@@ -3,15 +3,16 @@ payment ceiling and the person's finances, to ask the person a question and to p
 recommendation, with the guardrail that keeps a recommendation honest.
 
 - ToolDeps: the ports, the clock and the id generator the tools act through
-- CheckTools: set_loan, set_term, set_ceiling, update_finances, save_option (an example),
-  save_offer (each track of a real offer as an option of its own) and present_recommendation,
-  each returning a compact key: value summary for the model and emitting an event for the page;
+- CheckTools: set_loan, set_term, set_ceiling, update_finances, save_option (an example, refused
+  once the check holds a real offer of its loan amount), save_offer (each track of a real offer
+  as an option of its own, removing the check's examples) and present_recommendation, each
+  returning a compact key: value summary for the model and emitting an event for the page;
   ask, ask_term and ask_offer, emitting a question for the page and returning ASKED_RESULT,
   after which the turn ends; show_chart, emitting a market series for the page
 - The guardrail in present_recommendation: every named option borrows the loan amount; with a
   ceiling, every one's worst-case recurring payment fits it, and a refusal names the remedy to
-  offer the person; an example never beats a real offer; the preferred option is the cheapest of
-  its source and term that fits, unless the person said what makes a dearer one suit them
+  offer the person; the preferred option is the cheapest of its term that fits, unless the
+  person said what makes a dearer one suit them
 - ToolError: a refusal whose message tells the model what is wrong and what to do next
 - ENGLISH_WORD, english_words: what marks text the person would see as not Hebrew, and the
   English words of a reply that the person did not write themselves
@@ -50,6 +51,7 @@ from loan_agent.ports.engine import (
 from loan_agent.ports.events import (
     CEILING_SET,
     CHART_SHOWN,
+    EXAMPLES_REMOVED,
     LOAN_SET,
     OPTION_SAVED,
     QUESTION_ASKED,
@@ -322,8 +324,19 @@ class CheckTools:
         return await self._with_recheck(data)
 
     async def save_option(self, loan: Mapping[str, object]) -> str:
-        """Saves an example priced from the Bank of Israel average."""
-        (saved,) = await self._save_options([loan], "published_average", None, None, None)
+        """Saves an example from the engine's suggested tracks. Once the check holds a real offer
+        of its loan amount an example illustrates nothing the person is deciding, so it is
+        refused."""
+        amount = _require_loan(await self._check(), "save_option").amount
+        if any(
+            option.source == "offer" and _principal(option.loan) == amount
+            for option in await self._deps.options.list(self._check_id)
+        ):
+            raise ToolError(
+                "this check holds a real offer of the loan amount, so examples are no longer "
+                "saved; compare the saved offers and call present_recommendation"
+            )
+        (saved,) = await self._save_options([loan], "example", None, None, None)
         return summary(saved)
 
     async def save_offer(
@@ -418,6 +431,8 @@ class CheckTools:
                 OPTION_SAVED,
                 {**_option_data(option), "result": simulation.structured},
             )
+        if source == "offer":
+            await self._remove_examples(kept)
         every = await self._deps.options.list(self._check_id)
         saved = []
         for option, _ in priced:
@@ -431,6 +446,31 @@ class CheckTools:
                 figures["compared"] = "; ".join(comparisons)
             saved.append(figures)
         return saved
+
+    async def _remove_examples(self, options: Iterable[Option]) -> None:
+        """A real offer replaces the check's examples: they leave its options, and a
+        recommendation that names one leaves with them, so no comparison, recommendation or
+        remedy measures an offer against an example. The recommendation goes first, so a
+        failure between the two never leaves it naming a removed option."""
+        removed = [option.id for option in options if option.source == "example"]
+        if not removed:
+            return
+        recommendation = await self._deps.recommendations.latest(self._check_id)
+        names_removed = recommendation is not None and any(
+            option_id in removed
+            for option_id in (
+                recommendation.preferred_option_id,
+                recommendation.alternative_option_id,
+            )
+        )
+        if names_removed:
+            await self._deps.recommendations.remove(self._check_id)
+        await self._deps.options.remove(self._check_id, removed)
+        await self._deps.sink.emit(
+            self._check_id,
+            EXAMPLES_REMOVED,
+            {"option_ids": removed, "recommendation_removed": names_removed},
+        )
 
     async def _offer_term(
         self, check: Check, loan: Mapping[str, object], max_term_months: int
@@ -515,7 +555,7 @@ class CheckTools:
     ) -> str:
         """Without a ceiling the recommendation is on the merits and recorded unchecked; with
         one, it is checked against it. The preferred option is the cheapest in total of those
-        of its source and term that fit, unless person_preference holds what the person said
+        of its term that fit, unless person_preference holds what the person said
         that makes a dearer one suit them. Only options for the check's term count: an example of
         another term is refused, and offers count at any term, since the term's save prices them
         at it. A named option above the ceiling is refused while a saved option for the term
@@ -566,8 +606,6 @@ class CheckTools:
             above_ceiling = await self._above_ceiling(
                 check, loan, ceiling, preferred, alternative, options
             )
-        if preferred.source == "published_average":
-            _require_no_fitting_offer(options, loan.amount, ceiling)
         if person_preference is not None and not person_preference.strip():
             raise ToolError(
                 "person_preference is empty; omit it, or give what the person said that makes "
@@ -670,7 +708,7 @@ class CheckTools:
             return (
                 f"{payments}, and no saved option for the term fits, so the card marks the "
                 "recommendation above the ceiling; say so in one sentence with both payments. "
-                + await self._remedy(check, loan, ceiling)
+                + await self._remedy(check, loan, ceiling, options)
             )
         if _fits(preferred, ceiling):
             others = [option.id for option in fitting if option.id != preferred.id]
@@ -691,11 +729,17 @@ class CheckTools:
             "ceiling"
         )
 
-    async def _remedy(self, check: Check, loan: LoanRequest, ceiling: Decimal) -> str:
-        """What the model offers the person when no saved option for the term fits the ceiling,
-        in order: the shortest term up to MAX_TERM at which an example track fits, naming the
-        tracks that do; the largest loan that fits at the confirmed term, or at MAX_TERM when the
-        person confirmed none; that no loan fits."""
+    async def _remedy(
+        self, check: Check, loan: LoanRequest, ceiling: Decimal, options: list[Option]
+    ) -> str:
+        """What the model offers the person when no saved option for the term fits the ceiling.
+        A check with real offers is measured by its offers alone. Without one, in order: the
+        shortest term up to MAX_TERM at which an example track fits, naming the tracks that do;
+        the largest loan that fits at the confirmed term, or at MAX_TERM when the person
+        confirmed none; that no loan fits."""
+        offers = [option for option in options if option.source == "offer"]
+        if offers:
+            return await self._offer_remedy(offers, ceiling)
         term = await self._comfortable_term(loan.amount, ceiling, any_track=True)
         if term is not None:
             tracks = [
@@ -737,6 +781,34 @@ class CheckTools:
         if ceiling == 0:
             return None
         return await self._deps.engine.largest_loan(ceiling, term_months)
+
+    async def _offer_remedy(self, offers: list[Option], ceiling: Decimal) -> str:
+        """The shortest term, within what each offer allows, at which an offer that leaves its
+        term open fits the ceiling, naming the offers that fit there; else that no offer fits at
+        any term it allows."""
+        fitting: list[tuple[int, Option]] = []
+        for offer in offers:
+            if offer.max_term_months is None or ceiling == 0:
+                continue
+            (track,) = cast(list[Mapping[str, object]], offer.loan["tracks"])
+            longest = {**track, "term_months": offer.max_term_months}
+            found = await self._deps.engine.offer_term(longest, ceiling)
+            if found.comfortable:
+                fitting.append((found.term_months, offer))
+        if fitting:
+            term = min(months for months, _ in fitting)
+            named = " and ".join(
+                f"option {offer.id}" for months, offer in fitting if months == term
+            )
+            return (
+                f"At {term} months {named} fits the ceiling, within the term its lender allows: "
+                "offer the person that term once, and once they choose it call set_term, which "
+                f"prices the open offers at it, and recommend again. {_PERSON_DECIDES}"
+            )
+        return (
+            "no saved offer fits the ceiling at any term its lender allows; tell the person, and "
+            f"suggest asking the lenders for a longer term or borrowing less. {_PERSON_DECIDES}"
+        )
 
     async def _check(self) -> Check:
         return await self._deps.checks.get(self._user_id, self._check_id)
@@ -795,25 +867,6 @@ def _fits(option: Option, ceiling: Decimal) -> bool:
     return option.summary.risk_payment <= ceiling
 
 
-def _require_no_fitting_offer(
-    options: list[Option], loan_amount: Decimal, ceiling: Decimal | None
-) -> None:
-    """An example is an average, not a loan anyone can take, so it never beats a real offer of
-    the loan amount that fits the ceiling, or any such offer while the check has no ceiling."""
-    for option in options:
-        if (
-            option.source == "offer"
-            and _principal(option.loan) == loan_amount
-            and (ceiling is None or _fits(option, ceiling))
-        ):
-            raise ToolError(
-                f"option {option.id} is a real offer of the loan amount"
-                f"{'' if ceiling is None else ' within the ceiling'} and the preferred option is "
-                "only an example, which nobody can take; prefer the real offer and keep the "
-                "example as the alternative"
-            )
-
-
 # The person reads Hebrew only, while the instructions and the tools' results the model reads name
 # tools and fields in English, and such a word can slip into text the person sees.
 ENGLISH_WORD = re.compile(r"[A-Za-z]{2,}")
@@ -822,13 +875,12 @@ ENGLISH_WORD = re.compile(r"[A-Za-z]{2,}")
 def _require_the_cheapest(
     preferred: Option, options: list[Option], ceiling: Decimal | None
 ) -> None:
-    """Refuses a preferred option that costs more in total than another of its source and term
-    that fits the ceiling, or any such option while the check has none, naming the cheapest."""
+    """Refuses a preferred option that costs more in total than another of its term that fits
+    the ceiling, or any such option while the check has none, naming the cheapest."""
     cheaper = [
         option
         for option in options
-        if option.source == preferred.source
-        and _terms(option) == _terms(preferred)
+        if _terms(option) == _terms(preferred)
         and (ceiling is None or _fits(option, ceiling))
         and option.summary.total_paid < preferred.summary.total_paid
     ]

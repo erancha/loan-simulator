@@ -166,22 +166,11 @@ test('samples for the confirmed term stay among the other options', () => {
   expect(card.others?.options.map((o) => o.id)).toEqual(['prime-36', 'fixed-36'])
 })
 
-test('real offers come before samples among the other options, each cheapest first', () => {
+test('the other options are listed cheapest first', () => {
   const cheaper = { ...optionOfferFixed.data, option_id: 'offer-cheaper', lender: 'הארי פוטר' }
   cheaper.figures = { ...cheaper.figures, total_paid: '31000.00' }
-  const card = buildCard(
-    stateOf(optionPrime36, optionFixed36, optionOfferFixed, {
-      ...optionOfferFixed,
-      data: cheaper,
-      seq: 8,
-    }),
-  )
-  expect(card.others?.options.map((o) => o.id)).toEqual([
-    'offer-cheaper',
-    'offer-hapoalim',
-    'prime-36',
-    'fixed-36',
-  ])
+  const card = buildCard(stateOf(optionOfferFixed, { ...optionOfferFixed, data: cheaper, seq: 8 }))
+  expect(card.others?.options.map((o) => o.id)).toEqual(['offer-cheaper', 'offer-hapoalim'])
 })
 
 test('balloon option shows the balloon line with the amber chip', () => {

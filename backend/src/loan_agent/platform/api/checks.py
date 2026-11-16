@@ -54,7 +54,7 @@ async def _recommends_examples_only(
         named.append(recommendation.alternative_option_id)
     for option_id in named:
         option = await deps.options.get(recommendation.check_id, option_id)
-        if option.source != "published_average":
+        if option.source != "example":
             return False
     return True
 

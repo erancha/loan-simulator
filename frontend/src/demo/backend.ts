@@ -116,12 +116,9 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status })
 }
 
-/** An example nobody can take is a published average; the list marks a check that names only
- * those. */
+/** The list marks a check whose recommendation names only examples, which nobody can take. */
 function examplesOnly({ preferred, alternative }: RecommendationPresented): boolean {
-  return [preferred, alternative].every(
-    (option) => option === null || option.source === 'published_average',
-  )
+  return [preferred, alternative].every((option) => option === null || option.source === 'example')
 }
 
 /**

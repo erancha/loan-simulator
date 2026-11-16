@@ -13,6 +13,7 @@ import {
 import { buildCard } from './card.ts'
 import { initialState, reduce } from './events.ts'
 import { RecommendationCard } from './RecommendationCard.tsx'
+import { EXAMPLES_NOTE } from './copy.ts'
 
 function modelOf(...events: CheckEvent[]) {
   return buildCard(events.reduce(reduce, initialState))
@@ -115,13 +116,12 @@ test('a sample carries its chip in the totals table too, and a real offer does n
 })
 
 test('a line above the options says what a sample is, once, only when one is shown', () => {
-  const note = 'מחושב לפי ממוצעים. אי אפשר לקחת הלוואה כזו, היא רק נקודת השוואה.'
   const { unmount } = render(<RecommendationCard model={reference} />)
-  expect(screen.getAllByText(note)).toHaveLength(1)
+  expect(screen.getAllByText(EXAMPLES_NOTE)).toHaveLength(1)
   unmount()
 
   render(<RecommendationCard model={modelOf(optionOfferFixed)} />)
-  expect(screen.queryByText(note)).not.toBeInTheDocument()
+  expect(screen.queryByText(EXAMPLES_NOTE)).not.toBeInTheDocument()
 })
 
 test('no cushion text remains', () => {

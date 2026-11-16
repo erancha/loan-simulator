@@ -298,6 +298,14 @@ class PostgresOptionRepository:
             raise KeyError(option_id)
         return _option(row)
 
+    async def remove(self, check_id: str, option_ids: Collection[str]) -> None:
+        async with self._sessions.begin() as session:
+            await session.execute(
+                delete(OptionRow).where(
+                    OptionRow.check_id == check_id, OptionRow.id.in_(option_ids)
+                )
+            )
+
 
 def _option_row(option: Option) -> OptionRow:
     return OptionRow(
@@ -364,6 +372,12 @@ class PostgresRecommendationRepository:
             payment_ceiling=_decimal_or_none(data["payment_ceiling"]),
             created_at=_utc(row.created_at),
         )
+
+    async def remove(self, check_id: str) -> None:
+        async with self._sessions.begin() as session:
+            await session.execute(
+                delete(RecommendationRow).where(RecommendationRow.check_id == check_id)
+            )
 
 
 class PostgresCheckEventStore:

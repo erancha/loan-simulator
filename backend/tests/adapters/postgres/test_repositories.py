@@ -186,6 +186,24 @@ async def test_option_round_trip(repos: Repos) -> None:
         await repos.options.get("c-other", "o-1")
 
 
+async def test_option_remove_takes_only_the_named_options_of_the_check(repos: Repos) -> None:
+    for check_id in ("c-rm", "c-keep"):
+        await repos.checks.add(make_check(check_id))
+    loan = {"tracks": [{"principal": "100000.00", "term_months": 60}]}
+
+    def option(option_id: str, check_id: str) -> Option:
+        return Option(option_id, check_id, loan, "example", None, None, None, make_figures(), T0)
+
+    kept = [option("o-3", "c-rm"), option("o-1", "c-keep")]
+    for each in [option("o-1", "c-rm"), option("o-2", "c-rm"), *kept]:
+        await repos.options.add(each)
+
+    await repos.options.remove("c-rm", ["o-1", "o-2"])
+
+    assert await repos.options.list("c-rm") == kept[:1]
+    assert await repos.options.list("c-keep") == kept[1:]
+
+
 async def test_recommendation_replaced_per_check(repos: Repos) -> None:
     await repos.checks.add(make_check("c-rec"))
     assert await repos.recommendations.latest("c-rec") is None
@@ -205,6 +223,10 @@ async def test_recommendation_replaced_per_check(repos: Repos) -> None:
     second = rec("o-2", "second")
     await repos.recommendations.save(second)
     assert await repos.recommendations.latest("c-rec") == second
+
+    await repos.recommendations.remove("c-rec")
+    assert await repos.recommendations.latest("c-rec") is None
+    await repos.recommendations.remove("c-rec")
 
 
 async def test_event_seq_is_per_check_and_gapless(repos: Repos) -> None:

@@ -236,6 +236,9 @@ class InMemoryOptionRepository:
                 return option
         raise KeyError(option_id)
 
+    async def remove(self, check_id: str, option_ids: Collection[str]) -> None:
+        self.rows[check_id] = [o for o in self.rows[check_id] if o.id not in option_ids]
+
 
 class InMemoryRecommendationRepository:
     def __init__(self) -> None:
@@ -246,6 +249,9 @@ class InMemoryRecommendationRepository:
 
     async def latest(self, check_id: str) -> Recommendation | None:
         return self.rows.get(check_id)
+
+    async def remove(self, check_id: str) -> None:
+        self.rows.pop(check_id, None)
 
 
 class InMemoryCheckEventStore:

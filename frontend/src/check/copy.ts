@@ -33,10 +33,11 @@ export const SPITZER_MOVING = {
 export const LABEL_PREFERRED = 'מומלצת'
 export const LABEL_ALTERNATIVE = 'חלופה'
 
-export const SOURCE_PUBLISHED_AVERAGE = 'לפי ריבית ממוצעת בבנקים'
+export const SOURCE_EXAMPLE = 'לפי ריבית ממוצעת בבנקים'
 /** Marks an option nobody can take, so it never reads as a real offer. */
 export const CHIP_EXAMPLE = 'דוגמא'
-export const EXAMPLES_NOTE = 'מחושב לפי ממוצעים. אי אפשר לקחת הלוואה כזו, היא רק נקודת השוואה.'
+export const EXAMPLES_NOTE =
+  'מחושב לפי ממוצעים. אי אפשר לקחת הלוואה כזו: היא מוצגת רק עד שתוזן הצעה אמיתית.'
 
 const HEBREW_LETTER = /^[\u05D0-\u05EA]/
 

@@ -133,7 +133,9 @@ class Check:
         )
 
 
-OptionSource = Literal["published_average", "offer"]
+# An example illustrates a loan before any lender's offer; nobody can take it, and a check that
+# holds a real offer of its loan amount holds no example.
+OptionSource = Literal["example", "offer"]
 
 
 @dataclass(frozen=True)

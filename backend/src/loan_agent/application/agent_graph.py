@@ -479,7 +479,8 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
             name="save_option",
             description="Price an example track from suggest_tracks, for the check's loan "
             "amount, with the engine and keep it as an option of this check. Returns its "
-            "option_id and figures. A real offer is saved with save_offer.",
+            "option_id and figures. A real offer is saved with save_offer. Refused once the "
+            "check holds a real offer of its loan amount.",
             args_schema=SaveOptionArgs,
         ),
         StructuredTool.from_function(
@@ -489,7 +490,8 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
             "one call: each track is priced for the check's loan amount and kept as an option "
             "of its own, and when one is refused none is saved. Returns each track's option_id "
             "and figures. With max_term_months a track is refused at any term but the one the "
-            "engine's search over that track gives.",
+            "engine's search over that track gives. Saving an offer removes the check's "
+            "examples, and a recommendation that names one.",
             args_schema=SaveOfferArgs,
         ),
         StructuredTool.from_function(
@@ -498,9 +500,8 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
             description="Present the recommendation card: the preferred option and an optional "
             "alternative, with your reasoning. Without a ceiling the card says it is not yet "
             "checked against what the person can pay. Refused, with the reason and the remedy "
-            "to offer, when a named option's worst-case payment is above the ceiling, when "
-            "an example is preferred over a real offer, and when another option of the "
-            "preferred one's kind and term fits and costs less in total.",
+            "to offer, when a named option's worst-case payment is above the ceiling, and when "
+            "another option of the preferred one's term fits and costs less in total.",
             args_schema=PresentRecommendationArgs,
         ),
         StructuredTool.from_function(

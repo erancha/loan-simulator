@@ -29,7 +29,7 @@ import {
   OTHERS_TITLE,
   PUBLISHED_RATE_LINE,
   RATE_KIND,
-  SOURCE_PUBLISHED_AVERAGE,
+  SOURCE_EXAMPLE,
   SPITZER_MOVING,
   UNCHECKED_NOTE,
   aboveCeilingText,
@@ -132,7 +132,7 @@ function totalRangeOf(option: OptionSaved): string | null {
 }
 
 function sourceOf(option: OptionSaved): string {
-  if (option.source === 'published_average') return SOURCE_PUBLISHED_AVERAGE
+  if (option.source === 'example') return SOURCE_EXAMPLE
   const date = option.offer_date === null ? null : formatDate(option.offer_date)
   return offerSource(option.lender, date)
 }
@@ -150,7 +150,7 @@ function optionCard(
     track: trackText(track),
     source: sourceOf(option),
     termNote: max !== null && termMonths !== null && max < termMonths ? offerMaxNote(max) : null,
-    isExample: option.source === 'published_average',
+    isExample: option.source === 'example',
     paymentToday: formatShekels(option.figures.first_payment),
     chip: chipOf(option, track),
     balloon:
@@ -174,7 +174,7 @@ function assumptionsOf(dated: OptionSaved, shown: OptionSaved[]): string[] {
   const lines = [
     dataDatesLine(formatDate(dated.figures.rate_as_of), formatMonth(dated.figures.cpi_as_of)),
   ]
-  if (shown.some((o) => o.source === 'published_average')) lines.push(PUBLISHED_RATE_LINE)
+  if (shown.some((o) => o.source === 'example')) lines.push(PUBLISHED_RATE_LINE)
   lines.push(HISTORY_LINE)
   return lines
 }
@@ -235,17 +235,14 @@ export function buildCard(state: CheckState): CardModel {
     }
   }
   const namedIds = named.map(({ option }) => option.option_id)
-  // Real offers lead, cheapest first: a person can take one, and a sample is only a yardstick
-  // for it. A sample made for another term, before the term changed here or in the check this
-  // one was cloned from, measures nothing the person is now deciding, so it drops out; an offer
-  // keeps its lender's term.
-  const unnamed = [...state.options.values()].filter(
-    (o) => !namedIds.includes(o.option_id) && (o.source === 'offer' || forTheTerm(o, state)),
+  // An example made for another term, before the term changed here or in the check this one was
+  // cloned from, illustrates nothing the person is now deciding, so it drops out; an offer keeps
+  // its lender's term.
+  const otherOptions = cheapestFirst(
+    [...state.options.values()].filter(
+      (o) => !namedIds.includes(o.option_id) && (o.source === 'offer' || forTheTerm(o, state)),
+    ),
   )
-  const otherOptions = [
-    ...cheapestFirst(unnamed.filter((o) => o.source === 'offer')),
-    ...cheapestFirst(unnamed.filter((o) => o.source === 'published_average')),
-  ]
   const shown = [...named.map(({ option }) => option), ...otherOptions]
 
   const others =

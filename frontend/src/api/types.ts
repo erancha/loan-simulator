@@ -53,7 +53,7 @@ export interface OptionData {
   option_id: string
   /** The engine's Loan arguments as the agent sent them, not a normalised record. */
   loan: { tracks: Track[] }
-  source: 'published_average' | 'offer'
+  source: 'example' | 'offer'
   lender: string | null
   offer_date: string | null
   /** The longest term a real offer allows, when it leaves the term open. */
@@ -89,6 +89,13 @@ export interface LoanSimulation {
 }
 
 export type OptionSaved = OptionData & { result: LoanSimulation }
+
+/** The examples a saved real offer removes from the check, and whether its recommendation, which
+ * named one of them, is removed with them. */
+export interface ExamplesRemoved {
+  option_ids: string[]
+  recommendation_removed: boolean
+}
 
 export interface OptionView {
   id: string
@@ -222,6 +229,7 @@ export const CHECK_EVENT_TYPES = [
   'ceiling.set',
   'finances.updated',
   'option.saved',
+  'examples.removed',
   'recommendation.presented',
   'turn.status',
   'turn.failed',
@@ -263,6 +271,7 @@ export type CheckEvent =
   | Sequenced<'ceiling.set', { payment_ceiling: string; ceiling_source: CeilingSource }>
   | Sequenced<'finances.updated', FinancesUpdated>
   | Sequenced<'option.saved', OptionSaved>
+  | Sequenced<'examples.removed', ExamplesRemoved>
   | Sequenced<'recommendation.presented', RecommendationPresented>
   | Sequenced<'turn.status', { status: TurnStatus }>
   | Sequenced<'turn.failed', { message: string }>
