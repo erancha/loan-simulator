@@ -66,6 +66,17 @@ function typedRate(text: string): string | null {
   return /^\d+(\.\d+)?$/.test(rate) && Number(rate) <= OFFER_MAX_RATE ? rate : null
 }
 
+/**
+ * A prime row's box as typed: "-0.5", as offers write a margin under prime, sets the row to prime
+ * minus and keeps the box unsigned. A fixed rate keeps its sign, which typedRate refuses.
+ */
+function typedRow(kind: OfferKind, text: string): Partial<Row> {
+  const unsigned = text.replace(/^\s*[-−]/, '')
+  return kind === 'fixed' || unsigned === text
+    ? { rate: text }
+    : { kind: 'prime_minus', rate: unsigned }
+}
+
 /** The whole number of months in a box; null when it is none an offer can allow. */
 function typedMonths(text: string): number | null {
   const months = text.trim()
@@ -182,7 +193,7 @@ export function OfferForm({ entry, question, live, onAnswer }: Props) {
                     dir="ltr"
                     aria-label={offerRateBox(index + 1)}
                     value={row.rate}
-                    onChange={(event) => change(row.key, { rate: event.target.value })}
+                    onChange={(event) => change(row.key, typedRow(row.kind, event.target.value))}
                   />
                   <span className="unit">%</span>
                 </span>

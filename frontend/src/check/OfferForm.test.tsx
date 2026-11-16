@@ -92,6 +92,21 @@ test('a filled form sends one line with the lender, every track and the period',
   expect(onAnswer).toHaveBeenCalledWith({ line: PENSION_FUND_LINE, update: null })
 })
 
+test('a minus typed on a prime row turns it into prime minus; a fixed rate keeps the sign', async () => {
+  const user = userEvent.setup()
+  const onAnswer = form({ ...EMPTY, lender: 'הבנק', max_term_months: 60 })
+  await user.type(rateBox(1), '-0.5')
+  expect(kindBox(1)).toHaveValue('prime_minus')
+  expect(rateBox(1)).toHaveValue('0.5')
+  await user.click(screen.getByRole('button', { name: OFFER_ADD_TRACK }))
+  await user.selectOptions(kindBox(2), 'fixed')
+  await user.type(rateBox(2), '-3')
+  expect(rateBox(2)).toHaveValue('-3')
+  await user.click(proceed())
+  expect(screen.getByText(OFFER_RATE_INVALID)).toBeInTheDocument()
+  expect(onAnswer).not.toHaveBeenCalled()
+})
+
 test('boxes arrive filled with what the assistant passed', () => {
   form({
     kind: 'offer',
