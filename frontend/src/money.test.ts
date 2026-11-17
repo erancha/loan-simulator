@@ -10,6 +10,8 @@ import {
   exceeds,
   formatYearRange,
   isZero,
+  roundedPercent,
+  subtractAmounts,
   normaliseMoneyInput,
 } from './money.ts'
 
@@ -93,4 +95,20 @@ test('exceeds compares decimal strings without rounding', () => {
   expect(exceeds('1000', '1000.00')).toBe(false)
   expect(exceeds('999.9', '1000')).toBe(false)
   expect(exceeds('10000', '9999.99')).toBe(true)
+})
+
+test('subtractAmounts works on decimal strings', () => {
+  expect(subtractAmounts('55000', '10000')).toBe('45000')
+  expect(subtractAmounts('100.50', '0.25')).toBe('100.25')
+  expect(subtractAmounts('10.5', '10.50')).toBe('0')
+  expect(() => subtractAmounts('1', '2')).toThrow(RangeError)
+})
+
+test('roundedPercent rounds half up and drops trailing zeros', () => {
+  expect(roundedPercent('10.58', 1)).toBe('10.6')
+  expect(roundedPercent('11.20', 1)).toBe('11.2')
+  expect(roundedPercent('6.00', 1)).toBe('6')
+  expect(roundedPercent('9.95', 1)).toBe('10')
+  expect(roundedPercent('10.54', 1)).toBe('10.5')
+  expect(roundedPercent('0.05', 1)).toBe('0.1')
 })

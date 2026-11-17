@@ -24,6 +24,7 @@ from pydantic import Field
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from loan_agent.adapters.engine_mcp import MODEL_ENGINE_TOOLS, McpLoanEngine
+from loan_agent.domain.models import OptionPrice
 from loan_agent.ports.engine import (
     Bounds,
     EngineError,
@@ -151,6 +152,27 @@ def _stub_server(calls: list[tuple[str, dict[str, Any]]]) -> FastMCP:
         )
         largest = {"loan_amount": None if term_months < 12 else "90000.00"}
         return _result(largest, json.dumps(largest))
+
+    @server.tool()
+    def offer_readings(
+        principal: str,
+        term_months: int,
+        stated_rate: str | None = None,
+        monthly_payment: str | None = None,
+        prime_total: bool = False,
+    ) -> CallToolResult:
+        arguments = {
+            "principal": principal,
+            "term_months": term_months,
+            "stated_rate": stated_rate,
+            "monthly_payment": monthly_payment,
+            "prime_total": prime_total,
+        }
+        calls.append(("offer_readings", arguments))
+        if stated_rate is None and monthly_payment is None:
+            raise ToolError("an offer needs a stated rate or a monthly payment")
+        readings = _fixture("offer_readings")
+        return _result(readings, json.dumps(readings))
 
     @server.tool()
     def market_series(prime_months: int, cpi_months: int) -> CallToolResult:
@@ -299,6 +321,12 @@ async def test_simulate_parses_figures_and_keeps_structured(engine: McpLoanEngin
     assert figures.balloon_due is None
     assert figures.rate_as_of == date(2026, 10, 26)
     assert figures.cpi_as_of == date(2026, 9, 1)
+    assert figures.price == OptionPrice(
+        rate_today=Decimal("6.25"),
+        against_market="below",
+        market_rate=Decimal("7.9"),
+        market_rate_month=date(2026, 8, 1),
+    )
     assert simulation.structured == _fixture("simulate_loan_unlinked_prime")
 
 
@@ -306,6 +334,9 @@ async def test_balloon_due_parsed(engine: McpLoanEngine) -> None:
     simulation = await engine.simulate({"tracks": [BALLOON_TRACK]})
 
     assert simulation.figures.balloon_due == Decimal("32472.96")
+    assert simulation.figures.price is not None
+    assert simulation.figures.price.rate_today == Decimal("4.9")
+    assert simulation.figures.price.against_market is None
     assert simulation.figures.peak_payment == Decimal("1376.53")
     assert simulation.figures.worst_peak_payment == Decimal("1482.61")
 
@@ -330,6 +361,44 @@ async def test_market_series_parses_both_series(engine: McpLoanEngine, stub: Stu
     assert market.prime[-1] == MarketPoint(date(2026, 10, 1), Decimal("4.75"))
     assert market.cpi_change[-1] == MarketPoint(date(2026, 9, 1), Decimal("-0.5"))
     assert (market.rate_as_of, market.cpi_as_of) == (date(2026, 10, 30), date(2026, 9, 1))
+
+
+async def test_offer_readings_sends_the_offer_and_parses_its_readings(
+    engine: McpLoanEngine, stub: StubEngine
+) -> None:
+    offer = await engine.offer_readings(Decimal(45000), 60, None, Decimal(969), prime_total=False)
+
+    assert stub.calls == [
+        (
+            "offer_readings",
+            {
+                "principal": "45000",
+                "term_months": 60,
+                "stated_rate": None,
+                "monthly_payment": "969",
+                "prime_total": False,
+            },
+        )
+    ]
+    assert (offer.prime, offer.rate_as_of, offer.payment_rate) == (
+        Decimal("4.75"),
+        date(2026, 10, 20),
+        Decimal("10.58"),
+    )
+    assert [reading.kind for reading in offer.readings] == [
+        "fixed_unlinked",
+        "prime_margin",
+        "fixed_linked",
+    ]
+    linked = offer.readings[2]
+    assert linked.approximate is True
+    assert linked.first_payment == Decimal("970.61")
+    assert linked.track == _fixture("offer_readings")["readings"][2]["track"]
+
+
+async def test_offer_readings_raises_engine_error(engine: McpLoanEngine) -> None:
+    with pytest.raises(EngineError, match="a stated rate or a monthly payment"):
+        await engine.offer_readings(Decimal(45000), 60, None, None, prime_total=False)
 
 
 async def test_tool_error_raises_engine_error_with_message(engine: McpLoanEngine) -> None:

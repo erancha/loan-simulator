@@ -1,0 +1,61 @@
+{
+  "prime": "4.75",
+  "rate_as_of": "2026-10-20",
+  "payment_rate": "10.58",
+  "readings": [
+    {
+      "kind": "fixed_unlinked",
+      "track": {
+        "principal": "45000",
+        "term_months": 60,
+        "rate_kind": "fixed",
+        "annual_rate": "10.58",
+        "prime_spread": null,
+        "cpi_linked": false,
+        "method": "spitzer",
+        "balloon_amount": "0",
+        "one_time_fee": "0",
+        "monthly_fee": "0"
+      },
+      "first_payment": "969.01",
+      "total_rate": "10.58",
+      "approximate": false
+    },
+    {
+      "kind": "prime_margin",
+      "track": {
+        "principal": "45000",
+        "term_months": 60,
+        "rate_kind": "prime",
+        "annual_rate": null,
+        "prime_spread": "5.83",
+        "cpi_linked": false,
+        "method": "spitzer",
+        "balloon_amount": "0",
+        "one_time_fee": "0",
+        "monthly_fee": "0"
+      },
+      "first_payment": "969.01",
+      "total_rate": "10.58",
+      "approximate": false
+    },
+    {
+      "kind": "fixed_linked",
+      "track": {
+        "principal": "45000",
+        "term_months": 60,
+        "rate_kind": "fixed",
+        "annual_rate": "10.58",
+        "prime_spread": null,
+        "cpi_linked": true,
+        "method": "spitzer",
+        "balloon_amount": "0",
+        "one_time_fee": "0",
+        "monthly_fee": "0"
+      },
+      "first_payment": "970.61",
+      "total_rate": "10.58",
+      "approximate": true
+    }
+  ]
+}

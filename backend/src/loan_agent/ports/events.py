@@ -27,6 +27,16 @@ OPTION_SAVED = "option.saved"
 # A check's examples go once it holds a real offer, with a recommendation that names one.
 EXAMPLES_REMOVED = "examples.removed"
 RECOMMENDATION_PRESENTED = "recommendation.presented"
+# An offer whose type awaits its lender's answer; emitted again when a later message changes it.
+OFFER_AWAITING = "offer.awaiting"
+OFFER_IDENTIFIED = "offer.identified"
+OFFER_UNRECOGNIZED = "offer.unrecognized"
+# An awaiting offer became a saved offer, with the reading it was saved by: the one the person
+# confirmed, or the one a later detail identified, which its card may not hold.
+OFFER_SETTLED = "offer.settled"
+# An awaiting offer quoted for less than the check's loan left the check: its lender does not
+# lend the loan amount on the same terms.
+OFFER_DROPPED = "offer.dropped"
 QUESTION_ASKED = "question.asked"
 CHART_SHOWN = "chart.shown"
 CHECK_ARCHIVED = "check.archived"

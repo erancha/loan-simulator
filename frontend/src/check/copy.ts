@@ -1,14 +1,31 @@
 /** Every Hebrew label and sentence on a check's page: the conversation and the card. */
 import type {
+  CeilingBasis,
   CeilingSource,
   ChartShown,
+  Finances,
   LoanRequest,
+  OfferDropped,
+  OfferIdentified,
+  OptionPrice,
   Question,
   QuestionField,
+  Reading,
+  ReadingKind,
+  TermBasis,
   Track,
+  TypeWord,
 } from '../api/types.ts'
 import { OFFER_SOURCES } from '../copy.ts'
-import { formatAmount, formatDate, formatDay, formatMonth, formatShekels } from '../money.ts'
+import {
+  exceeds,
+  formatAmount,
+  formatDate,
+  formatDay,
+  formatMonth,
+  formatShekels,
+  roundedPercent,
+} from '../money.ts'
 
 export const RATE_KIND = {
   fixed: 'ריבית קבועה',
@@ -30,19 +47,30 @@ export const SPITZER_MOVING = {
   both: 'שפיצר (תשלום חודשי שווה כל עוד הריבית והמדד לא זזים)',
 } as const satisfies Record<string, string>
 
-export const LABEL_PREFERRED = 'מומלצת'
+export const LABEL_PREFERRED = 'מועדפת'
 export const LABEL_ALTERNATIVE = 'חלופה'
 
-export const SOURCE_EXAMPLE = 'לפי ריבית ממוצעת בבנקים'
+/** Where an example's rate comes from: the unlinked ones from the bank average, the
+ * CPI-linked one from the terms a pension fund publishes for loans to its members. */
+export const SOURCE_EXAMPLE = {
+  bankAverage: 'לפי ריבית ממוצעת בבנקים',
+  pensionFund: 'לפי תנאים שקרן פנסיה מפרסמת לעמיתיה',
+} as const satisfies Record<string, string>
 /** Marks an option nobody can take, so it never reads as a real offer. */
 export const CHIP_EXAMPLE = 'דוגמא'
 export const EXAMPLES_NOTE =
-  'מחושב לפי ממוצעים. אי אפשר לקחת הלוואה כזו: היא מוצגת רק עד שתוזן הצעה אמיתית.'
+  'מחושב לפי ממוצעים ותנאים מפורסמים. אי אפשר לקחת הלוואה כזו: היא מוצגת רק עד שתוזן הצעה' +
+  ' אמיתית.'
 
 const HEBREW_LETTER = /^[\u05D0-\u05EA]/
 
+/** A lender's name after "from": `מ` before a Hebrew letter, `מ-` otherwise. */
+export function fromLender(lender: string): string {
+  return `${HEBREW_LETTER.test(lender) ? 'מ' : 'מ-'}${lender}`
+}
+
 export function offerSource(lender: string | null, date: string | null): string {
-  const from = lender === null ? 'הצעה' : `הצעה ${HEBREW_LETTER.test(lender) ? 'מ' : 'מ-'}${lender}`
+  const from = lender === null ? 'הצעה' : `הצעה ${fromLender(lender)}`
   return date === null ? from : `${from} · ${date}`
 }
 
@@ -60,6 +88,35 @@ export function chipText(
       : 'הריבית תעלה'
     : 'המחירים יעלו'
   return `עד ${amount} אם ${what} כמו ב-${years}`
+}
+
+/** What a real offer costs over its principal; a linked loan's cost holds the CPI's rise too. */
+export function interestLine(cost: string, principal: string, cpiLinked: boolean): string {
+  return `${cpiLinked ? 'ריבית והצמדה' : 'ריבית'}: כ-${cost} על ${principal}`
+}
+
+const AGAINST_MARKET = {
+  above: 'מעל הריבית הממוצעת',
+  similar: 'דומה לריבית הממוצעת',
+  below: 'מתחת לריבית הממוצעת',
+} as const satisfies Record<NonNullable<OptionPrice['against_market']>, string>
+
+/** An unlinked offer's rate today against the bank average on consumer loans, with its month. */
+export function rateAgainstMarketLine(
+  rate: string,
+  against: keyof typeof AGAINST_MARKET,
+  marketRate: string,
+  month: string,
+): string {
+  return (
+    `${rate}% היום — ${AGAINST_MARKET[against]} בבנקים להלוואה צרכנית, ` +
+    `כ-${marketRate}% (נכון ל-${month})`
+  )
+}
+
+/** A linked offer's rate, which is on top of the CPI. */
+export function rateOverIndexLine(rate: string): string {
+  return `${rate}% מעל המדד`
 }
 
 export function balloonLine(amount: string): string {
@@ -150,26 +207,8 @@ export function monthlyPayment(amount: string): string {
 
 export const CARD_FAILED = 'לא הצלחנו להציג את ההמלצה.'
 
-/** The page's own opening line, the first bubble of every check, so the first reply has a question;
- * **marked** words show in bold. */
-export const CHAT_WELCOME =
-  'כדי להמליץ על הלוואה שמתאימה לך, **כתבו בתיבה למטה** את ההלוואה: כמה צריך ללוות, או מחיר' +
-  ' הקנייה וכמה כסף יש כבר.\n' +
-  'אפשר להוסיף גם את ההחזר החודשי הגבוה ביותר שנוח לך, אבל זה לא חובה.'
-
-/** Sample opening messages above the input; a tap only fills the input, the person sends. */
-export const SAMPLE_MESSAGES: { label: string; text: string }[] = [
-  { label: 'הלוואה', text: 'אני רוצה הלוואה בסך 60,000₪' },
-  { label: 'רכב', text: 'אני רוצה לקנות רכב ב-100,000₪ ויש לי 40,000₪' },
-  {
-    label: 'רכב, החזר מרבי',
-    text: 'אני רוצה לקנות רכב ב-50,000₪ ויש לי 26,000₪. אוכל להחזיר עד 1,000₪ בחודש.',
-  },
-  { label: 'שיפוץ', text: 'אני רוצה הלוואה בסך 80,000₪ לשיפוץ, בהחזר של עד 2,000₪ בחודש' },
-]
-
 /** The market-data sample, offered at any point of a conversation; the server answers it from
- * the market data with no model call. */
+ * the market data with no model call. A tap fills the input, for the person to send. */
 export const MARKET_SAMPLE = {
   label: 'פריים ומדדים',
   text:
@@ -177,8 +216,9 @@ export const MARKET_SAMPLE = {
     'מה היו המדדים לצרכן ב-12 החודשים האחרונים?',
 }
 
-/** The real-offer sample, offered once a check has a recommendation. It has nothing to fill in,
- * so a tap sends it; the server answers it with the offer form and no model call. */
+/** The real-offer sample, offered once a check has a loan and a term: the way to open the empty
+ * offer form at any time. A tap sends it at once, and the server answers it with the form and no
+ * model call; an offer in the person's own words goes through the chat box instead. */
 export const OFFER_SAMPLE = {
   label: 'הצעה מגוף מלווה',
   text: 'קיבלתי הצעה להלוואה מגוף מלווה',
@@ -232,6 +272,7 @@ export const GENERAL_PURPOSE = 'כללי'
 export const PURPOSE_CHOICES = ['רכב', 'שיפוץ', GENERAL_PURPOSE]
 export const SKIP = 'דילוג'
 export const ANSWER = 'אישור'
+export const CONTINUE = 'המשך'
 /** Sent as the person's message, as it is, when they cannot name a comfortable payment. */
 export const DONT_KNOW = 'לא יודע/ת'
 
@@ -239,7 +280,6 @@ export const TERM_MIN_MONTHS = 6
 export const TERM_MAX_MONTHS = 84
 export const TERM_BOX_LABEL = 'מספר חודשים'
 export const TERM_BOX_PLACEHOLDER = `${TERM_MIN_MONTHS}–${TERM_MAX_MONTHS}`
-export const CEILING_BOX_PLACEHOLDER = 'לא חובה'
 /** A ceiling the check holds cannot be removed from the term card, only replaced. */
 export const CEILING_CLEARED = 'אפשר להקליד החזר מרבי אחר, אך לא למחוק אותו'
 /** An offer priced at its lender's maximum, shorter than the check's term. */
@@ -333,9 +373,31 @@ export const CLONE_CHOICE = 'לשכפל ולבדוק בנפרד'
 export const cloneLine = (request: string) => `${CLONE_CHOICE}: ${request}`
 export const STAY_CHOICE = 'לעדכן את הבדיקה הזאת'
 
-/** The term question's card line: the proposed term and the first payment it gives. */
+/** The term question's card line: the term worked out and the first payment it gives. */
 export function termLine(termMonths: number, firstPayment: string): string {
-  return `תקופה מוצעת: ${termText(termMonths)} · החזר ראשון כ-${formatShekels(firstPayment)}`
+  return `חישוב ראשוני: ${termText(termMonths)} · החזר ראשון כ-${formatShekels(firstPayment)}`
+}
+
+const LONGEST_TERM = `גם ב-${termText(TERM_MAX_MONTHS)}, התקופה הארוכה ביותר שהסימולטור מחשב,`
+const CHANGE_TERM_OR_CEILING = 'אפשר לשנות כאן את מספר החודשים, או לכתוב החזר חודשי מרבי אחר.'
+const CHANGE_PARAMETERS = 'אפשר לשנות כאן את הפרמטרים.'
+
+/** The term card's line under its title: the assumption the term was worked out from. */
+export function termBasisLine(basis: TermBasis): string {
+  if (basis.kind === 'typed') return `זה החישוב למספר החודשים שבחרת. ${CHANGE_PARAMETERS}`
+  const amount = formatShekels(basis.amount)
+  if (basis.kind === 'first_payment_target') {
+    return basis.fits
+      ? `בהנחה ראשונית שההחזר החודשי יהיה עד כ-${amount}, זה מספר החודשים המתאים, לפי` +
+          ` הריבית הממוצעת בבנקים. ${CHANGE_TERM_OR_CEILING}`
+      : `${LONGEST_TERM} ההחזר הראשון לפי הריבית הממוצעת בבנקים עולה על כ-${amount}, ההחזר` +
+          ` שהנחנו בתחילה. ${CHANGE_TERM_OR_CEILING}`
+  }
+  return basis.fits
+    ? `לפי ההחזר החודשי המרבי שלך, ${amount}, זה מספר החודשים המתאים, גם אם הריבית תעלה כמו` +
+        ` בעבר. ${CHANGE_PARAMETERS}`
+    : `${LONGEST_TERM} ההחזר עלול לעלות על ההחזר החודשי המרבי שלך, ${amount}, אם הריבית תעלה` +
+        ` כמו בעבר. ${CHANGE_PARAMETERS}`
 }
 
 /** The question a bubble shows: a field's question, the term card, the clone offer, or the
@@ -362,6 +424,8 @@ export function questionHint(question: Question): string | null {
 }
 
 export const OFFER_FORM_TITLE = 'פרטי ההצעה'
+export const OFFER_FORM_INTRO =
+  'קיבלת הצעות להלוואה מגופים מלווים? אפשר לתאר אותן כאן, או בצ\'אט למטה, והסימולטור ישווה אותן.'
 export const OFFER_LENDER_LABEL = 'מי הגוף המלווה?'
 export const OFFER_TRACKS_LABEL = 'המסלולים שהוצעו'
 export const OFFER_MONTHS_LABEL = 'לכמה חודשים לכל היותר?'
@@ -369,7 +433,6 @@ export const OFFER_MONTHS_UNIT = 'חודשים'
 export const OFFER_LINKED = 'צמוד למדד'
 export const OFFER_ADD_TRACK = '+ מסלול נוסף'
 export const OFFER_REMOVE_TRACK = 'הסרת המסלול'
-export const OFFER_CONTINUE = 'המשך'
 export const OFFER_NOTE = 'ההחזר מחושב בתשלומים חודשיים שווים, על סכום ההלוואה שבבדיקה.'
 
 /** How a track of an offer prices its interest: a margin over or under prime, or a fixed rate. */
@@ -413,9 +476,10 @@ export interface OfferTrack {
 
 /**
  * The message the offer form sends: a complete offer in the words the model reads typed offers
- * in. Every track says whether it is linked, so the model has nothing left to ask, and names
- * its kind by the form's own label: a margin under prime written with a minus sign would read
- * as a dash.
+ * in. The lender's name follows its own label, so the model never takes "גוף מלווה" for it.
+ * Every track says whether it is linked, so the model has nothing left to ask, and names its
+ * kind by the form's own label: a margin under prime written with a minus sign would read as a
+ * dash.
  */
 export function offerLine(lender: string, tracks: OfferTrack[], months: number): string {
   const listed = tracks.map(
@@ -424,7 +488,7 @@ export function offerLine(lender: string, tracks: OfferTrack[], months: number):
       (track.linked ? OFFER_LINKED : `לא ${OFFER_LINKED}`),
   )
   return (
-    `קיבלתי הצעה מגוף מלווה, ${lender}: ${listed.join(' ')}.` +
+    `קיבלתי הצעה. הגוף המלווה: ${lender}. ${listed.join(' ')}.` +
     ` לתקופה של עד ${months} ${OFFER_MONTHS_UNIT}, בתשלומים חודשיים שווים.`
   )
 }
@@ -470,6 +534,21 @@ export const saveFailed = (message: string) => `השמירה לא הצליחה: 
 export const EDIT_FINANCES = 'עריכה'
 export const CEILING_LABEL = 'החזר חודשי מרבי'
 export const CEILING_NOT_SET = 'לא נקבע'
+
+/** How a ceiling derived from the finances was reached: the lower of its two caps, in words. */
+export function ceilingFormula(basis: CeilingBasis, finances: Finances): string {
+  const { net_fixed_income: income, fixed_expenses: expenses } = finances
+  if (income === null || expenses === null) {
+    throw new Error('a derived ceiling needs both finances figures')
+  }
+  if (exceeds(basis.ceiling_by_disposable_income, basis.ceiling_by_income_share)) {
+    return `(${roundedPercent(basis.income_percent, 1)}% מהכנסה של ${formatShekels(income)})`
+  }
+  return (
+    `(${roundedPercent(basis.disposable_percent, 1)}% מההפרש בין הכנסה של ` +
+    `${formatShekels(income)} להוצאות של ${formatShekels(expenses)})`
+  )
+}
 export const CEILING_SOURCE = {
   stated: 'לפי מה שאמרת',
   finances: 'לפי ההכנסה וההוצאות',
@@ -479,3 +558,204 @@ export const CEILING_SOURCE = {
 export function updateLine(label: string, amount: string): string {
   return `עודכן: ${label} ${amountText(amount)}`
 }
+
+export const OPENING_TITLE = 'פרטי ההלוואה'
+export const OPENING_PURPOSE_LABEL = 'מטרה'
+export const OPENING_MODE_LABEL = 'איך נחשב את הסכום?'
+export const OPENING_MODE = { loan: 'סכום ההלוואה', price: 'מחיר והון עצמי' } as const
+export const OPENING_PRICE_LABEL = 'מחיר הקנייה'
+export const OPENING_CAPITAL_LABEL = 'הון עצמי'
+
+// The engine's MIN_PRINCIPAL and MAX_PRINCIPAL, in
+// mcp-server/src/loan_engine/domain/limits.py.
+export const LOAN_MIN_AMOUNT = '10000'
+export const LOAN_MAX_AMOUNT = '10000000'
+
+export const OPENING_PURPOSE_MISSING = 'צריך לבחור מטרה'
+export const OPENING_AMOUNT_INVALID =
+  `צריך סכום הלוואה בין ${formatAmount(LOAN_MIN_AMOUNT)} ל-${formatShekels(LOAN_MAX_AMOUNT)}`
+export const OPENING_CAPITAL_COVERS = 'ההון העצמי מכסה את כל המחיר, אז אין צורך בהלוואה'
+
+/** Under the opening card's price and capital boxes: the loan they leave. */
+export function openingLoanLine(amount: string): string {
+  return `${OPENING_MODE.loan}: ${formatShekels(amount)}`
+}
+
+/** The person's message for the opening card; the agent's prompt quotes this form. */
+export function openingLine(purpose: string, amount: string): string {
+  return `${purpose}: הלוואה בסך ${formatShekels(amount)}`
+}
+
+export const PAYMENT_PLANNING = 'תכנון החזר חודשי'
+/** The chip that asks the model for example loans of the check's amount and term. */
+export const SAMPLES_CHIP = {
+  label: 'דוגמאות',
+  text:
+    'אפשר לראות דוגמאות להלוואה כזו? פריים, ריבית קבועה לא צמודה, וריבית קבועה צמודה למדד כמו' +
+    ' בהלוואה מקרן פנסיה או השתלמות',
+}
+
+/** The margin of a prime reading; a prime reading always carries one. */
+function primeSpread(reading: Reading): string {
+  const { prime_spread: spread } = reading.track
+  if (spread === null) throw new Error(`a ${reading.kind} reading has no prime spread`)
+  return String(spread)
+}
+
+/** A margin over prime as a signed percent, "+ 5.83%"; a margin below prime reads "− 0.25%". */
+function marginText(spread: string): string {
+  const below = spread.startsWith('-')
+  return `${below ? '−' : '+'} ${roundedPercent(below ? spread.slice(1) : spread, 2)}%`
+}
+
+/** How a reading prices the loan, by its kind; a rate fixed by the payment alone is approximate. */
+export function readingText(reading: Reading): string {
+  const rate = roundedPercent(reading.total_rate, 2)
+  const about = reading.approximate ? 'כ-' : ''
+  switch (reading.kind) {
+    case 'prime_margin':
+      return `ריבית פריים ${marginText(primeSpread(reading))}`
+    case 'prime_total':
+      return `ריבית כוללת ${rate}% היום (פריים ${marginText(primeSpread(reading))})`
+    case 'fixed_unlinked':
+      return `ריבית קבועה ${about}${rate}%, לא צמודה למדד`
+    case 'fixed_linked':
+      return `ריבית קבועה ${about}${rate}%, צמודה למדד`
+  }
+}
+
+export const READING_BEHAVIOUR = {
+  prime_margin: 'ההחזר משתנה עם ריבית הפריים',
+  prime_total: 'ההחזר משתנה עם ריבית הפריים',
+  fixed_unlinked: 'ההחזר לא משתנה',
+  fixed_linked: 'ההחזר עולה עם המדד',
+} as const satisfies Record<ReadingKind, string>
+
+/** How the quoted payment identified a reading: the loan, how a prime reading's rate adds up to
+ * the total, and that the payment given matches. */
+export function identificationText(
+  reading: Reading,
+  prime: string,
+  rateAsOf: string,
+  monthlyPayment: string,
+): string {
+  const sentences = [`זיהיתי שזו הלוואה ב${readingText(reading)}.`]
+  if (reading.kind === 'prime_margin' || reading.kind === 'prime_total') {
+    const sum = marginText(primeSpread(reading)).replace('%', '')
+    sentences.push(
+      `ריבית הפריים נכון ל-${formatDate(rateAsOf)} היא ${prime}%, כך שהריבית` +
+        ` הכוללת היום היא ${roundedPercent(reading.total_rate, 2)}% (${prime} ${sum}).`,
+    )
+  }
+  sentences.push(`ההחזר שמסרת, ${formatShekels(monthlyPayment)}, תואם לחישוב הזה.`)
+  return sentences.join(' ')
+}
+
+/** The reply to an offer whose reading the agent identified and saved; an offer quoted on more
+ * than the check's loan says which amount the check prices. */
+export function identifiedText(offer: OfferIdentified): string {
+  const sentences = [
+    identificationText(offer.reading, offer.prime, offer.rate_as_of, offer.monthly_payment),
+  ]
+  const { quoted_amount: quoted, loan_amount: loan } = offer
+  if (exceeds(quoted, loan) || exceeds(loan, quoted)) {
+    sentences.push(
+      `ההצעה ניתנה על ${formatShekels(quoted)}; בבדיקה היא מחושבת על סכום ההלוואה,` +
+        ` ${formatShekels(loan)}.`,
+    )
+  }
+  return sentences.join(' ')
+}
+
+export const OFFER_UNRECOGNIZED =
+  'לא זיהיתי את סוג ההלוואה. בקשו יותר פרטים - האם ההלוואה מבוססת פריים? ריבית קבועה צמודה' +
+  ' למדד?'
+
+/** What a payment with no stated rate is worth as a fixed annual rate today. */
+export function equivalentRateText(rate: string): string {
+  return `ההחזר הזה שקול לריבית של כ-${roundedPercent(rate, 1)}% לשנה היום.`
+}
+
+/** What the lender's own words suggest about the loan; null when no word of theirs does. */
+export function wordsSuggestText(
+  likely: ReadingKind | null,
+  typeWords: TypeWord[],
+  lender: string,
+): string | null {
+  if (typeWords.includes('linked') && likely !== 'fixed_unlinked') {
+    return (
+      'בגלל המילה "צמוד", סביר שהריבית קבועה וההלוואה צמודה למדד, כך שההחזר יעלה עם המדד.' +
+      ` כדאי לוודא זאת מול ${lender}.`
+    )
+  }
+  if (typeWords.includes('fixed')) {
+    return (
+      'בגלל המילה "קבוע", סביר שההלוואה אינה צמודה למדד ושההחזר לא ישתנה. מלווים משתמשים' +
+      ' במילה הזו גם כשרק הריבית קבועה וההחזר עדיין עולה עם המדד, ולכן כדאי לוודא זאת מול' +
+      ` ${lender}.`
+    )
+  }
+  return null
+}
+
+export const lenderQuestionTitle = (lender: string) => `השאלה לשאול את ${lender}`
+
+const LENDER_TYPE_QUESTION = 'האם הריבית קבועה או תלויה בריבית הפריים, והאם ההלוואה צמודה למדד?'
+
+/** The question to put to the lender; it names the monthly payment when the person gave one. */
+export function lenderQuestion(payment: string | null): string {
+  if (payment === null) return LENDER_TYPE_QUESTION
+  const same = `האם ההחזר החודשי של ${formatShekels(payment)} נשאר זהה עד סוף ההלוואה?`
+  return `${same} ${LENDER_TYPE_QUESTION}`
+}
+
+export const COPY_QUESTION = 'העתקה'
+export const READINGS_TITLE = 'לפי התשובה, זו אחת מהאפשרויות:'
+export const MOST_LIKELY = 'הסביר ביותר'
+export const READING_MISSING = 'צריך לבחור אחת מהאפשרויות'
+/** The two lines of a readings card's button for describing another offer, broken where the
+ * meaning breaks; its message is the whole sentence. */
+export const CONTINUE_TO_ANOTHER_OFFER_LINES = ['המשך להצעה נוספת', 'עד לבירור השאלה'] as const
+export const CONTINUE_TO_ANOTHER_OFFER = CONTINUE_TO_ANOTHER_OFFER_LINES.join(' ')
+
+export const readingsClosing = (lender: string) =>
+  'אפשר להמשיך ולהזין הצעות נוספות. לאחר קבלת התשובה ' +
+  `${fromLender(lender)} אפשר לחזור לנקודה הזו מהעיגול הצהוב שליד הבדיקה.`
+
+/** The person's message for a confirmed reading; the agent's prompt reads its "אישור:". */
+export const confirmedReadingLine = (reading: Reading) => `אישור: ${readingText(reading)}`
+
+/** A readings card's line once its awaiting offer became a saved offer by this reading. */
+export const settledReadingText = (reading: Reading) => `אושר: ${readingText(reading)}.`
+
+/** Why an offer quoted for less than the check's loan waits on its lender. */
+export const amountGapText = (lender: string, quoted: string, loan: string) =>
+  `ההצעה של ${lender} היא על ${formatShekels(quoted)}, והבדיקה היא על ${formatShekels(loan)}.`
+
+/** The question to put to a lender who quoted less than the check's loan. */
+export const amountQuestion = (loan: string) =>
+  `האם תוכלו להציע ${formatShekels(loan)} באותם תנאים?`
+
+export const COVERS_SAME_TERMS = 'כן, באותם תנאים'
+export const NOT_COVERED = 'לא'
+
+/** The person's message once the lender lends the check's loan on the same terms; the agent's
+ * prompt reads its "אישור:" and "באותם תנאים". */
+export const amountCoveredLine = (lender: string, loan: string, reading: Reading) =>
+  `אישור: ${formatShekels(loan)} באותם תנאים אצל ${lender}, ${readingText(reading)}`
+
+/** The person's message once the lender does not lend the check's loan; the agent's prompt
+ * reads its "לא: אין הצעה של". */
+export const amountDeclinedLine = (lender: string, loan: string) =>
+  `לא: אין הצעה של ${lender} על ${formatShekels(loan)}`
+
+/** A readings card's line once its lender does not lend the check's loan. */
+export const droppedText = (dropped: OfferDropped) =>
+  `ההצעה של ${dropped.lender} לא מכסה את ההלוואה של ${formatShekels(dropped.loan_amount)},` +
+  ' ולכן היא לא נכנסת להשוואה.'
+
+export const AWAITING_ONLY = 'ההמלצה תופיע אחרי קבלת התשובה מהגוף המלווה.'
+export const awaitingNote = (lender: string) =>
+  `${lender}: ממתינה לבירור סוג ההלוואה, לא נכללת בהשוואה`
+export const shortAwaitingNote = (lender: string) =>
+  `${lender}: ממתינה לתשובה על סכום ההלוואה, לא נכללת בהשוואה`

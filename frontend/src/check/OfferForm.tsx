@@ -1,9 +1,10 @@
 import { type FormEvent, useState } from 'react'
 import type { OfferTrackDraft, Question } from '../api/types.ts'
 import {
+  CONTINUE,
   OFFER_ADD_TRACK,
-  OFFER_CONTINUE,
   OFFER_FIX_ABOVE,
+  OFFER_FORM_INTRO,
   OFFER_KIND_LABEL,
   OFFER_LENDER_LABEL,
   OFFER_LENDER_MISSING,
@@ -25,6 +26,7 @@ import {
   offerRateBox,
   offerRateInvalid,
   questionText,
+  SKIP,
   TERM_MIN_MONTHS,
 } from './copy.ts'
 import type { QuestionEntry } from './events.ts'
@@ -111,6 +113,8 @@ interface Props {
   live: boolean
   /** Resolves false when nothing was sent; rejects with an ApiException on a refused send. */
   onAnswer: (answer: Answer) => Promise<boolean>
+  /** Sends a line alone, saving nothing; the skip button's way to leave the form unfilled. */
+  onSkip: (line: string) => Promise<boolean>
 }
 
 /**
@@ -118,9 +122,9 @@ interface Props {
  * percentage and, for fixed interest, whether it is linked to the index), and the longest period.
  * The boxes start with what the person already said. Sending marks every box that is empty or out
  * of range and sends nothing; a valid form goes as one worded message, which the model saves the
- * offer from.
+ * offer from. A skip button leaves the form unfilled, sending its own line and saving nothing.
  */
-export function OfferForm({ entry, question, live, onAnswer }: Props) {
+export function OfferForm({ entry, question, live, onAnswer, onSkip }: Props) {
   const [lender, setLender] = useState(question.lender ?? '')
   const [rows, setRows] = useState<Row[]>(() =>
     (question.tracks.length > 0 ? question.tracks.map(rowOf) : [EMPTY_ROW]).map((row, key) => ({
@@ -153,6 +157,15 @@ export function OfferForm({ entry, question, live, onAnswer }: Props) {
     setNextKey(nextKey + 1)
   }
 
+  async function skip() {
+    setBusy(true)
+    try {
+      await onSkip(SKIP)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function submit(event: FormEvent) {
     event.preventDefault()
     setTried(true)
@@ -178,6 +191,7 @@ export function OfferForm({ entry, question, live, onAnswer }: Props) {
   return (
     <div className="bubble bubble-assistant bubble-question">
       <p className="question-label">{questionText(question)}</p>
+      {live && <p className="card-note">{OFFER_FORM_INTRO}</p>}
       {live && (
         <form className="offer-form" noValidate onSubmit={(event) => void submit(event)}>
           <label htmlFor={lenderId}>{OFFER_LENDER_LABEL}</label>
@@ -271,7 +285,10 @@ export function OfferForm({ entry, question, live, onAnswer }: Props) {
           {rejection !== null && <p className="field-error">{rejection}</p>}
           <div className="question-actions">
             <button type="submit" className="primary" disabled={busy}>
-              {OFFER_CONTINUE}
+              {CONTINUE}
+            </button>
+            <button type="button" disabled={busy} onClick={() => void skip()}>
+              {SKIP}
             </button>
           </div>
           <p className="offer-note">{OFFER_NOTE}</p>

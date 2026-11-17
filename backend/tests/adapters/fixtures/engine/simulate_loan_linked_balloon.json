@@ -1,6 +1,8 @@
 {
   "tracks": [
     {
+      "rate_today": "4.9",
+      "against_consumer_rate": null,
       "first_payment": "1273.80",
       "max_base_payment": "1376.53",
       "balloon_due": "32472.96",
@@ -413,5 +415,7 @@
   "max_base_payment": "1376.53",
   "total_paid": "96049.73",
   "rate_as_of": "2026-10-26",
-  "cpi_as_of": "2026-09-01"
+  "cpi_as_of": "2026-09-01",
+  "consumer_rate": "7.9",
+  "consumer_rate_month": "2026-08-01"
 }

@@ -21,6 +21,7 @@ from fakes import (
     PRIME_TRACK,
     Clock,
     FakeLoanEngine,
+    InMemoryAwaitingOfferRepository,
     InMemoryCheckEventStore,
     InMemoryCheckRepository,
     InMemoryOptionRepository,
@@ -65,6 +66,9 @@ class World:
     saver: InMemorySaver = field(default_factory=lambda: InMemorySaver(serde=checkpoint_serde()))
     checks: InMemoryCheckRepository = field(default_factory=InMemoryCheckRepository)
     options: InMemoryOptionRepository = field(default_factory=InMemoryOptionRepository)
+    awaiting: InMemoryAwaitingOfferRepository = field(
+        default_factory=InMemoryAwaitingOfferRepository
+    )
     recommendations: InMemoryRecommendationRepository = field(
         default_factory=InMemoryRecommendationRepository
     )
@@ -74,6 +78,7 @@ class World:
     def __post_init__(self) -> None:
         self.events = InMemoryCheckEventStore(self.checks, self.clock)
         self.checks.option_store = self.options
+        self.checks.awaiting_store = self.awaiting
         self.checks.recommendation_store = self.recommendations
 
     def replies(self, *messages: AIMessage) -> None:
@@ -84,6 +89,7 @@ class World:
         yield Infrastructure(
             checks=self.checks,
             options=self.options,
+            awaiting=self.awaiting,
             recommendations=self.recommendations,
             events=self.events,
             engine=self.engine,

@@ -319,10 +319,6 @@ body {
   font-weight: 600;
 }
 
-.chat-welcome {
-  color: var(--mute);
-}
-
 .hint-text {
   display: none;
   position: absolute;
@@ -355,6 +351,12 @@ fieldset.field label {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.ceiling-formula,
+.term-planning {
+  color: var(--muted);
+  font-size: 0.85em;
 }
 
 .field input[type="text"] {
@@ -452,6 +454,44 @@ fieldset.field.changed {
   white-space: normal;
 }
 
+.opening-card .opening-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 8px 0;
+  padding: 0;
+  border: 0;
+}
+
+.opening-card legend {
+  float: inline-start;
+  padding: 0;
+}
+
+.opening-choices {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+
+.opening-choice {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.opening-card .field-input input {
+  width: 7.5em;
+}
+
+.opening-hint {
+  margin: 4px 0;
+  color: var(--mute);
+  font-size: 0.85rem;
+}
+
 .question-lead-in,
 .question-label {
   position: relative;
@@ -471,8 +511,15 @@ fieldset.field.changed {
 
 .question-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   margin-top: 8px;
+}
+
+/* A button's label stays on one line; a row too narrow for every button moves the last ones
+   below the others instead. */
+.question-actions button {
+  white-space: nowrap;
 }
 
 .term-form {
@@ -492,6 +539,13 @@ fieldset.field.changed {
 .term-form .field-error,
 .term-form .question-actions {
   grid-column: 1 / -1;
+}
+
+/* The line under a question card's title that says what the card is for. */
+.card-note {
+  margin: 6px 0 0;
+  color: var(--mute);
+  font-size: 0.9rem;
 }
 
 .offer-form {
@@ -539,6 +593,90 @@ fieldset.field.changed {
   align-self: flex-start;
 }
 
+.readings-card,
+.offer-identified {
+  white-space: normal;
+}
+
+.readings-card p,
+.offer-identified p {
+  margin: 0 0 6px;
+}
+
+/* A card the checks list's link brought into view: a ring in the accent that fades once. It
+   moves nothing, so it stays under reduced motion. */
+.card-focus {
+  animation: card-focus 3s ease-out;
+}
+
+@keyframes card-focus {
+  from {
+    box-shadow: 0 0 0 3px var(--accent);
+  }
+
+  to {
+    box-shadow: 0 0 0 3px transparent;
+  }
+}
+
+.readings-ask {
+  margin: 8px 0;
+  padding: 8px 12px;
+  border-inline-start: 4px solid var(--accent);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.readings-ask-caption {
+  display: flex;
+  justify-content: space-between;
+  color: var(--mute);
+  font-size: 0.8rem;
+}
+
+.readings-choices {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.readings-choices legend {
+  padding: 0;
+  font-weight: 600;
+}
+
+.reading {
+  display: block;
+  margin: 5px 0;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.reading-likely {
+  border: 2px solid var(--accent);
+}
+
+.reading small,
+.readings-hint {
+  color: var(--mute);
+}
+
+.reading-tag {
+  margin-inline-start: 6px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--panel);
+  font-size: 0.7rem;
+}
+
+.readings-hint {
+  margin-top: 8px;
+  font-size: 0.85rem;
+}
+
 .caret::after {
   content: "▍";
   margin-inline-start: 2px;
@@ -581,7 +719,7 @@ fieldset.field.changed {
   font-size: 0.68rem;
 }
 
-.chat-samples button {
+.sample-chip {
   padding: 0.2rem 0.48rem;
   border: 1px solid var(--accent-border);
   border-radius: 6px;
@@ -591,13 +729,18 @@ fieldset.field.changed {
   cursor: pointer;
 }
 
-.chat-samples button:hover:not(:disabled) {
+.sample-chip:hover:not(:disabled) {
   filter: brightness(0.93);
 }
 
-.chat-samples button:disabled {
+.sample-chip:disabled {
   cursor: default;
   opacity: 0.5;
+}
+
+.bubble-question .sample-chip {
+  margin-top: 10px;
+  font-size: 0.85rem;
 }
 
 .chat-input {
@@ -723,6 +866,10 @@ button.primary {
   font-weight: 600;
 }
 
+.option-price {
+  font-size: 0.9rem;
+}
+
 .chip {
   display: inline-block;
   padding: 2px 10px;
@@ -760,6 +907,12 @@ button.primary {
 .option-group-title {
   margin: 16px 0 8px;
   font-size: 0.95rem;
+  color: var(--mute);
+}
+
+.awaiting-note {
+  margin: 8px 0;
+  font-size: calc(1em - 1px);
   color: var(--mute);
 }
 
@@ -1029,6 +1182,22 @@ button.primary {
   text-decoration: underline;
 }
 
+/* A quiet action in running text: the muted words of its line, always underlined. */
+.underline-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.underline-link:hover,
+.underline-link[aria-expanded="true"] {
+  color: var(--accent);
+}
+
 .finances-fields {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 220px));
@@ -1106,6 +1275,44 @@ button.primary {
   gap: 4px;
 }
 
+/* The yellow bubble counting a check's offers that await the lender's answer. */
+.check-awaiting {
+  min-width: 22px;
+  padding: 1px 6px;
+  border: 1px solid var(--amber);
+  border-radius: 999px;
+  background: var(--amber-bg);
+  color: var(--amber);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.check-awaiting-list {
+  padding: 4px 8px;
+  font-size: 0.9em;
+}
+
+.check-awaiting-list p {
+  margin: 0 0 4px;
+  color: var(--mute);
+}
+
+.check-awaiting-list ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.check-awaiting-list button {
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  text-align: start;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .check-action {
   padding: 2px 6px;
   border: 0;
@@ -1150,8 +1357,11 @@ button.primary {
   color: var(--red);
 }
 
+/* A container, not a button, so the finances link can sit inside it; the select button's click
+   area stretches over the whole item, and the link is raised above that area. */
 .check-item {
   display: flex;
+  position: relative;
   flex: 1;
   flex-direction: column;
   align-items: flex-start;
@@ -1162,22 +1372,50 @@ button.primary {
   border-radius: 8px;
   background: var(--panel);
   color: var(--ink);
+  text-align: start;
+}
+
+.check-item:has(> .check-select[aria-current="true"]) {
+  border: 2px solid var(--accent);
+}
+
+.check-item:has(> .check-select:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.check-select {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
   font: inherit;
   text-align: start;
   cursor: pointer;
 }
 
-.check-item[aria-current="true"] {
-  border: 2px solid var(--accent);
+.check-select:focus-visible {
+  outline: none;
+}
+
+.check-select::after {
+  content: "";
+  position: absolute;
+  inset: 0;
 }
 
 .check-title {
   font-weight: 600;
 }
 
-.check-term {
+.check-term-row {
   color: var(--mute);
   font-size: 0.9rem;
+}
+
+.check-finances {
+  position: relative;
+  z-index: 1;
 }
 
 .check-chips {
@@ -1272,64 +1510,6 @@ button.primary {
 
 .market-chart .series-bar.negative {
   fill: var(--red);
-}
-
-/* A control that just became the place to start leads the eye to it: an arc in the accent sweeps
-   its edge once, then goes. The overlay is masked down to a two-pixel band over the border, so the
-   sweep never crosses the content. The angle is a registered property so the sweep can be animated
-   at all. A carrier sets its own run, and a delay to follow another sweep. */
-@property --sweep {
-  syntax: "<angle>";
-  inherits: false;
-  initial-value: 0deg;
-}
-
-.border-sweep {
-  position: relative;
-  --sweep-seconds: 3;
-  --sweep-delay: 0;
-}
-
-.border-sweep::before {
-  content: "";
-  position: absolute;
-  inset: -1px;
-  padding: 2px;
-  border-radius: inherit;
-  opacity: 0;
-  pointer-events: none;
-  background: conic-gradient(from var(--sweep), transparent 70%, var(--accent));
-  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  animation: border-sweep calc(var(--sweep-seconds) * 1s) linear calc(var(--sweep-delay) * 1s);
-}
-
-@keyframes border-sweep {
-  from {
-    --sweep: 0deg;
-    opacity: 1;
-  }
-
-  85% {
-    opacity: 1;
-  }
-
-  to {
-    --sweep: calc(var(--sweep-seconds) * 1.4 * 360deg);
-    opacity: 0;
-  }
-}
-
-/* The samples sweep for two seconds once the input's three-second sweep ends. */
-.border-sweep.sweep-after-input {
-  --sweep-seconds: 2;
-  --sweep-delay: 3;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .border-sweep::before {
-    animation: none;
-  }
 }
 
 /* demo.html's note that the page replays a recording: pinned in the header beside the menu

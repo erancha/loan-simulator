@@ -1,5 +1,5 @@
 import { apiDelete, apiGet, apiPost, apiPut } from './client.ts'
-import type { CheckSummary, CheckView, Finances } from './types.ts'
+import type { CheckSummary, CheckView, Finances, ReadingKind } from './types.ts'
 
 export function listChecks(): Promise<CheckSummary[]> {
   return apiGet('/api/checks')
@@ -72,4 +72,45 @@ export function sendMarketSample(id: string, text: string): Promise<void> {
  */
 export function saveFinances(checkId: string, update: Partial<Finances>): Promise<CheckView> {
   return apiPut(`/api/checks/${checkId}/finances`, update)
+}
+
+/** The opening card's loan: the purpose and amount are saved and the line is the person's message;
+ * refused with 422 when the loan is. */
+export function sendOpening(
+  id: string,
+  text: string,
+  purpose: string,
+  amount: string,
+): Promise<void> {
+  return apiPost(`/api/checks/${id}/opening`, { text, purpose, amount })
+}
+
+/** The term confirmed on the term card, as the person's message. */
+export function sendTermConfirmation(id: string, text: string): Promise<void> {
+  return apiPost(`/api/checks/${id}/term-confirmation`, { text })
+}
+
+/** The person's message for leaving the offer form, which the server answers with no model. */
+export function sendOfferSkip(id: string, text: string): Promise<void> {
+  return apiPost(`/api/checks/${id}/offer-skip`, { text })
+}
+
+/** Turns an awaiting offer into a saved offer by the reading the person confirms. */
+export function confirmReading(id: string, awaitingId: string, kind: ReadingKind): Promise<void> {
+  return apiPut(`/api/checks/${id}/awaiting-offers/${awaitingId}`, { reading: kind })
+}
+
+/** The lender's answer to an offer quoted for less than the check's loan: whether it lends the
+ * loan amount on the same terms, with the reading the person chose; the offer is saved at the
+ * loan amount, or dropped. */
+export function answerAmount(
+  id: string,
+  awaitingId: string,
+  covers: boolean,
+  kind: ReadingKind | null,
+): Promise<void> {
+  return apiPut(`/api/checks/${id}/awaiting-offers/${awaitingId}/amount`, {
+    covers,
+    reading: kind,
+  })
 }

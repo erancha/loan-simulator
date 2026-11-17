@@ -15,6 +15,15 @@ class CheckNotFoundError(Exception):
     """The check does not exist for this person."""
 
 
+class AwaitingOfferNotFoundError(Exception):
+    """The check holds no awaiting offer of this id."""
+
+    def __init__(self, check_id: str, awaiting_id: str) -> None:
+        super().__init__(f"check {check_id!r} holds no awaiting offer {awaiting_id!r}")
+        self.check_id = check_id
+        self.awaiting_id = awaiting_id
+
+
 class TurnConflictError(Exception):
     """A turn is already running for the check."""
 

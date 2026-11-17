@@ -3,13 +3,16 @@ check's panel, and send a message that starts a turn.
 
 Core building blocks:
 - router: POST/GET /api/checks, GET/DELETE /api/checks/{id}, POST /api/checks/{id}/clone,
-  /archive and /restore, POST /api/checks/{id}/messages, /market-sample, /offer-sample and
-  /term-ceiling, PUT /api/checks/{id}/finances and /term
-- register_error_handlers: another person's check answers 404 like an unknown one; a message, a
-  clone, an archive, a delete, a finances save or a term save while a turn runs answers 409, as do
-  a message, a finances save or a term save to an archived check, a second archive, and a restore
-  of a check that is open; figures or a term that cannot be saved answer 422 with the reason; a
-  message over the cap answers 429 with Retry-After
+  /archive and /restore, POST /api/checks/{id}/messages, /market-sample, /offer-sample,
+  /term-ceiling, /opening, /term-confirmation and /offer-skip, PUT /api/checks/{id}/finances and
+  /term, PUT /api/checks/{id}/awaiting-offers/{awaiting_id} and its /amount
+- register_error_handlers: another person's check answers 404 like an unknown one, as does an
+  awaiting offer the check does not hold; a message, a clone, an archive, a delete, a finances
+  save, a term save, a reading or an amount answer while a turn runs answers 409, as do a
+  message, a finances save, a term save, a reading or an amount answer to an archived check, a
+  second archive, and a restore of a check that is open; figures, a term, a reading, an amount
+  answer or an opening's loan that cannot be saved answer 422 with the reason; a message over the
+  cap answers 429 with Retry-After
 """
 
 import math
@@ -17,7 +20,9 @@ import math
 from fastapi import APIRouter, FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
+from loan_agent.application.check_tools import ToolError
 from loan_agent.domain.errors import (
+    AwaitingOfferNotFoundError,
     CheckArchivedError,
     CheckNotFoundError,
     CheckNotRestorableError,
@@ -25,15 +30,18 @@ from loan_agent.domain.errors import (
     TurnConflictError,
     TurnLimitError,
 )
-from loan_agent.domain.models import Check
+from loan_agent.domain.models import Check, compares_options
 from loan_agent.domain.models import Recommendation as DomainRecommendation
 from loan_agent.platform.api.auth import CurrentUser
 from loan_agent.platform.api.schemas import (
+    AmountAnswer,
     CheckSummary,
     CheckView,
     CreatedCheck,
     FinancesUpdate,
     Message,
+    Opening,
+    ReadingConfirmation,
     TermCeiling,
     TermConfirmation,
 )
@@ -49,10 +57,7 @@ async def _recommends_examples_only(
 ) -> bool:
     if recommendation is None:
         return False
-    named = [recommendation.preferred_option_id]
-    if recommendation.alternative_option_id is not None:
-        named.append(recommendation.alternative_option_id)
-    for option_id in named:
+    for option_id in recommendation.named_option_ids:
         option = await deps.options.get(recommendation.check_id, option_id)
         if option.source != "example":
             return False
@@ -62,7 +67,17 @@ async def _recommends_examples_only(
 async def _summary(deps: AppDeps, check: Check, started: bool) -> CheckSummary:
     recommendation = await deps.recommendations.latest(check.id)
     return CheckSummary.of(
-        check, recommendation, await _recommends_examples_only(deps, recommendation), started
+        check,
+        recommendation,
+        await _recommends_examples_only(deps, recommendation),
+        recommendation is not None
+        and compares_options(
+            await deps.options.list(check.id),
+            recommendation.named_option_ids,
+            check.term_months,
+        ),
+        started,
+        await deps.awaiting.list(check.id),
     )
 
 
@@ -136,6 +151,26 @@ async def confirm_term(
     await runner.save_term(user, check_id, body.term_months, body.payment_ceiling)
 
 
+@router.put("/{check_id}/awaiting-offers/{awaiting_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def confirm_reading(
+    check_id: str, awaiting_id: str, body: ReadingConfirmation, user: CurrentUser, runner: Runner
+) -> None:
+    """The reading the person confirms on an awaiting offer's card, saved as their offer before
+    the line that tells the model, so the recommendation updates on a saved offer."""
+    await runner.confirm_reading(user, check_id, awaiting_id, body.reading)
+
+
+@router.put(
+    "/{check_id}/awaiting-offers/{awaiting_id}/amount", status_code=status.HTTP_204_NO_CONTENT
+)
+async def answer_amount(
+    check_id: str, awaiting_id: str, body: AmountAnswer, user: CurrentUser, runner: Runner
+) -> None:
+    """The lender's answer to an offer quoted for less than the check's loan, given on its card:
+    the offer saved at the loan amount, or dropped, before the line that tells the model."""
+    await runner.answer_amount(user, check_id, awaiting_id, body.covers, body.reading)
+
+
 @router.delete("/{check_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_check(check_id: str, user: CurrentUser, runner: Runner) -> None:
     await runner.delete(user, check_id)
@@ -165,10 +200,41 @@ async def send_market_sample(
     await runner.send_market_sample(user, check_id, body.text)
 
 
+@router.post("/{check_id}/opening", status_code=status.HTTP_202_ACCEPTED)
+async def send_opening(check_id: str, body: Opening, user: CurrentUser, runner: Runner) -> None:
+    """The opening card's goal and amount, saved as the check's loan before the line is stored;
+    the term card follows on the event stream with no model call. The errors are a message's,
+    and 422 with the reason for a loan that cannot be saved."""
+    await runner.send_opening(user, check_id, body.text, body.purpose, body.amount)
+
+
+@router.post("/{check_id}/term-confirmation", status_code=status.HTTP_202_ACCEPTED)
+async def send_term_confirmation(
+    check_id: str, body: Message, user: CurrentUser, runner: Runner
+) -> None:
+    """The line of a term PUT /term saved; a check with no option and no awaiting offer gets the
+    offer form on the event stream with no model call, any other a model turn. The errors are a
+    message's."""
+    await runner.send_term_confirmation(user, check_id, body.text)
+
+
+@router.post("/{check_id}/offer-skip", status_code=status.HTTP_202_ACCEPTED)
+async def send_offer_skip(check_id: str, body: Message, user: CurrentUser, runner: Runner) -> None:
+    """The offer form's skip, answered with an invitation to describe the offer and no model
+    call; the reply arrives on the event stream, and the errors are a message's."""
+    await runner.send_offer_skip(user, check_id, body.text)
+
+
 def register_error_handlers(app: FastAPI) -> None:
     async def not_found(request: Request, error: Exception) -> JSONResponse:
         assert isinstance(error, CheckNotFoundError)
         return JSONResponse({"detail": "no such check"}, status_code=status.HTTP_404_NOT_FOUND)
+
+    async def awaiting_not_found(request: Request, error: Exception) -> JSONResponse:
+        assert isinstance(error, AwaitingOfferNotFoundError)
+        return JSONResponse(
+            {"detail": "no such awaiting offer"}, status_code=status.HTTP_404_NOT_FOUND
+        )
 
     async def conflict(request: Request, error: Exception) -> JSONResponse:
         assert isinstance(error, TurnConflictError | CheckArchivedError | CheckNotRestorableError)
@@ -178,8 +244,8 @@ def register_error_handlers(app: FastAPI) -> None:
         )
 
     async def unsavable(request: Request, error: Exception) -> JSONResponse:
-        """The message names the figure at fault, or what the engine refused."""
-        assert isinstance(error, FinancesError | EngineError)
+        """The message names the figure at fault, or what the engine or a tool refused."""
+        assert isinstance(error, FinancesError | EngineError | ToolError)
         return JSONResponse(
             {"detail": str(error)}, status_code=status.HTTP_422_UNPROCESSABLE_CONTENT
         )
@@ -194,9 +260,11 @@ def register_error_handlers(app: FastAPI) -> None:
         )
 
     app.add_exception_handler(CheckNotFoundError, not_found)
+    app.add_exception_handler(AwaitingOfferNotFoundError, awaiting_not_found)
     app.add_exception_handler(TurnConflictError, conflict)
     app.add_exception_handler(CheckArchivedError, conflict)
     app.add_exception_handler(CheckNotRestorableError, conflict)
     app.add_exception_handler(FinancesError, unsavable)
     app.add_exception_handler(EngineError, unsavable)
+    app.add_exception_handler(ToolError, unsavable)
     app.add_exception_handler(TurnLimitError, over_limit)

@@ -4,8 +4,8 @@ Core building blocks:
 - PostgresCheckRepository: check rows with their loan, term, ceiling and finances, always read
   through the owning person; deleting or cloning one takes everything it produced in one
   transaction
-- PostgresOptionRepository, PostgresRecommendationRepository: what a check produced; a check
-  keeps one recommendation
+- PostgresOptionRepository, PostgresAwaitingOfferRepository, PostgresRecommendationRepository:
+  what a check produced; a check keeps one recommendation
 - PostgresCheckEventStore: per-check event log; each append locks the check's row, so sequence
   numbers never collide
 - Codecs between domain values and JSONB: money as decimal strings, dates as ISO strings
@@ -14,23 +14,25 @@ Each call runs in its own session; a write commits before the call returns.
 """
 
 from collections.abc import Collection, Mapping
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import cast
+from typing import Any, cast
 
 from sqlalchemy import delete, false, func, literal, select, union_all, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from loan_agent.adapters.postgres.orm import (
+    AwaitingOfferRow,
     CheckEventRow,
     CheckRow,
     DeletedEventTimeRow,
     OptionRow,
     RecommendationRow,
 )
-from loan_agent.domain.errors import CheckNotFoundError
+from loan_agent.domain.errors import AwaitingOfferNotFoundError, CheckNotFoundError
 from loan_agent.domain.models import (
+    AwaitingOffer,
     CeilingSource,
     Check,
     Finances,
@@ -38,7 +40,10 @@ from loan_agent.domain.models import (
     Option,
     OptionFigures,
     OptionSource,
+    Reading,
+    ReadingKind,
     Recommendation,
+    TypeWord,
 )
 from loan_agent.ports.repositories import CheckIds, EventTimes, StoredEvent
 
@@ -132,7 +137,7 @@ class PostgresCheckRepository:
             await session.execute(
                 delete(DeletedEventTimeRow).where(DeletedEventTimeRow.created_at <= kept_since)
             )
-            for row in (CheckEventRow, RecommendationRow, OptionRow):
+            for row in (CheckEventRow, RecommendationRow, AwaitingOfferRow, OptionRow):
                 await session.execute(delete(row).where(row.check_id == check_id))
             await session.execute(delete(CheckRow).where(CheckRow.id == check_id))
 
@@ -203,6 +208,18 @@ class PostgresCheckRepository:
                         OptionRow.figures,
                         OptionRow.created_at,
                     ).where(OptionRow.check_id == source_id),
+                )
+            )
+            await session.execute(
+                insert(AwaitingOfferRow).from_select(
+                    ["check_id", "id", "lender", "data", "created_at"],
+                    select(
+                        literal(clone.id),
+                        AwaitingOfferRow.id,
+                        AwaitingOfferRow.lender,
+                        AwaitingOfferRow.data,
+                        AwaitingOfferRow.created_at,
+                    ).where(AwaitingOfferRow.check_id == source_id),
                 )
             )
             await session.execute(
@@ -331,6 +348,82 @@ def _option(row: OptionRow) -> Option:
         offer_date=row.offer_date,
         max_term_months=row.max_term_months,
         summary=OptionFigures.from_json(row.figures),
+        created_at=_utc(row.created_at),
+    )
+
+
+class PostgresAwaitingOfferRepository:
+    def __init__(self, sessions: Sessions) -> None:
+        self._sessions = sessions
+
+    async def save(self, offer: AwaitingOffer) -> None:
+        """A replacement keeps the time of the first save, so the offer keeps its place."""
+        values = {"lender": offer.lender, "data": _awaiting_data(offer)}
+        statement = insert(AwaitingOfferRow).values(
+            check_id=offer.check_id, id=offer.id, created_at=offer.created_at, **values
+        )
+        statement = statement.on_conflict_do_update(
+            index_elements=[AwaitingOfferRow.check_id, AwaitingOfferRow.id], set_=values
+        )
+        async with self._sessions.begin() as session:
+            await session.execute(statement)
+
+    async def list(self, check_id: str) -> list[AwaitingOffer]:
+        async with self._sessions() as session:
+            rows = await session.scalars(
+                select(AwaitingOfferRow)
+                .where(AwaitingOfferRow.check_id == check_id)
+                .order_by(AwaitingOfferRow.created_at, AwaitingOfferRow.id)
+            )
+            return [_awaiting(row) for row in rows]
+
+    async def get(self, check_id: str, awaiting_id: str) -> AwaitingOffer:
+        async with self._sessions() as session:
+            row = await session.get(AwaitingOfferRow, (check_id, awaiting_id))
+        if row is None:
+            raise AwaitingOfferNotFoundError(check_id, awaiting_id)
+        return _awaiting(row)
+
+    async def remove(self, check_id: str, awaiting_id: str) -> None:
+        async with self._sessions.begin() as session:
+            await session.execute(
+                delete(AwaitingOfferRow).where(
+                    AwaitingOfferRow.check_id == check_id, AwaitingOfferRow.id == awaiting_id
+                )
+            )
+
+
+def _awaiting_data(offer: AwaitingOffer) -> dict[str, Any]:
+    return {
+        "amount": str(offer.amount),
+        "term_months": offer.term_months,
+        "stated_rate": _text_or_none(offer.stated_rate),
+        "monthly_payment": _text_or_none(offer.monthly_payment),
+        "payment_rate": _text_or_none(offer.payment_rate),
+        "type_words": list(offer.type_words),
+        "readings": [reading.to_json() for reading in offer.readings],
+        "likely": offer.likely,
+        "prime": str(offer.prime),
+        "rate_as_of": offer.rate_as_of.isoformat(),
+    }
+
+
+def _awaiting(row: AwaitingOfferRow) -> AwaitingOffer:
+    data = row.data
+    return AwaitingOffer(
+        id=row.id,
+        check_id=row.check_id,
+        lender=row.lender,
+        amount=Decimal(data["amount"]),
+        term_months=data["term_months"],
+        stated_rate=_decimal_or_none(data["stated_rate"]),
+        monthly_payment=_decimal_or_none(data["monthly_payment"]),
+        payment_rate=_decimal_or_none(data["payment_rate"]),
+        type_words=tuple(cast(list[TypeWord], data["type_words"])),
+        readings=tuple(Reading.from_json(reading) for reading in data["readings"]),
+        likely=cast(ReadingKind | None, data["likely"]),
+        prime=Decimal(data["prime"]),
+        rate_as_of=date.fromisoformat(data["rate_as_of"]),
         created_at=_utc(row.created_at),
     )
 

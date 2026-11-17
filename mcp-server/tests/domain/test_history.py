@@ -6,7 +6,7 @@ from decimal import Decimal
 import pytest
 
 from loan_engine.domain.assumptions import BASE_ANNUAL_INFLATION, HISTORY_MONTHS, PRIME_MARGIN
-from loan_engine.domain.history import MarketHistory, NoHistoryWindowError, simulate
+from loan_engine.domain.history import MarketHistory, NoHistoryWindowError, rate_today, simulate
 from loan_engine.domain.models import Track
 from loan_engine.domain.schedule import Schedule, schedule
 
@@ -101,6 +101,15 @@ def test_rate_floor() -> None:
     expected = schedule(track, floored, [Decimal(0)] * 6)
     assert outcome.worst is not None
     assert outcome.worst.total_paid == expected.total_paid
+
+
+def test_rate_today_is_the_first_month_rate_of_the_base_path() -> None:
+    history = make_history(["1"] * 6)
+    assert rate_today(make_track(), history) == Decimal("3.25") + PRIME_MARGIN + SPREAD
+    fixed = make_track(rate_kind="fixed", annual_rate=Decimal(4), prime_spread=None)
+    assert rate_today(fixed, history) == Decimal(4)
+    for track in (make_track(), fixed):
+        assert rate_today(track, history) == simulate(track, history).base.rows[0].annual_rate
 
 
 def test_worst_is_highest_peak_payment() -> None:

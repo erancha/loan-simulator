@@ -2,15 +2,16 @@
 (hundredths of a shekel).
 
 - Output models: Bounds, LoanSimulation (TrackSimulation, MonthRow), ComfortableTerm,
-  OfferTerm, ProposedTerm, LargestLoan, TrackSuggestions, MarketSeries (PrimeMonth, CpiMonth)
+  OfferTerm, ProposedTerm, LargestLoan, TrackSuggestions, MarketSeries (PrimeMonth, CpiMonth),
+  OfferReadings (Reading)
 - register_tools(): adds the tools to a server; each reads market data from history_provider
 
 simulate_loan returns its LoanSimulation as structured content and only a short summary as text,
 so the agent will be able to pass the schedule to the page without it filling the model's context.
 
-Argument validation failures and the domain's NoHistoryWindowError reach the caller as tool errors
-whose message names the field or the term at fault; the MCP SDK withholds the text of any other
-exception.
+Argument validation failures, the domain's NoHistoryWindowError and an offer with neither a
+number nor a payment reach the caller as tool errors whose message names the field or the term at
+fault; the MCP SDK withholds the text of any other exception.
 """
 
 from collections.abc import Callable, Sequence
@@ -23,11 +24,12 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
-from loan_engine.domain import affordability, history, policy, schedule
+from loan_engine.domain import affordability, history, policy, readings, schedule
 from loan_engine.domain.assumptions import (
     BASE_ANNUAL_INFLATION,
     HISTORY_MONTHS,
     PRIME_MARGIN,
+    SIMILAR_RATE_POINTS,
 )
 from loan_engine.domain.limits import (
     MAX_ANNUAL_RATE,
@@ -128,7 +130,21 @@ class MoneyRange(_Output):
     high: Money
 
 
+_CONSUMER_RATE = (
+    "the Bank of Israel average annual percent on new unindexed household consumer loans"
+)
+
+
 class TrackSimulation(_Output):
+    rate_today: Decimal = Field(
+        description="Annual percent the track charges in month 1: the fixed rate, or today's "
+        "prime plus the spread; for a CPI-linked track, the rate on top of the CPI"
+    )
+    against_consumer_rate: policy.RateAgainstMarket | None = Field(
+        description=f"rate_today against {_CONSUMER_RATE} (the loan's consumer_rate), "
+        f"similar within {SIMILAR_RATE_POINTS} percentage points; null for a CPI-linked track, "
+        "whose rate is not comparable with an unlinked one"
+    )
     first_payment: Money = Field(description=f"Payment in month 1 on {_BASE_PATH}, ₪")
     max_base_payment: Money = Field(
         description=f"Highest recurring monthly payment on {_BASE_PATH}, without the balloon, ₪"
@@ -152,8 +168,12 @@ class TrackSimulation(_Output):
     schedule: list[MonthRow] = Field(description=f"Month by month on {_BASE_PATH}")
 
     @classmethod
-    def of(cls, outcome: history.TrackOutcome) -> "TrackSimulation":
+    def of(
+        cls, track: Track, outcome: history.TrackOutcome, market: history.MarketHistory
+    ) -> "TrackSimulation":
         return cls(
+            rate_today=history.rate_today(track, market),
+            against_consumer_rate=policy.rate_against_market(track, market),
             first_payment=outcome.base.first_payment,
             max_base_payment=outcome.base.max_payment,
             balloon_due=outcome.base.balloon_due,
@@ -178,6 +198,11 @@ class LoanSimulation(_Output):
     total_paid: Money = Field(description=f"Total repaid for the whole loan on {_BASE_PATH}, ₪")
     rate_as_of: date = Field(description="Date of the Bank of Israel rate used")
     cpi_as_of: date = Field(description="Month of the latest consumer price index used")
+    consumer_rate: Decimal = Field(
+        description=f"{_CONSUMER_RATE[0].upper()}{_CONSUMER_RATE[1:]}, the rate suggest_tracks "
+        "prices its fixed track at"
+    )
+    consumer_rate_month: date = Field(description="Month of consumer_rate")
 
 
 class ComfortableTerm(_Output):
@@ -198,7 +223,8 @@ class OfferTerm(_Output):
 class ProposedTerm(_Output):
     term_months: int = Field(description="The shortest term whose first payment is under the limit")
     first_payment: Money = Field(
-        description=f"The higher first payment of the two tracks at that term on {_BASE_PATH}, ₪"
+        description="The higher first payment of the two unlinked tracks at that term on "
+        f"{_BASE_PATH}, ₪"
     )
 
 
@@ -210,7 +236,10 @@ class LargestLoan(_Output):
 
 
 class TrackSuggestions(_Output):
-    tracks: list[Track] = Field(description="A fixed track and a prime track, both unlinked")
+    tracks: list[Track] = Field(
+        description="A fixed track and a prime track, both unlinked, then a pension fund's fixed "
+        "track linked to the CPI"
+    )
     as_of: date = Field(description="Month of the average rate the tracks are priced from")
     source: str
 
@@ -238,12 +267,36 @@ class MarketSeries(_Output):
     cpi: list[CpiMonth] = Field(description="The latest months, oldest first")
 
 
+class Reading(_Output):
+    kind: readings.ReadingKind
+    track: Track = Field(description="The offer as one spitzer track under this reading")
+    first_payment: Money = Field(description=f"Payment in month 1 on {_BASE_PATH}, ₪")
+    total_rate: Decimal = Field(description="Annual percent the reading charges today")
+    approximate: bool = Field(
+        description="True for a linked reading priced at the rate of an unlinked payment"
+    )
+
+
+class OfferReadings(_Output):
+    prime: Decimal = Field(description="Today's prime, annual percent")
+    rate_as_of: date = Field(description="Date of the Bank of Israel rate used")
+    payment_rate: Decimal | None = Field(
+        description="Annual percent at which a fixed unlinked track starts with the quoted "
+        "payment; null without a payment or when no priced rate gives it"
+    )
+    readings: list[Reading] = Field(
+        description="The loans the offer may mean, each within the priced ranges"
+    )
+
+
 _ONE_DECIMAL = Decimal("0.1")
 
 
 def _summary(loan: LoanSimulation) -> str:
     lines = [f"Figures are on {_BASE_PATH}, except in a named historical window."]
-    lines += [_track_summary(number, track) for number, track in enumerate(loan.tracks, start=1)]
+    lines += [
+        _track_summary(number, track, loan) for number, track in enumerate(loan.tracks, start=1)
+    ]
     lines.append(
         f"Loan: first payment {loan.first_payment} ₪; peak recurring payment "
         f"{loan.max_base_payment} ₪; total repaid {loan.total_paid} ₪."
@@ -255,8 +308,9 @@ def _summary(loan: LoanSimulation) -> str:
     return "\n".join(lines)
 
 
-def _track_summary(number: int, track: TrackSimulation) -> str:
+def _track_summary(number: int, track: TrackSimulation, loan: LoanSimulation) -> str:
     parts = [
+        _rate_summary(track, loan),
         f"first payment {track.first_payment} ₪",
         f"peak recurring payment {track.max_base_payment} ₪",
     ]
@@ -275,6 +329,16 @@ def _track_summary(number: int, track: TrackSimulation) -> str:
             risk += f" and a balloon of {worst.balloon_due} ₪"
         parts.append(risk)
     return f"Track {number}: " + "; ".join(parts) + "."
+
+
+def _rate_summary(track: TrackSimulation, loan: LoanSimulation) -> str:
+    if track.against_consumer_rate is None:
+        return f"rate today {track.rate_today}% on top of the CPI"
+    against = {"above": "above", "similar": "similar to", "below": "below"}
+    return (
+        f"rate today {track.rate_today}%, {against[track.against_consumer_rate]} the average "
+        f"consumer loan rate of {loan.consumer_rate}% as of {loan.consumer_rate_month:%Y-%m}"
+    )
 
 
 def _range(bounds: tuple[Decimal, Decimal] | None) -> MoneyRange | None:
@@ -311,9 +375,11 @@ def register_tools(
     ) -> Annotated[CallToolResult, LoanSimulation]:
         """Call this to price a loan the person is considering, made of one or more tracks.
         Returns today's payment, the highest recurring payment and total repaid for the loan and
-        per track, each balloon track's balloon due in its last month, each variable track's worst
-        historical window and range, and the dates of the market data used. The text is a summary;
-        the structured content also holds the month-by-month schedule, for the page.
+        per track, each track's rate today and, unlinked, how it stands against the average rate
+        on consumer loans, each balloon track's balloon due in its last month, each variable
+        track's worst historical window and range, and the dates of the market data used. The
+        text is a summary; the structured content also holds the month-by-month schedule, for
+        the page.
         """
         market = history_provider()
         try:
@@ -322,12 +388,17 @@ def register_tools(
             raise ToolError(str(error)) from error
         monthly = _monthly_totals([outcome.base for outcome in outcomes])
         simulation = LoanSimulation(
-            tracks=[TrackSimulation.of(outcome) for outcome in outcomes],
+            tracks=[
+                TrackSimulation.of(track, outcome, market)
+                for track, outcome in zip(loan.tracks, outcomes, strict=True)
+            ],
             first_payment=monthly[0],
             max_base_payment=max(monthly),
             total_paid=sum((outcome.base.total_paid for outcome in outcomes), Decimal(0)),
             rate_as_of=market.rate_as_of,
             cpi_as_of=market.cpi_as_of,
+            consumer_rate=market.consumer_rate,
+            consumer_rate_month=market.consumer_rate_month,
         )
         return CallToolResult(
             content=[TextContent(type="text", text=_summary(simulation))],
@@ -389,10 +460,10 @@ def register_tools(
         ] = False,
     ) -> ComfortableTerm:
         """Call this to choose the term of the example tracks: the shortest term, in steps of
-        6 months, at which suggest_tracks' fixed and prime tracks keep their highest payment, in
-        the worst historical window too, within the payment ceiling, or with any_track at
-        least one of them. term_months is null
-        when no term up to the longest the simulator prices fits.
+        6 months, at which suggest_tracks' unlinked fixed and prime tracks keep their highest
+        payment, in the worst historical window too, within the payment ceiling, or with
+        any_track at least one of them; the pension fund track is left out, as few lenders offer
+        it. term_months is null when no term up to the longest the simulator prices fits.
         """
         market = history_provider()
         term = policy.shortest_comfortable_term(
@@ -438,12 +509,12 @@ def register_tools(
     ) -> ProposedTerm:
         """Call this to choose the term of the example tracks from the first payment the person
         wants to stay under: the shortest term, in steps of 6 months, at which suggest_tracks'
-        fixed and prime tracks both start below the limit, or the longest the simulator prices
-        when none does. Returns that term and the higher first payment of the two tracks.
+        unlinked fixed and prime tracks both start below the limit, or the longest the simulator
+        prices when none does. Returns that term and the higher first payment of the two.
         """
         market = history_provider()
         term = policy.proposed_term(principal, payment_limit, market)
-        return _proposed(policy.suggest_tracks(principal, term, market), term, market)
+        return _proposed(policy.lender_tracks(principal, term, market), term, market)
 
     @server.tool()
     def propose_offer_term(
@@ -476,12 +547,53 @@ def register_tools(
         term_months: Annotated[int, Field(ge=MIN_TERM, le=MAX_TERM, description="Term, months")],
     ) -> LargestLoan:
         """Call this to tell the person the largest loan their payment ceiling carries at a term:
-        the largest amount for which at least one of suggest_tracks' tracks keeps its highest
-        payment, in the worst historical window too, within the ceiling. loan_amount is null
+        the largest amount for which suggest_tracks' unlinked fixed or prime track keeps its
+        highest payment, in the worst historical window too, within the ceiling. loan_amount is null
         when even the smallest loan the simulator prices does not fit.
         """
         loan = policy.largest_comfortable_loan(payment_ceiling, term_months, history_provider())
         return LargestLoan(loan_amount=loan)
+
+    @server.tool()
+    def offer_readings(
+        principal: Annotated[
+            Decimal, Field(ge=MIN_PRINCIPAL, le=MAX_PRINCIPAL, description="Loan amount, ₪")
+        ],
+        term_months: Annotated[int, Field(ge=MIN_TERM, le=MAX_TERM, description="Term, months")],
+        stated_rate: Annotated[
+            Decimal | None,
+            Field(
+                ge=MIN_PRIME_SPREAD,
+                le=MAX_ANNUAL_RATE,
+                description="The annual percent the offer states, whatever it is of",
+            ),
+        ] = None,
+        monthly_payment: Annotated[
+            Decimal | None, Field(gt=0, description="The monthly payment the offer quotes, ₪")
+        ] = None,
+        prime_total: Annotated[
+            bool,
+            Field(description="True to also read stated_rate as prime's total rate today"),
+        ] = False,
+    ) -> OfferReadings:
+        """Call this to read a lender's offer whose type its words leave open. With stated_rate X
+        returns prime + X, optionally prime totalling X today, fixed X and fixed X linked; with
+        only monthly_payment, the fixed rate that gives the payment read as fixed, as prime and
+        as linked. Each reading is one spitzer track with its first payment.
+        """
+        market = history_provider()
+        try:
+            offer = readings.offer_readings(
+                principal, term_months, stated_rate, monthly_payment, prime_total, market
+            )
+        except (readings.NoOfferFigureError, history.NoHistoryWindowError) as error:
+            raise ToolError(str(error)) from error
+        return OfferReadings(
+            prime=offer.prime,
+            rate_as_of=market.rate_as_of,
+            payment_rate=offer.payment_rate,
+            readings=[Reading.model_validate(reading) for reading in offer.readings],
+        )
 
     @server.tool()
     def suggest_tracks(
@@ -493,7 +605,8 @@ def register_tools(
         """Call this when the person has no loan offer yet and needs typical tracks to simulate,
         with the term shortest_comfortable_term gave unless the person asked for another. Returns
         a fixed and a prime track priced from the Bank of Israel's latest average rate on
-        household consumer loans, and the month of that rate.
+        household consumer loans, and the month of that rate, then the fixed track linked to the
+        CPI that a pension, provident or study fund lends its members at.
         """
         market = history_provider()
         return TrackSuggestions(
@@ -501,6 +614,7 @@ def register_tools(
             as_of=market.consumer_rate_month,
             source=(
                 "Bank of Israel average rate on new unindexed household consumer loans, "
-                f"series {CONSUMER_RATE_SERIES}"
+                f"series {CONSUMER_RATE_SERIES}; the linked track at the upper end of the rate a "
+                "large pension fund publishes for loans to its members"
             ),
         )

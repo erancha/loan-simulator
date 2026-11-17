@@ -3,7 +3,7 @@
 - McpLoanEngine: typed calls that parse each tool's structured content, and model_tools() for
   the model, which gets MODEL_ENGINE_TOOLS only
 - Parsing helpers that turn the engine's decimal strings and ISO dates into Decimal and date;
-  market_series_of() parses a market_series result
+  market_series_of() and offer_readings_of() parse a market_series and an offer_readings result
 
 Each call opens its own MCP session, so the adapter holds no connection between calls.
 """
@@ -17,12 +17,13 @@ from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from mcp.types import CallToolResult, TextContent
 
-from loan_agent.domain.models import OptionFigures
+from loan_agent.domain.models import OptionFigures, OptionPrice, Reading
 from loan_agent.ports.engine import (
     Bounds,
     EngineError,
     MarketPoint,
     MarketSeries,
+    OfferReadings,
     OfferTerm,
     ProposedTerm,
     Simulation,
@@ -119,6 +120,27 @@ class McpLoanEngine:
         )
         return _optional_money(result, "loan_amount")
 
+    async def offer_readings(
+        self,
+        principal: Decimal,
+        term_months: int,
+        stated_rate: Decimal | None,
+        monthly_payment: Decimal | None,
+        *,
+        prime_total: bool,
+    ) -> OfferReadings:
+        result = await self._call(
+            "offer_readings",
+            {
+                "principal": str(principal),
+                "term_months": term_months,
+                "stated_rate": None if stated_rate is None else str(stated_rate),
+                "monthly_payment": None if monthly_payment is None else str(monthly_payment),
+                "prime_total": prime_total,
+            },
+        )
+        return offer_readings_of(result)
+
     async def market_series(self, months: int) -> MarketSeries:
         result = await self._call("market_series", {"prime_months": months, "cpi_months": months})
         return market_series_of(result)
@@ -156,6 +178,17 @@ def market_series_of(result: Mapping[str, Any]) -> MarketSeries:
     )
 
 
+def offer_readings_of(result: Mapping[str, Any]) -> OfferReadings:
+    """The engine's offer_readings result, parsed; each reading is on the wire as Reading encodes
+    it."""
+    return OfferReadings(
+        prime=_money(result, "prime"),
+        rate_as_of=date.fromisoformat(result["rate_as_of"]),
+        payment_rate=_optional_money(result, "payment_rate"),
+        readings=tuple(Reading.from_json(reading) for reading in result["readings"]),
+    )
+
+
 def _point(row: Mapping[str, Any], key: str) -> MarketPoint:
     return MarketPoint(month=date.fromisoformat(row["month"]), value=_money(row, key))
 
@@ -172,7 +205,7 @@ def _optional_money(data: Mapping[str, Any], key: str) -> Decimal | None:
 
 
 def _figures(simulation: Mapping[str, Any]) -> OptionFigures:
-    """The loan's totals with its single track's worst window and balloon."""
+    """The loan's totals with its single track's worst window, balloon and price."""
     tracks = simulation["tracks"]
     if len(tracks) != 1:
         raise EngineError("multi-track loans are not supported in phase 1")
@@ -188,4 +221,10 @@ def _figures(simulation: Mapping[str, Any]) -> OptionFigures:
         total_paid=_money(simulation, "total_paid"),
         rate_as_of=date.fromisoformat(simulation["rate_as_of"]),
         cpi_as_of=date.fromisoformat(simulation["cpi_as_of"]),
+        price=OptionPrice(
+            rate_today=_money(track, "rate_today"),
+            against_market=track["against_consumer_rate"],
+            market_rate=_money(simulation, "consumer_rate"),
+            market_rate_month=date.fromisoformat(simulation["consumer_rate_month"]),
+        ),
     )

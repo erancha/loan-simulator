@@ -1,6 +1,7 @@
 import { useId } from 'react'
 import type { CardModel, OptionCard } from './card.ts'
 import {
+  AWAITING_ONLY,
   DECISION_TITLE,
   EMPTY_CARD,
   EXAMPLES_NOTE,
@@ -11,6 +12,7 @@ import {
   OFFER_DETAILS,
   TOTALS_HEADINGS,
 } from './copy.ts'
+import { withValues } from './emphasis.tsx'
 import { ExampleChip, OptionCardView } from './OptionCardView.tsx'
 
 function OthersGroup({ title, options }: NonNullable<CardModel['others']>) {
@@ -50,18 +52,18 @@ function Fold({ fold, options }: FoldProps) {
             <tr key={option.id}>
               <th scope="row">
                 {option.isExample && <ExampleChip />}
-                {option.track}
+                {withValues(option.track)}
                 <span className="option-source totals-source">{option.source}</span>
               </th>
-              <td>{option.totalToday}</td>
-              <td>{option.totalRange === null ? NO_RANGE : option.totalRange}</td>
+              <td>{withValues(option.totalToday)}</td>
+              <td>{option.totalRange === null ? NO_RANGE : withValues(option.totalRange)}</td>
             </tr>
           ))}
         </tbody>
       </table>
       <ul className="assumptions">
         {fold.assumptions.map((line) => (
-          <li key={line}>{line}</li>
+          <li key={line}>{withValues(line)}</li>
         ))}
       </ul>
     </details>
@@ -70,24 +72,29 @@ function Fold({ fold, options }: FoldProps) {
 
 /**
  * The recommendation card: the decision with its ceiling check, the options grouped by the latest
- * recommendation, the model's reasoning and the fold with the figures behind them.
+ * recommendation, a note per offer still awaiting its lender, the model's reasoning and the fold
+ * with the figures behind them. While every option is an example, a flashing next step says where
+ * to bring real offers from. A check holding only awaiting offers shows a line saying the
+ * recommendation follows the lender's answer.
  */
 export function RecommendationCard({ model }: { model: CardModel }) {
-  const { decision, checkNote, ceiling, recommended, others, reasoning, fold } = model
+  const { decision, checkNote, ceiling, recommended, others, awaiting, reasoning, fold } = model
   if (recommended.length === 0 && others === null) {
+    if (awaiting.length > 0) return <p className="card-empty">{AWAITING_ONLY}</p>
     return <p className="card-empty">{EMPTY_CARD}</p>
   }
   const shown = others === null ? recommended : [...recommended, ...others.options]
   const showsExamples = shown.some((option) => option.isExample)
+  const examplesOnly = shown.every((option) => option.isExample)
   return (
     <div className="card">
       {decision !== null && (
         <section className="decision">
           <h3 className="decision-title">{DECISION_TITLE}</h3>
-          <p>{decision}</p>
-          {checkNote !== null && <p className="check-note">{checkNote}</p>}
+          <p>{withValues(decision)}</p>
+          {checkNote !== null && <p className="check-note">{withValues(checkNote)}</p>}
           <p className="ceiling-line">
-            {ceiling.label}: {ceiling.amount}
+            {ceiling.label}: {withValues(ceiling.amount)}
             {ceiling.source !== null && ` · ${ceiling.source}`}
           </p>
         </section>
@@ -97,10 +104,15 @@ export function RecommendationCard({ model }: { model: CardModel }) {
         <OptionCardView key={option.id} option={option} />
       ))}
       {others !== null && <OthersGroup title={others.title} options={others.options} />}
-      {reasoning !== null && <p className="reasoning">{reasoning}</p>}
-      {decision !== null && (
+      {awaiting.map((note, i) => (
+        <p key={`${i}-${note}`} className="awaiting-note">
+          {withValues(note)}
+        </p>
+      ))}
+      {reasoning !== null && <p className="reasoning">{withValues(reasoning)}</p>}
+      {decision !== null && examplesOnly && (
         <section className="next-step">
-          <h3 className={showsExamples ? 'decision-title attention-flash' : 'decision-title'}>
+          <h3 className="decision-title attention-flash">
             {NEXT_STEP_TITLE}
           </h3>
           <p>{NEXT_STEP}</p>

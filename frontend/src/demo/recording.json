@@ -38,7 +38,12 @@
         "question": {
           "kind": "term",
           "term_months": 30,
-          "first_payment": "884.22"
+          "first_payment": "884.22",
+          "basis": {
+            "kind": "ceiling",
+            "amount": "1000",
+            "fits": true
+          }
         }
       }
     },

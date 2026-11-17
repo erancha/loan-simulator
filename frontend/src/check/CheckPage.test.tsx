@@ -1,13 +1,19 @@
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
-import type { CheckEvent, CheckSummary } from '../api/types.ts'
+import type { CheckEvent, CheckSummary, Question } from '../api/types.ts'
 import { FakeEventSource } from '../test/fakeEventSource.ts'
 import {
   assistantMessage,
+  awaitingAvis,
+  awaitingMaxShort,
   checkArchived,
   financesUpdated,
   loanSet,
+  offerAwaiting,
+  offerDropped,
+  avisReading,
+  offerSettled,
   optionFixed36,
   optionPrime36,
   questionAsked,
@@ -18,7 +24,11 @@ import {
   userMessage,
   withSeq,
 } from '../test/fixtures.ts'
+import { restoreScrollIntoView, stubScrollIntoView } from '../test/scrollIntoView.ts'
+import type { AwaitingFocus } from './Chat.tsx'
 import { CheckPage } from './CheckPage.tsx'
+import { CONTINUE_TO_ANOTHER_OFFER } from './copy.ts'
+import { wholeText } from '../test/wholeText.ts'
 
 const MESSAGES = '/api/checks/c1/messages'
 const FINANCES = '/api/checks/c1/finances'
@@ -26,15 +36,22 @@ const MARKET = '/api/checks/c1/market-sample'
 const OFFER = '/api/checks/c1/offer-sample'
 const TERM = '/api/checks/c1/term'
 const TERM_CEILING = '/api/checks/c1/term-ceiling'
+const AWAITING = '/api/checks/c1/awaiting-offers/a-1'
+const MAX_AMOUNT = '/api/checks/c1/awaiting-offers/a-max/amount'
+const OPENING = '/api/checks/c1/opening'
+const TERM_CONFIRMATION = '/api/checks/c1/term-confirmation'
+const OFFER_SKIP = '/api/checks/c1/offer-skip'
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status })
 }
 
-/** Stubs fetch: a finances PUT answers `onFinances`; a message POST answers `onMessage`. */
+/** Stubs fetch: a finances PUT answers `onFinances`, a reading's PUT `onReading` and any POST
+ * that starts a turn `onMessage`. */
 function stubApi(
   onMessage: () => Response | Promise<Response> = () => new Response(null, { status: 202 }),
   onFinances: () => Response | Promise<Response> = () => jsonResponse(200, {}),
+  onReading: () => Response = () => new Response(null, { status: 204 }),
 ) {
   const fetchStub = vi.fn((path: string, init?: RequestInit) => {
     if (path === FINANCES && init?.method === 'PUT') return Promise.resolve(onFinances())
@@ -42,7 +59,12 @@ function stubApi(
     if (path === MARKET && init?.method === 'POST') return Promise.resolve(onMessage())
     if (path === OFFER && init?.method === 'POST') return Promise.resolve(onMessage())
     if (path === TERM_CEILING && init?.method === 'POST') return Promise.resolve(onMessage())
+    if (path === OPENING && init?.method === 'POST') return Promise.resolve(onMessage())
+    if (path === TERM_CONFIRMATION && init?.method === 'POST') return Promise.resolve(onMessage())
+    if (path === OFFER_SKIP && init?.method === 'POST') return Promise.resolve(onMessage())
     if (path === TERM && init?.method === 'PUT') return Promise.resolve(new Response(null, { status: 204 }))
+    if (path === AWAITING && init?.method === 'PUT') return Promise.resolve(onReading())
+    if (path === MAX_AMOUNT && init?.method === 'PUT') return Promise.resolve(onReading())
     return Promise.reject(new Error(`unexpected request ${init?.method ?? 'GET'} ${path}`))
   })
   vi.stubGlobal('fetch', fetchStub)
@@ -72,22 +94,29 @@ function emit(...events: CheckEvent[]) {
   })
 }
 
-/** A new check as the checks list shows it: no loan, no term, no recommendation. */
+/** A check as the checks list shows it once the person has written: no loan, no term, no
+ * recommendation. */
 const NEW_CHECK: CheckSummary = {
   id: 'c1',
   created_at: '2026-11-15T10:00:00Z',
   loan: null,
   recommendation: null,
   recommends_examples_only: false,
+  compares_options: false,
   term_months: null,
   archived: false,
   started: true,
+  has_finances: false,
+  awaiting_offers: [],
 }
 
 function renderPage(
   onChecksChanged = vi.fn(),
   onClone = vi.fn(() => Promise.resolve()),
   listed: CheckSummary = NEW_CHECK,
+  focusAwaiting: AwaitingFocus | null = null,
+  showFinances = false,
+  onTermCardLive = vi.fn(),
 ) {
   render(
     <CheckPage
@@ -98,16 +127,39 @@ function renderPage(
       onChecksChanged={onChecksChanged}
       onClone={onClone}
       onOpenCheck={vi.fn()}
+      focusAwaiting={focusAwaiting}
+      showFinances={showFinances}
+      onTermCardLive={onTermCardLive}
     />,
   )
-  return { onChecksChanged, onClone }
+  return { onChecksChanged, onClone, onTermCardLive }
+}
+
+/** The page with its finances line asked for, as the checks list's finances link does. */
+function renderShowingFinances() {
+  return renderPage(undefined, undefined, NEW_CHECK, null, true)
 }
 
 beforeEach(() => {
   FakeEventSource.reset()
   vi.stubGlobal('EventSource', FakeEventSource)
 })
-afterEach(() => vi.unstubAllGlobals())
+// A page still mounting opens its check's stream, so it unmounts before the stubs go.
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+  restoreScrollIntoView()
+})
+
+test('the examples chip shows only while the check holds no option and no awaiting offer', () => {
+  stubApi()
+  renderPage()
+  const examplesChip = () => screen.queryByRole('button', { name: 'דוגמאות' })
+  emit(userMessage(1, 'רכב, 45,000 ₪'), loanSet, withSeq(termSet, 4), turnStatus(5, 'idle'))
+  expect(examplesChip()).toBeInTheDocument()
+  emit(withSeq(optionPrime36, 6))
+  expect(examplesChip()).not.toBeInTheDocument()
+})
 
 test('replaying the reference events fills the panes', () => {
   stubApi()
@@ -127,8 +179,8 @@ test('replaying the reference events fills the panes', () => {
   expect(page).toHaveAttribute('data-active-pane', 'chat')
   expect(page.querySelector('.pane-side')).toHaveTextContent('הבדיקות שלי')
   expect(page.querySelector('.pane-chat')).toHaveTextContent('הנה ההמלצה')
-  expect(screen.getByText(REFERENCE_DECISION)).toBeInTheDocument()
-  expect(screen.getByText('מומלצת')).toBeInTheDocument()
+  expect(screen.getByText(wholeText(REFERENCE_DECISION))).toBeInTheDocument()
+  expect(screen.getByText('מועדפת')).toBeInTheDocument()
 })
 
 test('sending posts the text to the check and clears the input', async () => {
@@ -284,13 +336,13 @@ const EXPENSES_QUESTION = questionAsked(3, {
   choices: null,
 })
 
-/** Renders the page with a live term card proposing 78 months. */
+/** Renders the page with a live term card proposing 60 months. */
 function askTerm() {
   renderPage()
   emit(
     userMessage(1, 'אני רוצה הלוואה בסך 60,000₪'),
     turnStatus(2, 'running'),
-    questionAsked(3, { kind: 'term', term_months: 78, first_payment: '986.03' }),
+    questionAsked(3, { kind: 'term', term_months: 60, first_payment: '910.00' }),
   )
   emit(turnStatus(4, 'idle'))
 }
@@ -303,11 +355,11 @@ function requests(fetchStub: ReturnType<typeof stubApi>): string[] {
 }
 
 const CONFIRMED = [
-  `PUT ${TERM} {"term_months":78,"payment_ceiling":null}`,
-  `POST ${MESSAGES} {"text":"אישור: 78 חודשים"}`,
+  `PUT ${TERM} {"term_months":60,"payment_ceiling":null}`,
+  `POST ${TERM_CONFIRMATION} {"text":"אישור: 60 חודשים"}`,
 ]
 
-test('the card\'s confirm saves the term, then sends the confirmation', async () => {
+test('the term card\'s confirm saves the term, then asks for what follows it', async () => {
   const fetchStub = stubApi()
   askTerm()
   await userEvent.click(screen.getByRole('button', { name: 'אישור' }))
@@ -315,7 +367,7 @@ test('the card\'s confirm saves the term, then sends the confirmation', async ()
 })
 
 test('the card\'s term typed in the chat confirms it too', async () => {
-  for (const typed of ['78', '78 חודשים']) {
+  for (const typed of ['60', '60 חודשים']) {
     const fetchStub = stubApi()
     askTerm()
     await userEvent.type(screen.getByPlaceholderText(/אפשר לכתוב כאן/), `${typed}{Enter}`)
@@ -347,7 +399,7 @@ test('another term with a new ceiling saves both, then sends the confirmation', 
   await waitFor(() =>
     expect(requests(fetchStub)).toEqual([
       `PUT ${TERM} {"term_months":48,"payment_ceiling":"1000"}`,
-      `POST ${MESSAGES} {"text":"אישור: 48 חודשים, החזר חודשי מרבי: 1,000 ₪"}`,
+      `POST ${TERM_CONFIRMATION} {"text":"אישור: 48 חודשים, החזר חודשי מרבי: 1,000 ₪"}`,
     ]),
   )
 })
@@ -483,17 +535,36 @@ test('no stale banner exists', () => {
   expect(screen.queryByRole('button', { name: 'לחשב מחדש' })).not.toBeInTheDocument()
 })
 
-test('the figures panel stays hidden until the check has figures', () => {
+test('the figures panel stays hidden by default, even once the check has figures', () => {
   stubApi()
   renderPage()
+  emit(financesUpdated, turnStatus(9, 'idle'))
+  expect(document.querySelector('.finances-panel')).toBeNull()
+})
+
+test('the figures panel, when asked for, stays hidden until the check has figures', () => {
+  stubApi()
+  renderShowingFinances()
   expect(document.querySelector('.finances-panel')).toBeNull()
   emit(financesUpdated, turnStatus(9, 'idle'))
   expect(document.querySelector('.finances-panel')).not.toBeNull()
 })
 
+test('a live term card hides the figures line and says so to the checks list', () => {
+  stubApi()
+  const { onTermCardLive } = renderShowingFinances()
+  emit(financesUpdated, turnStatus(9, 'idle'))
+  expect(document.querySelector('.finances-panel')).not.toBeNull()
+  expect(onTermCardLive).toHaveBeenLastCalledWith(false)
+
+  emit(questionAsked(10, { kind: 'term', term_months: 60, first_payment: '910.00' }))
+  expect(document.querySelector('.finances-panel')).toBeNull()
+  expect(onTermCardLive).toHaveBeenLastCalledWith(true)
+})
+
 test('an edited figure is saved, then followed by its update line', async () => {
   const fetchStub = stubApi()
-  renderPage()
+  renderShowingFinances()
   emit(financesUpdated, turnStatus(9, 'idle'))
   await userEvent.click(screen.getByRole('button', { name: 'עריכה' }))
   const input = screen.getByRole('textbox', { name: 'הוצאות קבועות' })
@@ -507,7 +578,7 @@ test('an edited figure is saved, then followed by its update line', async () => 
 
 test('a running turn offers no edit of the figures', () => {
   stubApi()
-  renderPage()
+  renderShowingFinances()
   emit(financesUpdated, turnStatus(9, 'running'))
   expect(document.querySelector('.finances-panel')).not.toBeNull()
   expect(screen.queryByRole('button', { name: 'עריכה' })).not.toBeInTheDocument()
@@ -515,11 +586,18 @@ test('a running turn offers no edit of the figures', () => {
 
 test('an archived check shows the figures read-only', () => {
   const fetchStub = stubApi()
-  renderPage()
+  renderShowingFinances()
   emit(financesUpdated, turnStatus(9, 'idle'), checkArchived(10))
   expect(document.querySelector('.finances-panel')).not.toBeNull()
   expect(screen.queryByRole('button', { name: 'עריכה' })).not.toBeInTheDocument()
   expect(financesPuts(fetchStub)).toEqual([])
+})
+
+test('figures the list does not show refresh the list once', () => {
+  const onChecksChanged = vi.fn()
+  renderPage(onChecksChanged)
+  emit(financesUpdated, turnStatus(9, 'idle'))
+  expect(onChecksChanged).toHaveBeenCalledOnce()
 })
 
 test('an idle check whose term the list shows otherwise refreshes the list once', async () => {
@@ -528,5 +606,228 @@ test('an idle check whose term the list shows otherwise refreshes the list once'
   emit(userMessage(1, 'לשכפל ולבדוק בנפרד'), turnStatus(2, 'running'), loanSet)
   expect(onChecksChanged).not.toHaveBeenCalled()
   emit(withSeq(termSet, 4), turnStatus(5, 'idle'))
+  await waitFor(() => expect(onChecksChanged).toHaveBeenCalledTimes(1))
+})
+
+/** An awaiting offer's card in an idle check, its likely reading the fixed unlinked one. */
+function awaitCard() {
+  renderPage()
+  emit(
+    userMessage(1, '969 שח קבוע'),
+    loanSet,
+    offerAwaiting(4, { ...awaitingAvis, likely: 'fixed_unlinked' }),
+    turnStatus(5, 'idle'),
+  )
+  return document.getElementById('awaiting-a-1')!
+}
+
+test('confirming a reading saves it, then sends its line', async () => {
+  const fetchStub = stubApi()
+  const card = awaitCard()
+  await userEvent.click(within(card).getByRole('button', { name: 'אישור' }))
+  await waitFor(() =>
+    expect(requests(fetchStub)).toEqual([
+      `PUT ${AWAITING} {"reading":"fixed_unlinked"}`,
+      `POST ${MESSAGES} {"text":"אישור: ריבית קבועה 10.58%, לא צמודה למדד"}`,
+    ]),
+  )
+})
+
+test('a refused reading sends no line', async () => {
+  const fetchStub = stubApi(undefined, undefined, () =>
+    jsonResponse(422, { detail: 'the offer is refused' }),
+  )
+  const card = awaitCard()
+  await userEvent.click(within(card).getByRole('button', { name: 'אישור' }))
+  expect(await within(card).findByText('הערך לא התקבל: the offer is refused')).toBeInTheDocument()
+  expect(sentTexts(fetchStub)).toEqual([])
+})
+
+/** Max's offer quoted on 20,000, awaiting his answer on the check's loan of 29,000. */
+function maxShortCard() {
+  renderPage()
+  emit(
+    userMessage(1, 'מקס, 20,000 ש"ח, 6.45 פריים, שנתיים, 934 בחודש'),
+    loanSet,
+    offerAwaiting(4, awaitingMaxShort),
+    turnStatus(5, 'idle'),
+  )
+  return document.getElementById('awaiting-a-max')!
+}
+
+test('the lender lending the loan amount saves the offer, then sends its line', async () => {
+  const fetchStub = stubApi()
+  const card = maxShortCard()
+  await userEvent.click(within(card).getByRole('button', { name: 'כן, באותם תנאים' }))
+  await waitFor(() =>
+    expect(requests(fetchStub)).toEqual([
+      `PUT ${MAX_AMOUNT} {"covers":true,"reading":"prime_margin"}`,
+      `POST ${MESSAGES} {"text":"אישור: 29,000 ₪ באותם תנאים אצל מקס, ריבית פריים + 6.45%"}`,
+    ]),
+  )
+})
+
+test('the lender not lending the loan amount drops the offer, then sends its line', async () => {
+  const fetchStub = stubApi()
+  const card = maxShortCard()
+  await userEvent.click(within(card).getByRole('button', { name: 'לא' }))
+  await waitFor(() =>
+    expect(requests(fetchStub)).toEqual([
+      `PUT ${MAX_AMOUNT} {"covers":false,"reading":null}`,
+      `POST ${MESSAGES} {"text":"לא: אין הצעה של מקס על 29,000 ₪"}`,
+    ]),
+  )
+  emit(offerDropped(6, awaitingMaxShort, '29000'))
+  expect(card).toHaveTextContent(
+    'ההצעה של מקס לא מכסה את ההלוואה של 29,000 ₪, ולכן היא לא נכנסת להשוואה.',
+  )
+})
+
+test('continuing to another offer asks for the offer form', async () => {
+  const fetchStub = stubApi()
+  const card = awaitCard()
+  await userEvent.click(within(card).getByRole('button', { name: CONTINUE_TO_ANOTHER_OFFER }))
+  await waitFor(() =>
+    expect(requests(fetchStub)).toEqual([
+      `POST ${OFFER} ${JSON.stringify({ text: CONTINUE_TO_ANOTHER_OFFER })}`,
+    ]),
+  )
+})
+
+/** A new check as the checks list shows it: nobody has written to it yet. */
+const NOT_STARTED: CheckSummary = { ...NEW_CHECK, started: false }
+
+/** Fills the opening card with a car loan of 45,000 and presses המשך. */
+async function fillOpening() {
+  await userEvent.click(screen.getByRole('radio', { name: 'רכב' }))
+  await userEvent.type(screen.getByRole('textbox', { name: 'סכום ההלוואה' }), '45000')
+  await userEvent.click(screen.getByRole('button', { name: 'המשך' }))
+}
+
+test('a new check shows only the opening card: no input, no chips, no welcome line', () => {
+  stubApi()
+  renderPage(undefined, undefined, NOT_STARTED)
+  expect(screen.getByText('פרטי ההלוואה')).toBeInTheDocument()
+  expect(screen.queryByRole('textbox', { name: 'הודעה לעוזר' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'פריים ומדדים' })).not.toBeInTheDocument()
+  expect(document.querySelector('.chat-samples')).toBeNull()
+  expect(screen.getAllByRole('listitem')).toHaveLength(1)
+})
+
+test('the opening card sends the goal and the amount to its route', async () => {
+  const fetchStub = stubApi()
+  renderPage(undefined, undefined, NOT_STARTED)
+  await fillOpening()
+  await waitFor(() =>
+    expect(requests(fetchStub)).toEqual([
+      `POST ${OPENING} {"text":"רכב: הלוואה בסך 45,000 ₪","purpose":"רכב","amount":"45000"}`,
+    ]),
+  )
+})
+
+test('a refused opening shows the card\'s own line on the card, and no English', async () => {
+  const reason = 'The engine refused the amount: too low; tell the person the range'
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+  stubApi(() => jsonResponse(422, { detail: reason }))
+  renderPage(undefined, undefined, NOT_STARTED)
+  await fillOpening()
+  const card = document.querySelector<HTMLElement>('.opening-card')!
+  expect(
+    await within(card).findByText('צריך סכום הלוואה בין 10,000 ל-10,000,000 ₪'),
+  ).toBeInTheDocument()
+  expect(document.body).not.toHaveTextContent(/engine/)
+  expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining(reason))
+  warn.mockRestore()
+})
+
+test('a second press of המשך after the card was accepted sends nothing', async () => {
+  const fetchStub = stubApi()
+  renderPage(undefined, undefined, NOT_STARTED)
+  await fillOpening()
+  await waitFor(() => expect(requests(fetchStub)).toHaveLength(1))
+  const proceed = screen.getByRole('button', { name: 'המשך' })
+  expect(proceed).toBeDisabled()
+  await userEvent.click(proceed)
+  expect(requests(fetchStub)).toHaveLength(1)
+})
+
+test('an opening that fails otherwise shows the page\'s notice', async () => {
+  stubApi(() => jsonResponse(500, { detail: 'boom' }))
+  renderPage(undefined, undefined, NOT_STARTED)
+  await fillOpening()
+  expect(await screen.findByRole('status')).toHaveTextContent('ההודעה לא נשלחה: boom')
+})
+
+test('once the check has events the card gives way to the conversation and its input', () => {
+  stubApi()
+  renderPage(undefined, undefined, NOT_STARTED)
+  emit(userMessage(1, 'רכב: הלוואה בסך 45,000 ₪'), turnStatus(2, 'running'))
+  expect(screen.queryByText('פרטי ההלוואה')).not.toBeInTheDocument()
+  expect(screen.getByRole('textbox', { name: 'הודעה לעוזר' })).toBeInTheDocument()
+  expect(screen.getByText('רכב: הלוואה בסך 45,000 ₪')).toBeInTheDocument()
+})
+
+test('a check with stored messages and no loan shows its conversation, not the card', () => {
+  stubApi()
+  renderPage()
+  emit(
+    userMessage(1, 'רוצה לקנות רכב'),
+    assistantMessage(2, 'a1', 'כמה צריך?'),
+    turnStatus(3, 'idle'),
+  )
+  expect(screen.queryByText('פרטי ההלוואה')).not.toBeInTheDocument()
+  expect(screen.getByRole('textbox', { name: 'הודעה לעוזר' })).toBeInTheDocument()
+})
+
+const OFFER_FORM: Question = { kind: 'offer', lender: null, tracks: [], max_term_months: null }
+
+test('דילוג on the offer form goes to its own route', async () => {
+  const fetchStub = stubApi()
+  renderPage()
+  emit(userMessage(1, 'אישור: 60 חודשים'), withSeq(loanSet, 2), questionAsked(3, OFFER_FORM))
+  emit(turnStatus(4, 'idle'))
+  const form = document.querySelector<HTMLElement>('.bubble-question')!
+  await userEvent.click(within(form).getByRole('button', { name: 'דילוג' }))
+  await waitFor(() => expect(requests(fetchStub)).toEqual([`POST ${OFFER_SKIP} {"text":"דילוג"}`]))
+})
+
+test('the word דילוג typed with no offer form open goes to the model', async () => {
+  const fetchStub = stubApi()
+  renderPage()
+  emit(userMessage(1, 'רוצה לקנות רכב'), turnStatus(2, 'idle'))
+  await userEvent.type(screen.getByRole('textbox', { name: 'הודעה לעוזר' }), 'דילוג{Enter}')
+  await waitFor(() => expect(requests(fetchStub)).toEqual([`POST ${MESSAGES} {"text":"דילוג"}`]))
+})
+
+test('a link of the list brings its card into view', () => {
+  stubApi()
+  const scrolled = stubScrollIntoView()
+  renderPage(undefined, undefined, NEW_CHECK, { id: 'a-1', request: 1 })
+  emit(userMessage(1, '969 שח קבוע'), withSeq(loanSet, 2), offerAwaiting(3, awaitingAvis))
+  emit(assistantMessage(4, 'a1', 'עוד משהו'), turnStatus(5, 'idle'))
+
+  const card = document.getElementById('awaiting-a-1')!
+  expect(scrolled).toHaveBeenCalledExactlyOnceWith({ block: 'center' })
+  expect(scrolled.mock.contexts[0]).toBe(card)
+  expect(card).toHaveClass('card-focus')
+})
+
+const AWAITING_REFRESH =
+  'a settled or added awaiting offer the list does not show refreshes the list once'
+
+test(AWAITING_REFRESH, async () => {
+  const onChecksChanged = vi.fn()
+  const AVIS = { id: 'a-1', lender: awaitingAvis.lender, monthly_payment: '969' }
+  const listed = { ...NEW_CHECK, loan: loanSet.data, awaiting_offers: [AVIS] }
+  renderPage(onChecksChanged, undefined, listed)
+  emit(
+    userMessage(1, '969 שח קבוע'),
+    withSeq(loanSet, 2),
+    offerAwaiting(3, awaitingAvis),
+    turnStatus(4, 'idle'),
+  )
+  expect(onChecksChanged).not.toHaveBeenCalled()
+  emit(offerSettled(5, 'a-1', avisReading('fixed_unlinked')), turnStatus(6, 'idle'))
   await waitFor(() => expect(onChecksChanged).toHaveBeenCalledTimes(1))
 })

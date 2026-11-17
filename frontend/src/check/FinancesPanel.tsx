@@ -4,6 +4,7 @@ import { formatShekels } from '../money.ts'
 import type { Answer } from './QuestionBubble.tsx'
 import {
   CEILING_LABEL,
+  CEILING_SOURCE,
   EDIT_FINANCES,
   EXPENSES_HINT,
   EXPENSES_LABEL,
@@ -12,6 +13,7 @@ import {
   NOT_COUNTED_YET,
   updateLine,
 } from './copy.ts'
+import { withValues } from './emphasis.tsx'
 import { MoneyField } from './MoneyField.tsx'
 
 interface Props {
@@ -33,9 +35,19 @@ export function hasFinances(finances: Finances): boolean {
   return finances.net_fixed_income !== null || finances.fixed_expenses !== null
 }
 
+/** The finances line has something to show: a payment ceiling amount, however set, or a figure. */
+export function hasFinancialDetails(finances: Finances, ceiling: string | null): boolean {
+  return ceiling !== null || hasFinances(finances)
+}
+
+/** Both finances figures are set, which completes planning the monthly payment. */
+export function hasBothFinances(finances: Finances): boolean {
+  return finances.net_fixed_income !== null && finances.fixed_expenses !== null
+}
+
 /**
- * The check's two finances figures as one summary line, with the ceiling they give when the
- * check's ceiling comes from them; an edit link opens the two fields in place.
+ * The check's two finances figures as one summary line, with the check's payment ceiling and,
+ * when the person stated it, a note saying so; an edit link opens the two fields in place.
  */
 export function FinancesPanel({ finances, ceiling, readOnly, onAnswer }: Props) {
   const [editing, setEditing] = useState(false)
@@ -46,12 +58,15 @@ export function FinancesPanel({ finances, ceiling, readOnly, onAnswer }: Props) 
         {FIELDS.map(({ key, label }) => (
           <span key={key}>
             {label}{' '}
-            <b>{finances[key] === null ? NOT_COUNTED_YET : formatShekels(finances[key])}</b>
+            <b>
+              {finances[key] === null ? NOT_COUNTED_YET : withValues(formatShekels(finances[key]))}
+            </b>
           </span>
         ))}
-        {ceiling !== null && ceiling.source === 'finances' && (
+        {ceiling !== null && (
           <span>
-            {CEILING_LABEL} <b>{formatShekels(ceiling.amount)}</b>
+            {CEILING_LABEL} <b>{withValues(formatShekels(ceiling.amount))}</b>
+            {ceiling.source === 'stated' && ` · ${CEILING_SOURCE.stated}`}
           </span>
         )}
         {!readOnly && (

@@ -4,11 +4,20 @@ recommendation, with the guardrail that keeps a recommendation honest.
 
 - ToolDeps: the ports, the clock and the id generator the tools act through
 - CheckTools: set_loan, set_term, set_ceiling, update_finances, save_option (an example, refused
-  once the check holds a real offer of its loan amount), save_offer (each track of a real offer
-  as an option of its own, removing the check's examples) and present_recommendation, each
-  returning a compact key: value summary for the model and emitting an event for the page;
-  ask, ask_term and ask_offer, emitting a question for the page and returning ASKED_RESULT,
-  after which the turn ends; show_chart, emitting a market series for the page
+  once the check holds a real offer of its loan amount or an awaiting offer), save_offer (each
+  track of a real offer as an option of its own, removing the check's examples) and
+  present_recommendation, each returning a compact key: value summary for the model and
+  emitting an event for the page; ask, ask_term and ask_offer, emitting a question for the page
+  and returning ASKED_RESULT, after which the turn ends; show_chart, emitting a market series
+  for the page
+- Reading an offer described in words: read_offer prices its readings with the engine and, by
+  offer_reading's decision, saves the one its payment fits, keeps it awaiting the lender with
+  the readings its card shows, or reports its type unrecognized; an offer quoted for less than
+  the check's loan is never saved by its reading, but awaits the lender's answer on lending the
+  loan amount on the same terms; confirm_reading saves the reading the person chose on the card,
+  and answer_amount (answer_offer_amount for the model) saves the offer at the loan amount or
+  drops it; READING_ON_SCREEN and DROPPED_ON_SCREEN are the results that tell the model the
+  screen already showed the outcome
 - The guardrail in present_recommendation: every named option borrows the loan amount; with a
   ceiling, every one's worst-case recurring payment fits it, and a refusal names the remedy to
   offer the person; the preferred option is the cheapest of its term that fits, unless the
@@ -16,7 +25,11 @@ recommendation, with the guardrail that keeps a recommendation honest.
 - ToolError: a refusal whose message tells the model what is wrong and what to do next
 - ENGLISH_WORD, english_words: what marks text the person would see as not Hebrew, and the
   English words of a reply that the person did not write themselves
-- summary, finances_figures: the key: value text the model reads, and the finances' part of it
+- price_text: an option's interest cost and its rate today against the market, which the save
+  and recommendation results and the turn state give the model; a recommendation whose card
+  holds one option alone also tells the model to evaluate it rather than recommend it
+- summary, finances_figures, shekels: the key: value text the model reads, the finances' part
+  of it, and an amount as the person reads it
 """
 
 import re
@@ -28,18 +41,23 @@ from typing import Literal, cast, get_args
 
 from loan_agent.application.finances_saving import save_finances
 from loan_agent.application.market_answer import chart_data
-from loan_agent.domain.errors import FinancesError, LoanError
+from loan_agent.application.offer_reading import decide
+from loan_agent.domain.errors import AwaitingOfferNotFoundError, FinancesError, LoanError
 from loan_agent.domain.models import (
-    CAR_PURPOSE,
-    CAR_TERM_MONTHS,
     FIRST_PAYMENT_TARGET,
+    AwaitingOffer,
     Check,
     Finances,
     LoanRequest,
     Option,
     OptionFigures,
     OptionSource,
+    RateAgainstMarket,
+    Reading,
+    ReadingKind,
     Recommendation,
+    TypeWord,
+    compares_options,
 )
 from loan_agent.ports.engine import (
     EngineError,
@@ -53,6 +71,11 @@ from loan_agent.ports.events import (
     CHART_SHOWN,
     EXAMPLES_REMOVED,
     LOAN_SET,
+    OFFER_AWAITING,
+    OFFER_DROPPED,
+    OFFER_IDENTIFIED,
+    OFFER_SETTLED,
+    OFFER_UNRECOGNIZED,
     OPTION_SAVED,
     QUESTION_ASKED,
     RECOMMENDATION_PRESENTED,
@@ -60,6 +83,7 @@ from loan_agent.ports.events import (
     EventSink,
 )
 from loan_agent.ports.repositories import (
+    AwaitingOfferRepository,
     CheckRepository,
     OptionRepository,
     RecommendationRepository,
@@ -78,6 +102,18 @@ ASKED_RESULT = (
     "next message."
 )
 
+READING_ON_SCREEN = (
+    "The screen showed the person what this offer may mean, or that its type was not "
+    "recognized, with what to ask the lender, the check's loan amount included when the offer "
+    "was quoted for less. Write nothing about it."
+)
+
+DROPPED_ON_SCREEN = (
+    "The screen told the person this offer does not cover the check's loan, so it does not "
+    "enter the comparison, and the offer left the check; do not repeat it. Say in one line what "
+    "comes next: another lender's offer, or the comparison of the offers the check holds."
+)
+
 # The page's card changes only through a recommendation, so a saved offer it does not reach would
 # sit under an older one.
 _COMPARE_THE_OFFER = (
@@ -91,9 +127,23 @@ _RECHECK_THE_RECOMMENDATION = (
     "turn to check it against the ceiling; the person's card changes only through that call"
 )
 
+# One option alone has nothing to be ranked against, so the card evaluates it: its price is what
+# tells the person whether to take it.
+_ONLY_OPTION = (
+    "this is the check's only option, so the card evaluates it and does not rank it: present it "
+    "as the only offer so far and never call it preferred or recommended (no מועדף, מומלץ or "
+    "המלצה). Give its price from preferred_price, the interest_cost and the rate_today against "
+    "the market, and suggest getting another offer to compare it with"
+)
 _PERSON_DECIDES = (
     "Change neither the amount nor the term until the person chooses; when they keep them, the "
     "recommendation stands and the remedy is not offered again."
+)
+
+
+_EXAMPLES_REFUSED = (
+    "this check holds a real offer, so examples are no longer saved: the check compares real "
+    "offers; tell the person so in one line"
 )
 
 
@@ -102,9 +152,22 @@ class ToolError(Exception):
 
 
 @dataclass(frozen=True)
+class _Quote:
+    """What a lender quoted for an offer described in words; lender is None until named."""
+
+    lender: str | None
+    amount: Decimal
+    term_months: int | None
+    stated_rate: Decimal | None
+    monthly_payment: Decimal | None
+    type_words: tuple[TypeWord, ...]
+
+
+@dataclass(frozen=True)
 class ToolDeps:
     checks: CheckRepository
     options: OptionRepository
+    awaiting: AwaitingOfferRepository
     recommendations: RecommendationRepository
     engine: LoanEngine
     sink: EventSink
@@ -161,7 +224,8 @@ class CheckTools:
 
     async def ask_term(self, term_months: int | None) -> str:
         """With term_months None, the card proposes a term; with a number, the person typed it
-        and the card shows its first payment."""
+        and the card shows its first payment. The question's basis tells the card which: the
+        assumption the proposed term rests on, or typed."""
         if term_months is not None:
             _require_term(term_months)
             if term_months == await self._last_card_term():
@@ -172,13 +236,15 @@ class CheckTools:
         check = await self._check()
         loan = _require_loan(check, "ask_term")
         if term_months is None:
-            proposed = await self._proposed_term(check, loan)
+            proposed, basis = await self._proposed_term(check, loan)
         else:
             proposed = ProposedTerm(term_months, await self._first_payment(loan, term_months))
+            basis = {"kind": "typed"}
         question = {
             "kind": "term",
             "term_months": proposed.term_months,
             "first_payment": str(proposed.first_payment),
+            "basis": basis,
         }
         await self._deps.sink.emit(
             self._check_id, QUESTION_ASKED, {"question": question, "lead_in": None}
@@ -195,6 +261,7 @@ class CheckTools:
         a starting point for the boxes: the form validates what the person submits, and
         save_option what the model saves from it."""
         _require_loan(await self._check(), "ask_offer")
+        _require_named_lender(lender)
         question = {
             "kind": "offer",
             "lender": lender,
@@ -214,36 +281,40 @@ class CheckTools:
         question = cast(Mapping[str, object], asked["question"])
         return cast(int, question["term_months"]) if question.get("kind") == "term" else None
 
-    async def _proposed_term(self, check: Check, loan: LoanRequest) -> ProposedTerm:
-        """With a ceiling, any purpose gets the shortest term at which every example track's
-        worst case fits it, or the longest term when none does: a limit the person knows decides
-        the term. Without one, a car gets the usual dealer maximum, and another purpose the
-        shortest term whose first payment is under the target."""
-        if check.payment_ceiling is not None:
-            found = await self._comfortable_term(
-                loan.amount, check.payment_ceiling, any_track=False
-            )
-            term = MAX_TERM if found is None else found
-        elif loan.purpose == CAR_PURPOSE:
-            term = CAR_TERM_MONTHS
-        else:
-            return await self._deps.engine.propose_term(loan.amount, FIRST_PAYMENT_TARGET)
-        return ProposedTerm(term, await self._first_payment(loan, term))
+    async def _proposed_term(
+        self, check: Check, loan: LoanRequest
+    ) -> tuple[ProposedTerm, dict[str, object]]:
+        """The proposed term with the basis the card states for it. With a ceiling, the shortest
+        term at which every lender example's worst case fits it, or the longest term when none
+        does: a limit the person knows decides the term. Without one, the shortest term whose
+        first payment is under the target the card assumes, or the longest when none is."""
+        ceiling = check.payment_ceiling
+        if ceiling is None:
+            proposed = await self._deps.engine.propose_term(loan.amount, FIRST_PAYMENT_TARGET)
+            fits = proposed.first_payment < FIRST_PAYMENT_TARGET
+            return proposed, _term_basis("first_payment_target", FIRST_PAYMENT_TARGET, fits)
+        found = await self._comfortable_term(loan.amount, ceiling, any_track=False)
+        term = MAX_TERM if found is None else found
+        proposed = ProposedTerm(term, await self._first_payment(loan, term))
+        return proposed, _term_basis("ceiling", ceiling, found is not None)
 
     async def _first_payment(self, loan: LoanRequest, term_months: int) -> Decimal:
-        """The higher first payment of the example tracks, as the engine's term proposal gives."""
-        examples = await self._examples(loan.amount, term_months)
+        """The higher first payment of the lender examples, as the engine's term proposal gives."""
+        examples = await self._lender_examples(loan.amount, term_months)
         return max(figures.first_payment for _, figures in examples)
 
-    async def _examples(
+    async def _lender_examples(
         self, amount: Decimal, term_months: int
     ) -> list[tuple[Mapping[str, object], OptionFigures]]:
-        """The engine's example tracks of the loan at the term, each with its simulated figures."""
+        """The engine's unlinked example tracks of the loan at the term, each with its simulated
+        figures. They are what most lenders offer, so the engine's term and loan searches use
+        them alone; the linked pension fund example is priced at the check's term."""
         engine = self._deps.engine
         examples = []
         for track in await engine.suggest(amount, term_months):
-            simulation = await engine.simulate({"tracks": [track]})
-            examples.append((track, simulation.figures))
+            if not track["cpi_linked"]:
+                simulation = await engine.simulate({"tracks": [track]})
+                examples.append((track, simulation.figures))
         return examples
 
     async def set_term(self, term_months: int) -> str:
@@ -325,17 +396,14 @@ class CheckTools:
 
     async def save_option(self, loan: Mapping[str, object]) -> str:
         """Saves an example from the engine's suggested tracks. Once the check holds a real offer
-        of its loan amount an example illustrates nothing the person is deciding, so it is
-        refused."""
+        of its loan amount, or an offer awaiting its lender, an example illustrates nothing the
+        person is deciding, so it is refused."""
         amount = _require_loan(await self._check(), "save_option").amount
         if any(
-            option.source == "offer" and _principal(option.loan) == amount
+            option.source == "offer" and option.principal == amount
             for option in await self._deps.options.list(self._check_id)
-        ):
-            raise ToolError(
-                "this check holds a real offer of the loan amount, so examples are no longer "
-                "saved; compare the saved offers and call present_recommendation"
-            )
+        ) or await self._deps.awaiting.list(self._check_id):
+            raise ToolError(_EXAMPLES_REFUSED)
         (saved,) = await self._save_options([loan], "example", None, None, None)
         return summary(saved)
 
@@ -363,6 +431,229 @@ class CheckTools:
         }
         return summary({**lines, "next_step": _COMPARE_THE_OFFER})
 
+    async def read_offer(
+        self,
+        lender: str | None,
+        amount: object | None,
+        term_months: int | None,
+        stated_rate: object | None,
+        monthly_payment: object | None,
+        type_words: Sequence[TypeWord],
+        awaiting_id: str | None,
+    ) -> str:
+        """Reads an offer described in words back as the loan it means. With awaiting_id it
+        starts from that awaiting offer: an argument given replaces its value and the type words
+        add to its own. The readings are priced on the amount and term the lender quoted, since
+        the payment belongs to them; a saved offer borrows the check's loan amount. Everything is
+        checked before anything is saved."""
+        check = await self._check()
+        loan = _require_loan(check, "read_offer")
+        stored = None if awaiting_id is None else await self._awaiting_offer(awaiting_id)
+        base = (
+            _Quote(None, loan.amount, check.term_months, None, None, ())
+            if stored is None
+            else _quote_of(stored)
+        )
+        quote = _Quote(
+            base.lender if lender is None else lender,
+            base.amount if amount is None else _amount("amount", amount),
+            base.term_months if term_months is None else term_months,
+            base.stated_rate if stated_rate is None else _amount("stated_rate", stated_rate),
+            (
+                base.monthly_payment
+                if monthly_payment is None
+                else _amount("monthly_payment", monthly_payment)
+            ),
+            tuple(dict.fromkeys([*base.type_words, *type_words])),
+        )
+        _require_named_lender(quote.lender)
+        if quote.lender is None:
+            raise ToolError(
+                "lender is missing; ask the person who made the offer, then call read_offer again"
+            )
+        if quote.term_months is None:
+            raise ToolError(
+                "the offer's term is unknown and the check has none; ask the person for the "
+                "number of months, then call read_offer again"
+            )
+        if quote.stated_rate is None and quote.monthly_payment is None:
+            raise ToolError(
+                "the offer states neither a number nor a monthly payment, so nothing can be read "
+                "back; open the offer form with ask_offer"
+            )
+        if stored is None:
+            await self._refuse_awaiting_again(quote)
+        try:
+            priced = await self._deps.engine.offer_readings(
+                quote.amount,
+                quote.term_months,
+                quote.stated_rate,
+                quote.monthly_payment,
+                prime_total="prime" in quote.type_words,
+            )
+        except EngineError as error:
+            raise ToolError(
+                f"The engine refused the offer: {error}; correct it and call read_offer again"
+            ) from None
+        decision = decide(priced, quote.stated_rate, quote.monthly_payment, quote.type_words)
+        if decision.outcome == "unrecognized":
+            await self._deps.sink.emit(self._check_id, OFFER_UNRECOGNIZED, {"lender": quote.lender})
+            return READING_ON_SCREEN
+        # The simulator compares single loans of the check's amount, and a lender who quoted less
+        # may not lend it, so a short offer waits for the lender's answer even when identified.
+        if decision.outcome == "awaiting" or quote.amount < loan.amount:
+            offer = AwaitingOffer(
+                id=self._deps.new_id() if stored is None else stored.id,
+                check_id=self._check_id,
+                lender=quote.lender,
+                amount=quote.amount,
+                term_months=quote.term_months,
+                stated_rate=quote.stated_rate,
+                monthly_payment=quote.monthly_payment,
+                payment_rate=priced.payment_rate,
+                type_words=quote.type_words,
+                readings=decision.readings,
+                likely=decision.likely,
+                prime=priced.prime,
+                rate_as_of=priced.rate_as_of,
+                created_at=self._deps.clock() if stored is None else stored.created_at,
+            )
+            await self._deps.awaiting.save(offer)
+            await self._remove_examples(await self._deps.options.list(self._check_id))
+            await self._deps.sink.emit(
+                self._check_id,
+                OFFER_AWAITING,
+                {**_awaiting_data(offer), "identified": decision.outcome == "identified"},
+            )
+            return READING_ON_SCREEN
+        (reading,) = decision.readings
+        assert quote.monthly_payment is not None, "only a quoted payment identifies an offer"
+        saved = await self._save_reading(reading, quote.lender, quote.term_months)
+        if stored is not None:
+            await self._settle(stored.id, reading)
+        await self._deps.sink.emit(
+            self._check_id,
+            OFFER_IDENTIFIED,
+            {
+                "option_id": saved["option_id"],
+                "lender": quote.lender,
+                "reading": reading.to_json(),
+                "prime": str(priced.prime),
+                "rate_as_of": priced.rate_as_of.isoformat(),
+                "monthly_payment": str(quote.monthly_payment),
+                "quoted_amount": str(quote.amount),
+                "loan_amount": str(loan.amount),
+            },
+        )
+        return summary(
+            {
+                **saved,
+                "next_step": "the person's screen shows how the offer was identified, so do not "
+                f"repeat it; {_COMPARE_THE_OFFER}",
+            }
+        )
+
+    async def confirm_reading(self, awaiting_id: str, kind: ReadingKind) -> None:
+        """Saves the reading the person chose on an awaiting offer's card as the offer; an offer
+        quoted for less than the check's loan is refused, since it is saved only through its
+        amount question. AwaitingOfferNotFoundError propagates for an offer the check does not
+        hold."""
+        offer = await self._deps.awaiting.get(self._check_id, awaiting_id)
+        loan = _require_loan(await self._check(), "the offer")
+        if offer.amount < loan.amount:
+            raise ToolError(
+                f"awaiting offer {awaiting_id} is quoted for {offer.amount}, less than the check's "
+                f"loan amount of {loan.amount}; answer its amount question instead"
+            )
+        reading = _held_reading(offer, kind)
+        await self._save_reading(reading, offer.lender, offer.term_months)
+        await self._settle(offer.id, reading)
+
+    async def answer_amount(self, awaiting_id: str, covers: bool, kind: ReadingKind | None) -> str:
+        """The lender's answer to an offer quoted for less than the check's loan: covers saves
+        its reading, the chosen kind or the only one it holds, as an offer of the loan amount on
+        the same terms; otherwise the offer leaves the check. AwaitingOfferNotFoundError
+        propagates for an offer the check does not hold."""
+        offer = await self._deps.awaiting.get(self._check_id, awaiting_id)
+        loan = _require_loan(await self._check(), "the offer")
+        if offer.amount >= loan.amount:
+            raise ToolError(
+                f"awaiting offer {awaiting_id} is quoted for {offer.amount}, the check's loan "
+                f"amount of {loan.amount} or more, so it has no amount question; a later detail "
+                "of it goes to read_offer with its awaiting_id"
+            )
+        if not covers:
+            await self._deps.awaiting.remove(self._check_id, awaiting_id)
+            await self._deps.sink.emit(
+                self._check_id,
+                OFFER_DROPPED,
+                {
+                    "awaiting_id": awaiting_id,
+                    "lender": offer.lender,
+                    "quoted_amount": str(offer.amount),
+                    "loan_amount": str(loan.amount),
+                },
+            )
+            return DROPPED_ON_SCREEN
+        if kind is None:
+            if len(offer.readings) > 1:
+                held = ", ".join(reading.kind for reading in offer.readings)
+                raise ToolError(
+                    f"awaiting offer {awaiting_id} still leaves its type open between {held}; "
+                    "pass the reading the person said the lender meant, or ask them"
+                )
+            (reading,) = offer.readings
+        else:
+            reading = _held_reading(offer, kind)
+        saved = await self._save_reading(reading, offer.lender, offer.term_months)
+        await self._settle(offer.id, reading)
+        return summary({**saved, "next_step": _COMPARE_THE_OFFER})
+
+    async def answer_offer_amount(
+        self, awaiting_id: str, covers: bool, kind: ReadingKind | None
+    ) -> str:
+        """answer_amount for the model, whose unknown awaiting id is a refusal it can act on."""
+        await self._awaiting_offer(awaiting_id)
+        return await self.answer_amount(awaiting_id, covers, kind)
+
+    async def _awaiting_offer(self, awaiting_id: str) -> AwaitingOffer:
+        try:
+            return await self._deps.awaiting.get(self._check_id, awaiting_id)
+        except AwaitingOfferNotFoundError:
+            raise ToolError(
+                f"this check holds no awaiting offer {awaiting_id!r}; use an id from "
+                "awaiting_offers, or omit awaiting_id for a new offer"
+            ) from None
+
+    async def _refuse_awaiting_again(self, quote: _Quote) -> None:
+        """Refuses a new offer equal to an awaiting one in all it quotes but its type words,
+        which a later message about the same offer adds."""
+        wordless = replace(quote, type_words=())
+        for offer in await self._deps.awaiting.list(self._check_id):
+            if replace(_quote_of(offer), type_words=()) == wordless:
+                raise ToolError(
+                    f"this offer is already awaiting its lender as {offer.id}; to change it, call "
+                    f"read_offer with awaiting_id {offer.id}"
+                )
+
+    async def _save_reading(
+        self, reading: Reading, lender: str, term_months: int
+    ) -> dict[str, object]:
+        """Saves the reading's track as a real offer of the check's loan amount at the quoted
+        term, removing the check's examples."""
+        amount = _require_loan(await self._check(), "the offer").amount
+        track = {**reading.track, "principal": str(amount), "term_months": term_months}
+        (saved,) = await self._save_options([{"tracks": [track]}], "offer", lender, None, None)
+        return saved
+
+    async def _settle(self, awaiting_id: str, reading: Reading) -> None:
+        await self._deps.awaiting.remove(self._check_id, awaiting_id)
+        await self._deps.sink.emit(
+            self._check_id,
+            OFFER_SETTLED,
+            {"awaiting_id": awaiting_id, "kind": reading.kind, "reading": reading.to_json()},
+        )
+
     async def _save_options(
         self,
         loans: Sequence[Mapping[str, object]],
@@ -377,6 +668,7 @@ class CheckTools:
         and figures is already saved. Returns each saved option's id, figures and comparisons
         with the options of its term."""
         tool = "save_offer" if source == "offer" else "save_option"
+        _require_named_lender(lender)
         offered = None if offer_date is None else _offer_date(offer_date)
         check = await self._check()
         requested = _require_loan(check, tool)
@@ -436,7 +728,11 @@ class CheckTools:
         every = await self._deps.options.list(self._check_id)
         saved = []
         for option, _ in priced:
-            figures = {"option_id": option.id, **_whole_shekels(asdict(option.summary))}
+            figures = {
+                "option_id": option.id,
+                **_money_figures(option),
+                "price": price_text(option),
+            }
             comparisons = [
                 _comparison(option, other)
                 for other in every
@@ -582,7 +878,7 @@ class CheckTools:
         )
         named = [preferred] if alternative is None else [preferred, alternative]
         for option in named:
-            principal = _principal(option.loan)
+            principal = option.principal
             if principal != loan.amount:
                 raise ToolError(
                     f"option {option.id} borrows {principal}, not the check's loan amount of "
@@ -590,7 +886,7 @@ class CheckTools:
                     "save_option first"
                 )
         for option in named:
-            if not _for_term(option, check.term_months):
+            if not option.for_term(check.term_months):
                 raise ToolError(
                     f"option {option.id} is an example for another term than the check's "
                     f"{check.term_months} months; recommend options for the check's term"
@@ -598,7 +894,7 @@ class CheckTools:
         options = [
             option
             for option in await self._deps.options.list(self._check_id)
-            if _principal(option.loan) == loan.amount and _for_term(option, check.term_months)
+            if option.principal == loan.amount and option.for_term(check.term_months)
         ]
         ceiling = check.payment_ceiling
         above_ceiling = None
@@ -651,8 +947,13 @@ class CheckTools:
             "checked": recommendation.checked,
         }
         data["preferred_figures"] = _figures(preferred)
+        data["preferred_price"] = price_text(preferred)
         if alternative is not None:
             data["alternative_figures"] = _figures(alternative)
+            data["alternative_price"] = price_text(alternative)
+        all_options = await self._deps.options.list(self._check_id)
+        if not compares_options(all_options, [option.id for option in named], check.term_months):
+            data["only_option"] = _ONLY_OPTION
         if ceiling is not None and above_ceiling is None:
             data["ceiling_margin"] = _margin(preferred, ceiling)
         if above_ceiling is not None:
@@ -734,7 +1035,7 @@ class CheckTools:
     ) -> str:
         """What the model offers the person when no saved option for the term fits the ceiling.
         A check with real offers is measured by its offers alone. Without one, in order: the
-        shortest term up to MAX_TERM at which an example track fits, naming the tracks that do;
+        shortest term up to MAX_TERM at which a lender example fits, naming the tracks that do;
         the largest loan that fits at the confirmed term, or at MAX_TERM when the person
         confirmed none; that no loan fits."""
         offers = [option for option in options if option.source == "offer"]
@@ -745,10 +1046,10 @@ class CheckTools:
             tracks = [
                 f"the {track['rate_kind']} track, with a worst-case monthly payment of "
                 f"{figures.risk_payment},"
-                for track, figures in await self._examples(loan.amount, term)
+                for track, figures in await self._lender_examples(loan.amount, term)
                 if figures.risk_payment <= ceiling
             ]
-            assert tracks, "the engine's term search found a term at which an example track fits"
+            assert tracks, "the engine's term search found a term at which a lender example fits"
             return (
                 f"At {term} months {' and '.join(tracks)} fits the ceiling: offer the person that "
                 "term once, and once they choose it call set_term, save that option and "
@@ -831,6 +1132,65 @@ def _require_loan(check: Check, needed_by: str) -> LoanRequest:
     return check.loan
 
 
+def _held_reading(offer: AwaitingOffer, kind: ReadingKind) -> Reading:
+    chosen = [reading for reading in offer.readings if reading.kind == kind]
+    if not chosen:
+        held = ", ".join(reading.kind for reading in offer.readings)
+        raise ToolError(f"awaiting offer {offer.id} has no {kind} reading; choose one of {held}")
+    (reading,) = chosen
+    return reading
+
+
+# The words for "a lender" in the person's own sentences, which a model can take for a name.
+_GENERIC_LENDERS = frozenset({"גוף מלווה", "הגוף המלווה", "מלווה", "המלווה"})
+
+
+def _require_named_lender(lender: str | None) -> None:
+    """Refuses a lender that is the word for a lender rather than its name, so no offer is
+    saved or awaits under one of _GENERIC_LENDERS."""
+    if lender is not None and lender.strip() in _GENERIC_LENDERS:
+        raise ToolError(
+            f"{lender!r} means 'a lender', not its name; use the name the person gave (in the "
+            "offer form's line it follows 'הגוף המלווה:'), or ask the person for it"
+        )
+
+
+def _quote_of(offer: AwaitingOffer) -> _Quote:
+    return _Quote(
+        offer.lender,
+        offer.amount,
+        offer.term_months,
+        offer.stated_rate,
+        offer.monthly_payment,
+        offer.type_words,
+    )
+
+
+def _awaiting_data(offer: AwaitingOffer) -> dict[str, object]:
+    return {
+        "awaiting_id": offer.id,
+        "lender": offer.lender,
+        "amount": str(offer.amount),
+        "term_months": offer.term_months,
+        "monthly_payment": _json_value(offer.monthly_payment),
+        "payment_rate": _json_value(offer.payment_rate),
+        "type_words": list(offer.type_words),
+        "readings": [reading.to_json() for reading in offer.readings],
+        "likely": offer.likely,
+        "prime": str(offer.prime),
+        "rate_as_of": offer.rate_as_of.isoformat(),
+    }
+
+
+def _term_basis(
+    kind: Literal["first_payment_target", "ceiling"], amount: Decimal, fits: bool
+) -> dict[str, object]:
+    """How the term card's proposed term was chosen: the shortest term whose payment stays under
+    amount, the first payment the card assumes or the check's ceiling; fits is False when even
+    the longest term does not."""
+    return {"kind": kind, "amount": str(amount), "fits": fits}
+
+
 def _require_term(term_months: int) -> None:
     if not MIN_TERM <= term_months <= MAX_TERM:
         raise ToolError(
@@ -851,15 +1211,6 @@ def _known_fields(check: Check) -> dict[str, object]:
     if check.payment_ceiling is not None:
         known["payment_ceiling"] = check.payment_ceiling
     return known
-
-
-def _for_term(option: Option, term_months: int | None) -> bool:
-    """Whether the option is one for the check's term: an offer always is, since the term's save
-    prices an open offer at it; an example is when every track runs for the term."""
-    if term_months is None or option.source == "offer":
-        return True
-    tracks = cast(list[Mapping[str, object]], option.loan["tracks"])
-    return all(track["term_months"] == term_months for track in tracks)
 
 
 def _fits(option: Option, ceiling: Decimal) -> bool:
@@ -899,7 +1250,40 @@ def _figures(option: Option) -> str:
     """The option's term and figures as they stand now, amounts to the shekel, so a reply about
     a recommendation never quotes figures from before a term change."""
     (term,) = set(_terms(option))
-    return _inline({"term_months": term, **_whole_shekels(asdict(option.summary))})
+    return _inline({"term_months": term, **_money_figures(option)})
+
+
+_AGAINST_MARKET: dict[RateAgainstMarket, str] = {
+    "above": "above",
+    "similar": "similar to",
+    "below": "below",
+}
+
+
+def price_text(option: Option) -> str:
+    """What the option costs over its principal at today's terms and, when the engine priced its
+    rate, the rate today against the market, so the model states the price without computing
+    it. A linked rate is on top of the CPI, so it is not set against the unlinked average."""
+    tracks = cast(list[Mapping[str, object]], option.loan["tracks"])
+    linked = any(track["cpi_linked"] for track in tracks)
+    cost = f"interest_cost {shekels(option.interest_cost)} on {shekels(option.principal)}"
+    if linked:
+        cost += ", the CPI's rise included"
+    price = option.summary.price
+    if price is None:
+        return cost
+    if price.against_market is None:
+        rate = (
+            f"rate_today {price.rate_today}% on top of the CPI, not comparable with the unlinked "
+            "average"
+        )
+    else:
+        rate = (
+            f"rate_today {price.rate_today}%, {_AGAINST_MARKET[price.against_market]} the "
+            f"average bank rate on consumer loans of {price.market_rate}% as of "
+            f"{price.market_rate_month:%Y-%m}"
+        )
+    return f"{cost}; {rate}"
 
 
 def _inline(values: Mapping[str, object]) -> str:
@@ -992,10 +1376,34 @@ SLIGHT_TOTAL_SHARE = Decimal("0.03")
 
 
 def _same_option(existing: Option, option: Option) -> bool:
-    def terms(of: Option) -> tuple[object, ...]:
-        return (of.source, of.lender, of.offer_date, of.max_term_months, of.summary)
+    """Two lenders may quote the same terms, so the lender tells options apart, except that a
+    name one letter away from the saved one is the same lender misspelled."""
 
-    return terms(existing) == terms(option)
+    def terms(of: Option) -> tuple[object, ...]:
+        return (of.source, of.offer_date, of.max_term_months, of.summary)
+
+    return terms(existing) == terms(option) and _same_lender(existing.lender, option.lender)
+
+
+def _same_lender(saved: str | None, given: str | None) -> bool:
+    if saved is None or given is None:
+        return saved == given
+    return _one_edit_apart(saved.strip(), given.strip())
+
+
+def _one_edit_apart(a: str, b: str) -> bool:
+    """Whether the two names are equal or differ by one letter added, removed or replaced."""
+    if a == b:
+        return True
+    if abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) > len(b):
+        a, b = b, a
+    for index, (left, right) in enumerate(zip(a, b, strict=False)):
+        if left != right:
+            skip = 0 if len(a) == len(b) else 1
+            return a[index + 1 - skip :] == b[index + 1 :]
+    return True
 
 
 def _terms(option: Option) -> list[object]:
@@ -1037,13 +1445,20 @@ def _option_data(option: Option) -> dict[str, object]:
     }
 
 
-def _whole_shekels(figures: Mapping[str, object]) -> dict[str, object]:
-    """The figures with every amount rounded to the shekel, as the person reads them; the
-    figures' amounts are all money."""
+def _money_figures(option: Option) -> dict[str, object]:
+    """The option's figures but its price, with every amount rounded to the shekel, as the person
+    reads them; those figures' amounts are all money, while the price holds rates."""
+    figures = asdict(option.summary)
+    del figures["price"]
     return {
-        key: value.quantize(Decimal(1), ROUND_HALF_UP) if isinstance(value, Decimal) else value
+        key: shekels(value) if isinstance(value, Decimal) else value
         for key, value in figures.items()
     }
+
+
+def shekels(amount: Decimal) -> Decimal:
+    """The amount to the shekel, as the person reads it."""
+    return amount.quantize(Decimal(1), ROUND_HALF_UP)
 
 
 def _json_ready(values: Mapping[str, object]) -> dict[str, object]:

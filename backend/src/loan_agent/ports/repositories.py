@@ -1,6 +1,7 @@
 """Persistence ports: what the application needs to keep and read back.
 
-- CheckRepository, OptionRepository, RecommendationRepository: a check and what it produced
+- CheckRepository, OptionRepository, AwaitingOfferRepository, RecommendationRepository: a check
+  and what it produced
 - CheckEventStore: the per-check event log, also the source of the per-person message count
 - StoredEvent: one logged event as read back
 
@@ -14,6 +15,7 @@ from decimal import Decimal
 from typing import Protocol, runtime_checkable
 
 from loan_agent.domain.models import (
+    AwaitingOffer,
     CeilingSource,
     Check,
     Finances,
@@ -50,9 +52,9 @@ class CheckRepository(Protocol):
         ...
 
     async def delete(self, check_id: str, kept_type: str, kept_since: datetime) -> None:
-        """Deletes the check, its options, its recommendation and its events together. Only the
-        person and the time of its kept_type events after kept_since stay, for count_since; they
-        go at a later delete that finds them older than its own kept_since."""
+        """Deletes the check, its options, its awaiting offers, its recommendation and its events
+        together. Only the person and the time of its kept_type events after kept_since stay, for
+        count_since; they go at a later delete that finds them older than its own kept_since."""
         ...
 
     async def set_loan(self, check_id: str, loan: LoanRequest) -> None: ...
@@ -77,10 +79,10 @@ class CheckRepository(Protocol):
 
     async def clone(self, source_id: str, clone: Check, left_out: Collection[str]) -> None:
         """Adds the clone, which carries the loan, term, ceiling and finances it starts with, and
-        copies of the source's options, recommendation and events, all in one transaction. Option
-        ids stay as they are, since the conversation names them. Events of the left_out types are
-        not copied; the copies keep their times and data, are numbered from 1, and never count
-        in count_since."""
+        copies of the source's options, awaiting offers, recommendation and events, all in one
+        transaction. Option and awaiting offer ids stay as they are, since the conversation names
+        them. Events of the left_out types are not copied; the copies keep their times and data,
+        are numbered from 1, and never count in count_since."""
         ...
 
 
@@ -101,6 +103,24 @@ class OptionRepository(Protocol):
         ...
 
     async def remove(self, check_id: str, option_ids: Collection[str]) -> None: ...
+
+
+@runtime_checkable
+class AwaitingOfferRepository(Protocol):
+    async def save(self, offer: AwaitingOffer) -> None:
+        """Adds the offer, or replaces the check's offer of the same id, which keeps its place in
+        list."""
+        ...
+
+    async def list(self, check_id: str) -> list[AwaitingOffer]:
+        """Oldest first."""
+        ...
+
+    async def get(self, check_id: str, awaiting_id: str) -> AwaitingOffer:
+        """Raises AwaitingOfferNotFoundError for an offer the check does not hold."""
+        ...
+
+    async def remove(self, check_id: str, awaiting_id: str) -> None: ...
 
 
 @runtime_checkable

@@ -20,6 +20,7 @@ TOOLS = {
     "largest_comfortable_loan",
     "suggest_tracks",
     "market_series",
+    "offer_readings",
 }
 RESOURCES = {"rates://boi/history", "rates://cpi/history", "rates://current"}
 
@@ -132,6 +133,27 @@ async def test_simulate_loan_returns_summary_schedule_and_data_dates(
     assert (loan["rate_as_of"], loan["cpi_as_of"]) == ("2026-10-20", "2026-09-01")
 
 
+async def test_simulate_loan_prices_each_track_against_the_average_consumer_rate(
+    settings: Settings, history: MarketHistory
+) -> None:
+    linked = {**PRIME_TRACK, "rate_kind": "fixed", "annual_rate": "4", "cpi_linked": True}
+    del linked["prime_spread"]
+    async with client(settings, history) as c:
+        result = await c.call_tool("simulate_loan", {"loan": {"tracks": [PRIME_TRACK, linked]}})
+    assert not result.is_error, result.content
+    loan = result.structured_content
+    assert loan is not None
+    assert (loan["consumer_rate"], loan["consumer_rate_month"]) == ("7.9", "2026-08-01")
+    prime, linked_sim = loan["tracks"]
+    # Today's prime is 3.25 + 1.5, so prime + 2.9 charges 7.65: within a quarter point of 7.9.
+    assert (prime["rate_today"], prime["against_consumer_rate"]) == ("7.65", "similar")
+    assert (linked_sim["rate_today"], linked_sim["against_consumer_rate"]) == ("4", None)
+    (block,) = result.content
+    assert block.type == "text"
+    assert "rate today 7.65%, similar to the average consumer loan rate of 7.9%" in block.text
+    assert "rate today 4% on top of the CPI" in block.text
+
+
 async def test_simulate_loan_reports_balloon_apart_from_peak_payment(
     settings: Settings, history: MarketHistory
 ) -> None:
@@ -239,9 +261,79 @@ async def test_suggest_tracks_names_source_and_month(
     assert suggestions is not None
     assert suggestions["as_of"] == "2026-08-01"
     assert "BNK_99010_LR_BIR_1893" in suggestions["source"]
-    fixed, prime = suggestions["tracks"]
+    assert "pension fund" in suggestions["source"]
+    fixed, prime, pension = suggestions["tracks"]
     assert (fixed["rate_kind"], fixed["annual_rate"]) == ("fixed", "7.9")
     assert (prime["rate_kind"], prime["prime_spread"]) == ("prime", "2.9")
+    assert (pension["rate_kind"], pension["annual_rate"], pension["cpi_linked"]) == (
+        "fixed",
+        "4",
+        True,
+    )
+
+
+async def test_offer_readings_prices_each_reading_with_money_in_agorot(
+    settings: Settings, history: MarketHistory
+) -> None:
+    async with client(settings, history) as c:
+        result = await c.call_tool(
+            "offer_readings",
+            {"principal": 45000, "term_months": 60, "stated_rate": 6, "prime_total": True},
+        )
+    assert not result.is_error, result.content
+    offer = result.structured_content
+    assert offer is not None
+    assert (offer["prime"], offer["rate_as_of"], offer["payment_rate"]) == (
+        "4.75",
+        "2026-10-20",
+        None,
+    )
+    margin, total, fixed, linked = offer["readings"]
+    assert margin == {
+        "kind": "prime_margin",
+        "track": {
+            "principal": "45000",
+            "term_months": 60,
+            "rate_kind": "prime",
+            "annual_rate": None,
+            "prime_spread": "6",
+            "cpi_linked": False,
+            "method": "spitzer",
+            "balloon_amount": "0",
+            "one_time_fee": "0",
+            "monthly_fee": "0",
+        },
+        "first_payment": "972.81",
+        "total_rate": "10.75",
+        "approximate": False,
+    }
+    assert [r["kind"] for r in (total, fixed, linked)] == [
+        "prime_total",
+        "fixed_unlinked",
+        "fixed_linked",
+    ]
+    assert all(len(r["first_payment"].split(".")[1]) == 2 for r in offer["readings"])
+
+
+async def test_offer_readings_without_a_number_or_a_payment_is_tool_error(
+    settings: Settings, history: MarketHistory
+) -> None:
+    async with client(settings, history) as c:
+        result = await c.call_tool("offer_readings", {"principal": 45000, "term_months": 60})
+    assert result.is_error
+    assert "stated_rate" in result.content[0].text
+    assert "monthly_payment" in result.content[0].text
+
+
+async def test_offer_readings_without_history_window_is_tool_error(
+    settings: Settings, short_history: MarketHistory
+) -> None:
+    async with client(settings, short_history) as c:
+        result = await c.call_tool(
+            "offer_readings", {"principal": 45000, "term_months": 48, "stated_rate": 6}
+        )
+    assert result.is_error
+    assert "term of 48 months exceeds the 30 months of history" in result.content[0].text
 
 
 async def test_shortest_comfortable_term_names_the_term(

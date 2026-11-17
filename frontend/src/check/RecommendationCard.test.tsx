@@ -4,6 +4,8 @@ import { expect, test } from 'vitest'
 import type { CheckEvent } from '../api/types.ts'
 import { OFFER_SOURCES } from '../copy.ts'
 import {
+  awaitingAvis,
+  offerAwaiting,
   optionFixed36,
   optionOfferFixed,
   optionPrime36,
@@ -14,7 +16,8 @@ import {
 import { buildCard } from './card.ts'
 import { initialState, reduce } from './events.ts'
 import { RecommendationCard } from './RecommendationCard.tsx'
-import { EXAMPLES_NOTE } from './copy.ts'
+import { AWAITING_ONLY, EMPTY_CARD, EXAMPLES_NOTE, awaitingNote } from './copy.ts'
+import { wholeText } from '../test/wholeText.ts'
 
 function modelOf(...events: CheckEvent[]) {
   return buildCard(events.reduce(reduce, initialState))
@@ -24,11 +27,13 @@ const reference = modelOf(optionPrime36, optionFixed36, recommendationPrime, opt
 
 test('the reference model shows the decision and both labelled options', () => {
   render(<RecommendationCard model={reference} />)
-  expect(screen.getByText(REFERENCE_DECISION).closest('.decision')).toHaveTextContent('מה מחפשים')
+  expect(screen.getByText(wholeText(REFERENCE_DECISION)).closest('.decision')).toHaveTextContent(
+    'מה מחפשים',
+  )
 
-  const preferred = screen.getByText('מומלצת').closest('article')!
+  const preferred = screen.getByText('מועדפת').closest('article')!
   expect(preferred).toHaveClass('option', 'option-preferred')
-  expect(within(preferred).getByText('904 ₪ בחודש')).toBeInTheDocument()
+  expect(within(preferred).getByText(wholeText('904 ₪ בחודש'))).toBeInTheDocument()
   expect(within(preferred).getByText('עד ~955 ₪ אם הריבית תעלה כמו ב-2022–2025')).toHaveClass(
     'chip',
     'chip-amber',
@@ -43,6 +48,21 @@ test('options outside the recommendation sit in their titled group', () => {
   render(<RecommendationCard model={reference} />)
   const group = screen.getByRole('region', { name: 'הצעות חדשות, עוד לא נכללו בהמלצה' })
   expect(within(group).getByText('הצעה מבנק הפועלים · 02.11.2026')).toBeInTheDocument()
+})
+
+test('a real offer shows its price under its payment, and an example does not', () => {
+  render(<RecommendationCard model={reference} />)
+  const offer = screen.getByRole('region', { name: 'הצעות חדשות, עוד לא נכללו בהמלצה' })
+  expect(within(offer).getByText(wholeText('ריבית: כ-3,040 ₪ על 29,000 ₪'))).toHaveClass(
+    'option-price',
+  )
+  expect(
+    within(offer).getByText(
+      wholeText('6.9% היום — מתחת לריבית הממוצעת בבנקים להלוואה צרכנית, כ-7.9% (נכון ל-08/2026)'),
+    ),
+  ).toHaveClass('option-price')
+  const example = screen.getByText('מועדפת').closest('article')!
+  expect(example.querySelector('.option-price')).toBeNull()
 })
 
 test('the reasoning stands apart from the figures', () => {
@@ -70,8 +90,8 @@ test('the fold is open and lists totals; it can be closed', async () => {
   expect(fold).not.toHaveAttribute('open')
 })
 
-test('a recommendation names every source of real offers and what to ask them', () => {
-  render(<RecommendationCard model={reference} />)
+test('a recommendation on examples names every source of real offers and what to ask them', () => {
+  render(<RecommendationCard model={modelOf(optionPrime36, optionFixed36, recommendationPrime)} />)
   const next = screen.getByRole('heading', { name: 'מה הלאה' }).closest('section')
   expect(next).toHaveTextContent(OFFER_SOURCES)
   expect(next).toHaveTextContent('"הצעה מגוף מלווה"')
@@ -82,7 +102,7 @@ test('options before a recommendation show without a decision or fold', () => {
   render(<RecommendationCard model={modelOf(optionPrime36)} />)
   expect(screen.getByRole('region', { name: 'האפשרויות שנבדקו' })).toBeInTheDocument()
   expect(screen.queryByText('למה המספרים האלה')).not.toBeInTheDocument()
-  expect(screen.queryByText('מומלצת')).not.toBeInTheDocument()
+  expect(screen.queryByText('מועדפת')).not.toBeInTheDocument()
 })
 
 test('no options: the empty line', () => {
@@ -135,7 +155,7 @@ test('the next-step title flashes while the recommendation rests on examples', (
   expect(screen.getByRole('heading', { name: 'מה הלאה' })).toHaveClass('attention-flash')
 })
 
-test('the next-step title rests once every option is a real offer', () => {
+test('no next step once the card shows a real offer', () => {
   const recommendationOffer = withSeq(
     {
       ...recommendationPrime,
@@ -143,6 +163,47 @@ test('the next-step title rests once every option is a real offer', () => {
     },
     8,
   )
-  render(<RecommendationCard model={modelOf(optionOfferFixed, recommendationOffer)} />)
-  expect(screen.getByRole('heading', { name: 'מה הלאה' })).not.toHaveClass('attention-flash')
+  const { unmount } = render(
+    <RecommendationCard model={modelOf(optionOfferFixed, recommendationOffer)} />,
+  )
+  expect(screen.queryByRole('heading', { name: 'מה הלאה' })).not.toBeInTheDocument()
+  unmount()
+
+  render(<RecommendationCard model={reference} />)
+  expect(screen.queryByRole('heading', { name: 'מה הלאה' })).not.toBeInTheDocument()
+})
+
+test('a check whose only offers await shows the awaiting line in place of a recommendation', () => {
+  render(<RecommendationCard model={modelOf(offerAwaiting(1, awaitingAvis))} />)
+  expect(screen.getByText(AWAITING_ONLY)).toBeInTheDocument()
+  expect(screen.queryByText(EMPTY_CARD)).not.toBeInTheDocument()
+})
+
+test('awaiting offers are noted under the options of a recommendation', () => {
+  render(
+    <RecommendationCard
+      model={modelOf(
+        optionPrime36,
+        optionFixed36,
+        recommendationPrime,
+        offerAwaiting(20, awaitingAvis),
+      )}
+    />,
+  )
+  const note = screen.getByText(awaitingNote(awaitingAvis.lender))
+  expect(note).toHaveClass('awaiting-note')
+  expect(screen.queryByText(AWAITING_ONLY)).not.toBeInTheDocument()
+  expect(
+    screen.getByText('חלופה').closest('article')!.compareDocumentPosition(note) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy()
+  expect(
+    note.compareDocumentPosition(screen.getByText(recommendationPrime.data.reasoning)) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy()
+})
+
+test('a check with nothing shows the empty card', () => {
+  render(<RecommendationCard model={modelOf()} />)
+  expect(screen.getByText(EMPTY_CARD)).toBeInTheDocument()
 })

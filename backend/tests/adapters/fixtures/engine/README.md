@@ -12,7 +12,15 @@ Each file holds the result of one call:
   spitzer
 - `simulate_loan_linked_balloon.json`: one track, 80000 over 48 months, fixed 4.9%, CPI-linked,
   balloon 30000
-- `suggest_tracks.json`: principal 80000, 48 months
+- In both simulate_loan files, each track's `rate_today` and `against_consumer_rate` and the
+  loan's `consumer_rate` and `consumer_rate_month` are the engine's output of 2026-11-17 over the
+  same market data: the rate of month 1 in the schedule, and the consumer loan average above
+- `suggest_tracks.json`: principal 80000, 48 months; its third track, the pension fund example at
+  the engine's fixed rate, and the sentence its source ends with are the engine's output of
+  2026-11-17, which takes nothing from market data
 - `market_series.json`: prime_months 60, cpi_months 12, captured on 2026-10-30 from the engine's
   stored market data (rate as of 2026-10-30, CPI as of 2026-09); the prime ends at 2026-10 with
   today's prime, the CPI at 2026-09
+- `offer_readings.json`: principal 45000, term_months 60, monthly_payment 969, captured on
+  2026-11-16 from the engine's test history in `mcp-server/tests/service/conftest.py` (Bank of
+  Israel rate 3.25, rate as of 2026-10-20), not from market data

@@ -7,7 +7,10 @@ and the other parts are in [the architecture map](../architecture.md), the sign-
 [sign-in.md](../sign-in.md).
 
 **Contents:** [Layout](#layout) · [Data flow](#data-flow) ·
-[The question bubble](#the-question-bubble) · [The card](#the-card) ·
+[The opening card and the chips](#the-opening-card-and-the-chips) ·
+[The question bubble](#the-question-bubble) ·
+[Offers described in words](#offers-described-in-words) · [The card](#the-card) ·
+[Offers awaiting a lender](#offers-awaiting-a-lender) ·
 [Refreshing the checks list](#refreshing-the-checks-list) ·
 [Archiving and deleting a check](#archiving-and-deleting-a-check) · [Serving](#serving)
 
@@ -37,14 +40,20 @@ clone, the list shows both, and the source opens on its whole conversation.
 `sql-helper.sh --demo-check <id>` writes the recording from the stack's database.
 
 From 900px wide the open check is three columns: the side column (the checks list), the
-conversation, and the recommendation card. Once the check has figures (its income and fixed
-expenses), a one-line summary of them sits above the conversation, with an "עריכה" link that opens
-the two fields in place. The side column is 300px, so an entry's title fits its first line and its
-term its second. The card starts at 470px; dragging the border between it and the conversation, or
-the arrow keys on that border, narrows it to 380px or widens it up to what leaves the conversation
-360px (`check/CardResizer.tsx`), and the browser keeps the width. The conversation takes the rest.
-Below 900px a tab bar ("בדיקות", "שיחה", "המלצה") shows one of the three at a time
-(`frontend/src/styles/global.css`).
+conversation, and the recommendation card. A check that holds a payment ceiling, stated or derived,
+or a finances figure (its income or fixed expenses; the list's `has_finances` flag) has a "פרטים
+כספיים" link on its entry's months row. Tapping it opens the check on its conversation with a
+one-line summary above it: the two figures and the ceiling, marked "לפי מה שאמרת" when stated, with
+an "עריכה" link that opens the two fields in place; tapping it again hides the summary, and every
+check opens with it hidden. While the open check's term card takes an answer, the link and the
+summary are both hidden, so the card is the one place the ceiling is set. The entry is a container rather than one button, so the link is a button
+of its own: the entry's select button holds the title, takes the entry's text as its name, and
+stretches its click area over the entry beneath the link. The side column is 300px, so an entry's
+title fits its first line and its term its second. The card starts at 470px; dragging the border
+between it and the conversation, or the arrow keys on that border, narrows it to 380px or widens it
+up to what leaves the conversation 360px (`check/CardResizer.tsx`), and the browser keeps the width.
+The conversation takes the rest. Below 900px a tab bar ("בדיקות", "שיחה", "המלצה") shows one of the
+three at a time (`frontend/src/styles/global.css`).
 
 ## Data flow
 
@@ -70,18 +79,20 @@ and closes it when another check opens. The stream replays the check's stored ev
 continues live; the browser reconnects by itself and the agent replays only what followed. The
 reducer (`check/events.ts`) folds each event into one state: the messages, the options by id, the
 latest recommendation, the loan, the confirmed term, the ceiling with its source, the check's two
-finances figures, and whether a turn is running. A `question.asked` event becomes a question entry
-in the messages, and a `chart.shown` event a chart entry, which `check/MarketChart.tsx` draws as a
-line (the prime) or as bars around zero (the CPI's monthly change), with a hidden table of the
-values for screen readers. The question is live while it is the last entry and no turn runs. Only
-the person's next message closes it; a running turn hides its controls until the turn ends. A closed
-question stays in the conversation as text. Stored events carry a sequence number and are applied
-once; a partial reply (`message.delta`) carries the whole reply so far and is dropped when its
-complete message has already arrived, and `message.retracted` removes a partial reply the
-assistant is rewriting. The conversation and the card both render from that state. A
-401 on any call returns the page to sign-in. The browser retries a dropped stream by itself but
-closes it for good on a response it will not retry; the page treats any such close, a 401 among
-them, as signed out.
+finances figures, the offers awaiting their lender, and whether a turn is running. A
+`question.asked` event becomes a question entry in the messages, and a `chart.shown` event a chart
+entry, which `check/MarketChart.tsx` draws as a line (the prime) or as bars around zero (the CPI's
+monthly change), with a hidden table of the values for screen readers. The `offer.*` events add an
+entry for an offer or mark its card settled, as [offers described in
+words](#offers-described-in-words) describes. The question is live while it is the last entry and no
+turn runs. Only the person's next message closes it; a running turn hides its controls until the
+turn ends. A closed question stays in the conversation as text. Stored events carry a sequence
+number and are applied once; a partial reply (`message.delta`) carries the whole reply so far and is
+dropped when its complete message has already arrived, and `message.retracted` removes a partial
+reply the assistant is rewriting. The conversation and the card both render from that state. A 401
+on any call returns the page to sign-in. The browser retries a dropped stream by itself but closes
+it for good on a response it will not retry; the page treats any such close, a 401 among them, as
+signed out.
 
 The figures belong to the check, so they come with its stream: each `finances.updated` carries
 both figures and the ceiling after the save, and the figures panel (`check/FinancesPanel.tsx`)
@@ -93,6 +104,40 @@ focus, and a value equal to the stored one sends nothing. The save is
 own message, so the agent explains the ceiling the figures give. A refused save shows its message
 under the field and sends nothing. While a turn runs, or once the check is archived, the fields
 show but take no edit.
+
+## The opening card and the chips
+
+A check the person has not started, with nothing in its conversation, shows only the opening card
+(`check/OpeningCard.tsx`), titled "פרטי ההלוואה": no chat box and no chips. It asks for the goal,
+one tap among רכב, שיפוץ and כללי, and the amount, through a switch between "סכום ההלוואה" (one
+box) and "מחיר והון עצמי" (two boxes, with the loan they leave shown under them). המשך judges
+every box and marks a missing goal, an amount outside 10,000 to 10,000,000 ₪, or own capital that
+covers the price, sending nothing. A valid card goes once to `POST /api/checks/<id>/opening` with
+the goal, the amount as a decimal string and the line "רכב: הלוואה בסך 45,000 ₪"; the agent saves
+the loan and answers with the term card. A refused loan shows the card's own Hebrew line and keeps
+the card; any other failure shows the page's notice. Once the check has events, the conversation
+and its chat box take the card's place.
+
+Above the chat box sit up to three chips, in this order. "דוגמאות" and "פריים ומדדים" fill the
+chat box with their sentence for the person to send as it is or change first; "הצעה מגוף מלווה"
+opens the empty offer form at once, while an offer in the person's own words goes through the
+chat box:
+
+- "דוגמאות", while the check has a loan, a term, no option, example or offer, and no awaiting
+  offer: its sentence goes to the model, which prices the example tracks.
+- "הצעה מגוף מלווה", once the check has a loan and a term: a tap sends "קיבלתי הצעה להלוואה מגוף
+  מלווה" to `POST /api/checks/<id>/offer-sample`, answered with the empty offer form and no model
+  call. The same sentence typed by hand goes the same way; any other wording goes to the model.
+- "פריים ומדדים", always: the market-data question.
+
+On the recommendation card the recommended option is labelled "מועדפת" and its alternative
+"חלופה", and only when the card shows more than one option: a label ranks options against each
+other, and one option alone is evaluated, not recommended. In the checks list, a check with a
+recommendation has a green chip: "המלצה מוכנה" when the recommendation compares more than one
+option, "הצעה נבדקה" when its card holds one real offer alone; or only the "דוגמא" chip while
+the recommendation rests on examples, which nobody can take. Both follow one rule,
+`comparesOptions` in `check/card.ts`, which the server mirrors as the checks list's
+`compares_options` and the demo backend computes from the replayed events.
 
 ## The question bubble
 
@@ -106,9 +151,19 @@ instead. A question with choices of its own
 chat box takes any other answer and a skip only gets the question asked again. A closed question
 shows only the text.
 
-The term card is a question of its own kind: one line with the proposed term in months and its first
-payment, then one form with two boxes and one "אישור" button. The term box starts at the proposed
-term; the ceiling box starts at the check's payment ceiling, or empty when it has none. On אישור:
+The term card is a question of its own kind, a first calculation the person tunes: one line,
+"חישוב ראשוני", with the term in months and its first payment; a line on the assumption the term
+was worked out from, which the question's `basis` carries: the assumed first payment of 1,000 ₪
+when the check has no ceiling, or the check's ceiling, each with the amount, and a plain
+statement when even 84 months does not keep the payment under it, or the term the person typed.
+A card stored before the basis was sent shows the title alone. Then one form with two boxes and
+one "אישור" button. The term box starts at the proposed term; the ceiling box starts at the
+check's payment ceiling, or empty when it has none, and may stay empty. A
+ceiling derived from the finances shows its calculation beside the box while the box holds it:
+the lower of the engine's two caps, as `finances.updated` carries them, such as "(50% מההפרש בין
+הכנסה של 10,000 ₪ להוצאות של 6,500 ₪)". While the check lacks a finances figure, an underlined
+link beside the ceiling box, "תכנון החזר חודשי", sends those words and saves nothing; the agent
+takes them as a request for help with the ceiling, as it takes "לא יודע/ת". On אישור:
 
 - A new ceiling with the term left as proposed goes with its line to
   `POST /api/checks/<id>/term-ceiling`; the agent saves it as the stated ceiling and answers with a
@@ -116,11 +171,23 @@ term; the ceiling box starts at the check's payment ceiling, or empty when it ha
   ceiling, or 84 months.
 - Anything else confirms the term in the box. The page saves it, with a new ceiling when there is
   one (`PUT /api/checks/<id>/term`), and sends "אישור: 48 חודשים", or "אישור: 48 חודשים, החזר
-  חודשי מרבי: 1,000 ₪", so the model reads both as set rather than judging the line.
+  חודשי מרבי: 1,000 ₪", to `POST /api/checks/<id>/term-confirmation`. A check with no offer is
+  answered with the offer form and no model call; for one with offers the model reads both as
+  set rather than judging the line, and recommends on its offers.
 
 A term outside 6 to 84 months, or a ceiling the check holds cleared from its box, is refused in
 the bubble. The card's own term typed in the chat ("60" or "60 חודשים") while the card is open
-confirms it too; another number typed there goes to the model, which answers with a card for it.
+confirms it the same way; another number typed there goes to the model, which answers with a card
+for it.
+
+The offer form (`check/OfferForm.tsx`), titled "פרטי ההצעה", opens with a line inviting the
+person to describe their offers there or in the chat, for the simulator to compare. It asks for
+the lender, up to four tracks, each a margin over
+or under prime or a fixed rate, linked to the CPI or not, and the longest term the lender allows;
+המשך sends the offer as one worded message, which the model saves; the lender's name follows
+its own label ("הגוף המלווה: מקס"), and the agent refuses "גוף מלווה" and its like as a name. Its "דילוג" button leaves the
+boxes unread and goes to `POST /api/checks/<id>/offer-skip`, answered with an invitation to
+describe the offer or offers in the chat box, in the person's own words.
 
 `check/CheckPage.tsx` handles the answer in this order. A typed answer to a finances field is
 saved first (`PUT /api/checks/<id>/finances`), the checks list is refreshed, and then the
@@ -133,6 +200,53 @@ agent's side of the question is in [the agent](agent.md).
 Money is never a JavaScript number. The API sends amounts as decimal strings, and
 `frontend/src/money.ts` formats them from the text, rounding half up on the digits.
 
+## Offers described in words
+
+An offer the person describes in the chat comes back as one of three entries, each rendered from
+its `offer.*` event:
+
+- **Identified** (`check/OfferReplies.tsx`): a short reply that names the loan, how a prime
+  reading's rate adds up ("ריבית הפריים נכון ל-15.11.2026 היא 4.75%, כך שהריבית הכוללת היום היא
+  11.2% (4.75 + 6.45)"), and that the payment given matches; an offer quoted on more than
+  the check's loan adds which amount the check prices. A "פריים ומדדים" chip in the reply
+  fills the chat box as the chip above it does.
+- **Not recognized**: one line asking the person to get more details from the lender, whether the
+  loan is based on prime and whether it is a fixed rate linked to the CPI.
+- **The readings card** (`check/ReadingsCard.tsx`), for an offer that awaits its lender: the rate
+  the payment amounts to today, when a payment was given; what the lender's words suggest, when
+  "קבוע" or "צמוד" was said, with the warning that lenders say "קבוע" also when only the rate is
+  fixed; the question to ask the lender, boxed under a caption with a copy button; the readings as
+  radio buttons, each with a half-line on how its payment behaves, the likely one chosen and
+  tagged "הסביר ביותר"; then "אישור" and "המשך להצעה נוספת עד לבירור השאלה", a closing line that the
+  person may keep entering offers and come back from the yellow bubble beside the check, and the
+  "פריים ומדדים" chip.
+- **The amount question**, on the readings card of an offer quoted for less than the check's
+  loan: a line "ההצעה של מקס היא על 20,000 ₪, והבדיקה היא על 45,000 ₪.", and the question to the
+  lender ends with "האם תוכלו להציע 45,000 ₪ באותם תנאים?". Its "כן, באותם תנאים" takes the place
+  of אישור, beside "לא" and "המשך להצעה נוספת עד לבירור השאלה". An offer its payment identified
+  shows that identification, as the identified reply words it, in place of the rate, the words'
+  advice and the radio buttons, and its question asks only the amount. The check's loan amount the card
+  measures against is the check's current one.
+
+אישור without a chosen reading asks for one. With one, the page saves it
+(`PUT /api/checks/<id>/awaiting-offers/<awaiting_id>`) and then sends "אישור: <reading>" as the
+person's message, so the model recommends on a saved offer; a refused save shows its reason on
+the card and sends nothing, and the card stays locked from a confirmation that went through until
+its `offer.settled` arrives. On the amount question, "כן, באותם תנאים" sends the chosen reading,
+or the identified one, with `covers` true to
+`PUT /api/checks/<id>/awaiting-offers/<awaiting_id>/amount` and then the line "אישור: 45,000 ₪
+באותם תנאים אצל מקס, <reading>"; "לא" sends `covers` false and then "לא: אין הצעה של מקס על
+45,000 ₪". Both lines go to the model, as a confirmation does. המשך להצעה נוספת עד לבירור השאלה asks
+for the offer form for another offer and leaves the card open. A card stays answerable after later
+messages, unlike a question, until its offer is settled; a turn running or an archived check
+only locks it, and its question can still be copied.
+A later `offer.awaiting` of the same offer replaces the card where it stands, and its choice
+starts over from the new likely reading. A settled card shows the reading its `offer.settled`
+carries in place of its choices and of the advice to check the type with the lender; that reading
+may be one the card never offered, when a later detail identified the offer. A card whose
+`offer.dropped` arrived says "ההצעה של מקס לא מכסה את ההלוואה של 45,000 ₪, ולכן היא לא נכנסת
+להשוואה." in place of its questions.
+
 ## The card
 
 Every figure on the recommendation card comes from the check's stored engine results; none comes
@@ -144,13 +258,15 @@ from the model's text. `check/card.ts` maps the state to a model the card render
 | Decision sentence: loan amount, term and today's payment | The recommendation's loan amount; the term and today's payment from the preferred option |
 | The check line under it: unchecked, or above the ceiling with both payments | The recommendation's ceiling, or none, and the preferred option's worst-case payment against the ceiling the check holds now |
 | Ceiling line: the amount and its source | The check's ceiling, from `ceiling.set` or `finances.updated`; absent while the check has none |
-| Track line and source (published average, or a lender and date) | The option's loan and source |
-| Filled chip "דוגמא", a dashed outline and one line above the options | The option's source is the published average, so nobody can take it |
+| Track line and source (published average, a pension fund's published terms, or a lender and date) | The option's loan and source; an example linked to the CPI is the pension fund's |
+| Filled chip "דוגמא", a dashed outline and one line above the options | The option is an example, so nobody can take it |
 | Green chip "התשלום לא ישתנה" | The option has no worst-case payment: the payment cannot move |
 | Amber chip: the worst-case payment and its period | The option's worst peak payment and the start and end of its worst window |
 | Balloon line | The option's balloon due |
+| A real offer's price under its payment: "ריבית: כ-13,368 ₪ על 45,000 ₪", and its rate today against the market ("10.75% היום — מעל הריבית הממוצעת בבנקים להלוואה צרכנית, כ-7.9% (נכון ל-08/2026)", or "4% מעל המדד" for a linked one) | The option's total paid minus its principal, and its stored price: the rate today, the comparison and the average with its month; an offer stored before the engine priced rates has the interest line alone |
 | Total cost today, and the range across history | The option's total paid, and the range of its simulation's historical windows with their count |
 | Data dates and assumptions | The dates the option's figures rest on |
+| A line per awaiting offer: its lender, and that it is not in the comparison | The offers awaiting their lender |
 
 **The check line.** A recommendation is in one of three states. Made while the check had no
 ceiling, it is unchecked, and the card says so: "ההמלצה לפי ההלוואות עצמן; עוד לא נבדקה מול ההחזר
@@ -194,40 +310,57 @@ a visually hidden live region carries the latest complete reply, not the log its
 **Following the conversation.** The conversation scrolls to its end as messages and streamed text
 arrive, unless the person has scrolled up; it follows again when they return to the end.
 
+## Offers awaiting a lender
+
+An offer that awaits its lender's answer counts as a real offer everywhere on the page but in the
+recommendation: it removes the "דוגמאות" chip, and the card lists it by lender under the options,
+"<lender>: ממתינה לבירור סוג ההלוואה, לא נכללת בהשוואה", or, for an offer quoted for less than the
+loan, "<lender>: ממתינה לתשובה על סכום ההלוואה, לא נכללת בהשוואה". A check whose only offers await
+shows, in place of a recommendation, "ההמלצה תופיע אחרי קבלת התשובה מהגוף המלווה."
+
+In the checks list (`shell/ChecksList.tsx`), a live check with awaiting offers has a yellow bubble
+with their count beside its clone and archive icons; its tooltip reads "הצעה אחת ממתינה לבירור
+מול הגוף המלווה", or the count of offers for more than one. The list carries each check's
+awaiting offers, oldest first, with their lender and payment. Clicking the bubble unfolds a list
+of links under the check, one per offer: the lender, then "· 969 ₪ בחודש" when a payment was
+given. A link opens the check on its conversation and brings that offer's readings card into
+view. Confirming the card removes the offer from the list, and the bubble goes with the last one.
+
 ## Refreshing the checks list
 
 The list titles each check by its loan, "<purpose> - הלוואה בסך <amount>₪", with "כללי" for a loan
 with no purpose and "בדיקה חדשה" before the loan is known. It marks whether the check has a
-recommendation, with a "דוגמא" chip when that recommendation names only examples, and whether it is
-archived, so a turn can change it. The page loads it on start and after it creates a check. It
-refetches it when a turn this page started has ended, and after a finances save. The reducer counts
-a turn end when a running turn goes idle. The page records that count when a send is accepted and
-refetches once when the count passes it, so the replay of old turns on opening a check, and a turn
-another tab started, change nothing. A turn the page did not start, such as a clone's first turn,
-which the shell sends before it opens the clone, is caught by a second rule: once the stream has
-events and no turn runs, a list entry whose loan, term or recommendation differs from the check's
-own events is refetched. Refetches are numbered when sent, and an answer older than one already
-applied is dropped.
+recommendation, with a "דוגמא" chip when that recommendation names only examples, whether its
+finances hold a figure, and whether it is archived, so a turn can change it. The page loads it on
+start and after it creates a check. It refetches it when a turn this page started has ended, and
+after a finances save. The reducer counts a turn end when a running turn goes idle. The page records
+that count when a send is accepted and refetches once when the count passes it, so the replay of old
+turns on opening a check, and a turn another tab started, change nothing. A turn the page did not
+start, such as a clone's first turn, which the shell sends before it opens the clone, is caught by a
+second rule: once the stream has events and no turn runs, a list entry whose loan, term,
+recommendation, finances flag or number of awaiting offers differs from the check's own events is
+refetched. Refetches are numbered when sent, and an answer older than one already applied is
+dropped.
 
 ## Archiving and deleting a check
 
 An entry in the checks list the person has sent a message to (the list's `started` flag) has a
-duplicate icon, which clones the check beside it, and when live an archive icon; a check holding
-only the opening line has neither, since it has nothing to copy or keep. An entry shows its loan as
-its title and, once confirmed, its term on a second line. A clone, from the icon or the clone offer,
-adds a handoff note to the source's conversation ("הבדיקה שוכפלה לבדיקה נפרדת.") with a button to
-the copy; the source stays open. The clone offer's choice sends the copy its first line with the
-request that brought the offer ("לשכפל ולבדוק בנפרד: ננסה עם 24"), so the copy carries out that
-request rather than reading it back from the copied conversation. Archived checks follow the live
-ones in a group of their own, folded until the person opens it, and an archived check is read-only,
-with a note closing its conversation. Archiving the open check opens the newest live check in its
-place, or a new check when none is left, so the open check is never one hidden in the folded group.
-An archived check has a restore icon and a delete icon, so a delete is always a second step. The
-delete icon first asks for confirmation beside the entry, with focus on the cancel button, because a
-delete cannot be undone. A confirmed delete calls `DELETE /api/checks/<id>` and refreshes the list.
-Deleting the open check opens the newest one left; with none left the page shows a centred card with
-the button for a new check. A delete during a reply is refused with a sentence asking to try again
-in a moment.
+duplicate icon, which clones the check beside it, and when live an archive icon; a check not yet
+started, which shows only its opening card, has neither, since it has nothing to copy or keep. An
+entry shows its loan as its title and, once confirmed, its term on a second line. A clone, from the
+icon or the clone offer, adds a handoff note to the source's conversation ("הבדיקה שוכפלה לבדיקה
+נפרדת.") with a button to the copy; the source stays open. The clone offer's choice sends the copy
+its first line with the request that brought the offer ("לשכפל ולבדוק בנפרד: ננסה עם 24"), so the
+copy carries out that request rather than reading it back from the copied conversation. Archived
+checks follow the live ones in a group of their own, folded until the person opens it, and an
+archived check is read-only, with a note closing its conversation. Archiving the open check opens
+the newest live check in its place, or a new check when none is left, so the open check is never one
+hidden in the folded group. An archived check has a restore icon and a delete icon, so a delete is
+always a second step. The delete icon first asks for confirmation beside the entry, with focus on
+the cancel button, because a delete cannot be undone. A confirmed delete calls `DELETE
+/api/checks/<id>` and refreshes the list. Deleting the open check opens the newest one left; with
+none left the page shows a centred card with the button for a new check. A delete during a reply is
+refused with a sentence asking to try again in a moment.
 
 ## Serving
 

@@ -12,6 +12,7 @@ from fakes import (
     Clock,
     FakeLoanEngine,
     Ids,
+    InMemoryAwaitingOfferRepository,
     InMemoryCheckRepository,
     InMemoryOptionRepository,
     InMemoryRecommendationRepository,
@@ -35,6 +36,7 @@ async def deps() -> ToolDeps:
     return ToolDeps(
         checks=checks,
         options=InMemoryOptionRepository(),
+        awaiting=InMemoryAwaitingOfferRepository(),
         recommendations=InMemoryRecommendationRepository(),
         engine=FakeLoanEngine(),
         sink=RecordingSink(),
@@ -64,6 +66,7 @@ async def test_save_finances_derives_the_ceiling_once_both_are_known(deps: ToolD
         "missing": ["fixed_expenses"],
         "payment_ceiling": None,
         "ceiling_source": None,
+        "ceiling_basis": None,
     }
 
     complete = await save_finances(CHECK, PERSON, {"fixed_expenses": 9000}, deps)
@@ -80,6 +83,12 @@ async def test_save_finances_derives_the_ceiling_once_both_are_known(deps: ToolD
         "missing": [],
         "payment_ceiling": "4700.00",
         "ceiling_source": "finances",
+        "ceiling_basis": {
+            "income_percent": "30.00",
+            "ceiling_by_income_share": "6000.00",
+            "disposable_percent": "50.00",
+            "ceiling_by_disposable_income": "4700.00",
+        },
     }
 
 

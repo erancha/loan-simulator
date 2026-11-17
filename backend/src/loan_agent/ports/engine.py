@@ -1,8 +1,9 @@
 """The loan engine as the application sees it: affordability, simulation, suggested tracks, the
-ceiling searches (terms and the largest loan) and the market data, with money as Decimal.
+ceiling searches (terms and the largest loan), the readings of an offer of open type and the
+market data, with money as Decimal.
 
 - LoanEngine: the engine calls
-- Bounds, Simulation, OfferTerm, ProposedTerm, MarketSeries: their parsed results
+- Bounds, Simulation, OfferTerm, ProposedTerm, OfferReadings, MarketSeries: their parsed results
 - EngineError: a call the engine refused, or a loan of more than one track, which the agent does
   not price yet; the message names the fault
 """
@@ -13,7 +14,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Protocol, runtime_checkable
 
-from loan_agent.domain.models import OptionFigures
+from loan_agent.domain.models import OptionFigures, Reading
 
 
 class EngineError(Exception):
@@ -52,8 +53,19 @@ class OfferTerm:
 class ProposedTerm:
     term_months: int
     first_payment: Decimal
-    """The first payment at term_months; the higher of the two example tracks' for a loan
-    without an offer."""
+    """The first payment at term_months; the higher of the two unlinked example tracks' for a
+    loan without an offer."""
+
+
+@dataclass(frozen=True)
+class OfferReadings:
+    prime: Decimal
+    """The prime in annual percent the readings are priced at."""
+    rate_as_of: date
+    payment_rate: Decimal | None
+    """The fixed rate that gives the offer's monthly payment; None for an offer without one."""
+    readings: tuple[Reading, ...]
+    """In the order the offer's card lists them."""
 
 
 @dataclass(frozen=True)
@@ -85,7 +97,8 @@ class LoanEngine(Protocol):
         ...
 
     async def suggest(self, principal: Decimal, term_months: int) -> list[Mapping[str, object]]:
-        """A fixed and a prime track, as engine Loan track arguments."""
+        """A fixed and a prime track, both unlinked, then a pension fund's fixed track linked to
+        the CPI, as engine Loan track arguments."""
         ...
 
     async def offer_term(self, track: Mapping[str, object], payment_ceiling: Decimal) -> OfferTerm:
@@ -93,7 +106,8 @@ class LoanEngine(Protocol):
         ...
 
     async def propose_term(self, principal: Decimal, payment_limit: Decimal) -> ProposedTerm:
-        """The shortest term at which the example tracks both start below payment_limit."""
+        """The shortest term at which the unlinked example tracks both start below
+        payment_limit."""
         ...
 
     async def propose_offer_term(
@@ -105,13 +119,27 @@ class LoanEngine(Protocol):
     async def comfortable_term(
         self, principal: Decimal, payment_ceiling: Decimal, *, any_track: bool
     ) -> int | None:
-        """The shortest term whose highest payment stays within the ceiling, on every example
-        track or, with any_track, on at least one; None when no term the engine prices fits."""
+        """The shortest term whose highest payment stays within the ceiling, on both unlinked
+        example tracks or, with any_track, on at least one; None when no term the engine prices
+        fits."""
         ...
 
     async def largest_loan(self, payment_ceiling: Decimal, term_months: int) -> Decimal | None:
-        """The largest loan the ceiling carries at the term; None when even the smallest loan
-        the engine prices does not fit."""
+        """The largest loan the ceiling carries at the term on an unlinked example track; None
+        when even the smallest loan the engine prices does not fit."""
+        ...
+
+    async def offer_readings(
+        self,
+        principal: Decimal,
+        term_months: int,
+        stated_rate: Decimal | None,
+        monthly_payment: Decimal | None,
+        *,
+        prime_total: bool,
+    ) -> OfferReadings:
+        """The loans an offer of open type may mean: from stated_rate when it is given, with
+        prime_total also as prime's total rate today, otherwise from monthly_payment."""
         ...
 
     async def market_series(self, months: int) -> MarketSeries:

@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from loan_agent.application.check_tools import MAX_TERM, MIN_TERM
 from loan_agent.domain.models import (
+    AwaitingOffer,
     CeilingSource,
     Check,
     Finances,
@@ -16,6 +17,7 @@ from loan_agent.domain.models import (
     Option,
     OptionFigures,
     OptionSource,
+    ReadingKind,
 )
 from loan_agent.domain.models import Recommendation as DomainRecommendation
 
@@ -42,6 +44,18 @@ class Recommendation(RecommendationSummary):
     reasoning: str
 
 
+class AwaitingSummary(BaseModel):
+    """An offer that awaits its lender's answer, as the checks list links to it."""
+
+    id: str
+    lender: str
+    monthly_payment: Decimal | None
+
+    @classmethod
+    def of(cls, offer: AwaitingOffer) -> Self:
+        return cls(id=offer.id, lender=offer.lender, monthly_payment=offer.monthly_payment)
+
+
 class CheckSummary(BaseModel):
     id: str
     created_at: datetime
@@ -51,10 +65,18 @@ class CheckSummary(BaseModel):
     recommendation: RecommendationSummary | None
     recommends_examples_only: bool
     """Every option the recommendation names is an example nobody can take."""
+    compares_options: bool
+    """The recommendation's card shows more than one option, so it ranks them; one option alone
+    is evaluated, not recommended. False without a recommendation."""
     archived: bool
     """Closed by the person; the check is read-only until restored."""
     started: bool
-    """The person has sent the check a message; before that it holds only the opening line."""
+    """The person has sent the check a message; before that it shows only the opening card."""
+    has_finances: bool
+    """The check holds a payment ceiling or a finances figure: something its finances line
+    shows."""
+    awaiting_offers: list[AwaitingSummary]
+    """Oldest first."""
 
     @classmethod
     def of(
@@ -62,7 +84,9 @@ class CheckSummary(BaseModel):
         check: Check,
         recommendation: DomainRecommendation | None,
         recommends_examples_only: bool,
+        compares_options: bool,
         started: bool,
+        awaiting: list[AwaitingOffer],
     ) -> Self:
         return cls(
             id=check.id,
@@ -73,8 +97,11 @@ class CheckSummary(BaseModel):
             if recommendation is None
             else RecommendationSummary.of(recommendation),
             recommends_examples_only=recommends_examples_only,
+            compares_options=compares_options,
             archived=check.archived_at is not None,
             started=started,
+            has_finances=check.payment_ceiling is not None or check.finances.has_figures(),
+            awaiting_offers=[AwaitingSummary.of(offer) for offer in awaiting],
         )
 
 
@@ -146,6 +173,13 @@ class Message(BaseModel):
         return text
 
 
+class Opening(Message):
+    """The opening card's goal and amount, with the line that tells them."""
+
+    purpose: str = Field(min_length=1)
+    amount: Decimal = Field(gt=0)
+
+
 class TermCeiling(Message):
     """A payment ceiling the person typed on the term card, with the line that tells it."""
 
@@ -157,6 +191,20 @@ class TermConfirmation(BaseModel):
 
     term_months: int = Field(ge=MIN_TERM, le=MAX_TERM)
     payment_ceiling: Decimal | None = Field(default=None, gt=0)
+
+
+class ReadingConfirmation(BaseModel):
+    """The reading the person confirms on an awaiting offer's card."""
+
+    reading: ReadingKind
+
+
+class AmountAnswer(BaseModel):
+    """The lender's answer to an offer quoted for less than the check's loan: whether it lends the
+    loan amount on the same terms, with the reading chosen on a card of several."""
+
+    covers: bool
+    reading: ReadingKind | None = None
 
 
 class FinancesUpdate(BaseModel):

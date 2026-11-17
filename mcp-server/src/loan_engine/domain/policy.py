@@ -1,27 +1,36 @@
 """Typical tracks and the terms and loan sizes at which they fit a payment ceiling.
 
-- suggest_tracks(): fixed and prime tracks priced from the published average bank rate
-- shortest_comfortable_term(): the shortest term at which those tracks fit the payment ceiling
+- lender_tracks(): fixed and prime tracks, both unlinked, priced from the published average bank
+  rate: what most consumer lenders offer
+- suggest_tracks(): those two and a pension fund's fixed track linked to the CPI
+- shortest_comfortable_term(): the shortest term at which the lender tracks fit the ceiling
 - shortest_comfortable_offer_term(): the same search for one real offer, up to its longest term
 - proposed_term(), proposed_offer_term(): the shortest term whose first payment is under a limit
 - largest_comfortable_loan(): the largest loan on which a track fits the ceiling at a given term
+- rate_against_market(): whether an unlinked track's rate today is above, similar to or below
+  the published average rate on consumer loans
 """
 
 from collections.abc import Callable, Iterable
 from decimal import Decimal
+from typing import Literal
 
 from loan_engine.domain.assumptions import (
     LOAN_STEP,
+    PENSION_FUND_RATE,
+    SIMILAR_RATE_POINTS,
     TERM_STEP,
 )
-from loan_engine.domain.history import MarketHistory, simulate
+from loan_engine.domain.history import MarketHistory, rate_today, simulate
 from loan_engine.domain.limits import MAX_PRINCIPAL, MAX_TERM, MIN_PRINCIPAL
 from loan_engine.domain.models import Track
 
 _TERMS = range(TERM_STEP, MAX_TERM + 1, TERM_STEP)
 
+RateAgainstMarket = Literal["above", "similar", "below"]
 
-def suggest_tracks(principal: Decimal, term_months: int, history: MarketHistory) -> list[Track]:
+
+def lender_tracks(principal: Decimal, term_months: int, history: MarketHistory) -> list[Track]:
     """Unlinked tracks only: no published series covers CPI-linked consumer loans."""
     common = {
         "principal": principal,
@@ -39,6 +48,30 @@ def suggest_tracks(principal: Decimal, term_months: int, history: MarketHistory)
     ]
 
 
+def suggest_tracks(principal: Decimal, term_months: int, history: MarketHistory) -> list[Track]:
+    """The lender tracks, then a pension fund's loan to its member: fixed, linked to the CPI."""
+    pension = Track(
+        principal=principal,
+        term_months=term_months,
+        rate_kind="fixed",
+        annual_rate=PENSION_FUND_RATE,
+        cpi_linked=True,
+        method="spitzer",
+    )
+    return [*lender_tracks(principal, term_months, history), pension]
+
+
+def rate_against_market(track: Track, history: MarketHistory) -> RateAgainstMarket | None:
+    """None for a CPI-linked track: its rate is on top of the CPI, so setting it against the
+    unlinked average would compare unlike rates."""
+    if track.cpi_linked:
+        return None
+    gap = rate_today(track, history) - history.consumer_rate
+    if abs(gap) <= SIMILAR_RATE_POINTS:
+        return "similar"
+    return "above" if gap > 0 else "below"
+
+
 def shortest_comfortable_term(
     principal: Decimal,
     payment_ceiling: Decimal,
@@ -46,13 +79,13 @@ def shortest_comfortable_term(
     *,
     any_track: bool = False,
 ) -> int | None:
-    """The shortest term, in TERM_STEP-month steps up to MAX_TERM, at which every suggested
+    """The shortest term, in TERM_STEP-month steps up to MAX_TERM, at which every lender
     track's highest recurring payment, in its worst historical window for a variable track, stays
     within the payment ceiling, or with any_track at least one track's does; None when no term
     does."""
     return _first_term(
         _TERMS,
-        lambda term: suggest_tracks(principal, term, history),
+        lambda term: lender_tracks(principal, term, history),
         _within_ceiling(payment_ceiling, history, any_track=any_track),
     )
 
@@ -70,11 +103,11 @@ def shortest_comfortable_offer_term(
 
 
 def proposed_term(principal: Decimal, payment_limit: Decimal, history: MarketHistory) -> int:
-    """The shortest term, in TERM_STEP-month steps up to MAX_TERM, at which every suggested
+    """The shortest term, in TERM_STEP-month steps up to MAX_TERM, at which every lender
     track's first payment is below the limit; MAX_TERM when none is."""
     term = _first_term(
         _TERMS,
-        lambda term: suggest_tracks(principal, term, history),
+        lambda term: lender_tracks(principal, term, history),
         _first_payments_below(payment_limit, history),
     )
     return MAX_TERM if term is None else term
@@ -93,13 +126,13 @@ def largest_comfortable_loan(
     payment_ceiling: Decimal, term_months: int, history: MarketHistory
 ) -> Decimal | None:
     """The largest loan, in whole LOAN_STEP shekels up to MAX_PRINCIPAL, for which at least one
-    suggested track over term_months stays within the payment ceiling; None when even
+    lender track over term_months stays within the payment ceiling; None when even
     MIN_PRINCIPAL does not."""
 
     def best_peak(principal: Decimal) -> Decimal:
-        return min(_peak_payments(suggest_tracks(principal, term_months, history), history))
+        return min(_peak_payments(lender_tracks(principal, term_months, history), history))
 
-    # A suggested track carries no fee, so its payment grows in proportion to the principal and
+    # A lender track carries no fee, so its payment grows in proportion to the principal and
     # the peak at MIN_PRINCIPAL places the answer; the loop absorbs the rounding of payments.
     proportional = MIN_PRINCIPAL * payment_ceiling / best_peak(Decimal(MIN_PRINCIPAL))
     loan = min(proportional // LOAN_STEP * LOAN_STEP, Decimal(MAX_PRINCIPAL))

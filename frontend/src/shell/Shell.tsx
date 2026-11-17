@@ -10,6 +10,7 @@ import {
 } from '../api/checks.ts'
 import { ApiException, errorText } from '../api/client.ts'
 import type { CheckSummary, User } from '../api/types.ts'
+import type { AwaitingFocus } from '../check/Chat.tsx'
 import { CheckPage } from '../check/CheckPage.tsx'
 import { AccountMenu } from './AccountMenu.tsx'
 import { ChecksList } from './ChecksList.tsx'
@@ -59,8 +60,15 @@ export function Shell({ user, onSignOut }: Props) {
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const [wantedId, setWantedId] = useState(hashedId)
   const [pane, setPane] = useState<Pane>('chat')
+  // The awaiting offer whose card the open check brings into view: the list link that opened it.
+  const [focusAwaiting, setFocusAwaiting] = useState<AwaitingFocus | null>(null)
+  const focusRequests = useRef(0)
   // Kept here because the checks list is rebuilt with the check page on every switch of checks.
   const [archivedOpen, setArchivedOpen] = useState(false)
+  // Whether the open check shows its finances line; each check opens with it hidden.
+  const [showFinances, setShowFinances] = useState(false)
+  // Whether the open check's term card takes an answer; its finances link is hidden meanwhile.
+  const [termCardLive, setTermCardLive] = useState(false)
   const listedOnce = useRef(false)
 
   const latest = useLatest()
@@ -102,6 +110,8 @@ export function Shell({ user, onSignOut }: Props) {
     setWantedId(id)
     setCreateError(null)
     setPane(opening)
+    setFocusAwaiting(null)
+    setShowFinances(false)
   }
 
   // A check with a recommendation opens on its card, the answer the person comes back for; any
@@ -110,6 +120,24 @@ export function Shell({ user, onSignOut }: Props) {
     const check = checks?.find((listed) => listed.id === id)
     if (check === undefined) throw new Error(`check ${id} is not in the list it was picked from`)
     select(id, check.recommendation === null ? 'chat' : 'card')
+  }
+
+  // An awaiting offer is answered on its card in the conversation, so its check opens there.
+  function openAwaiting(checkId: string, awaitingId: string) {
+    select(checkId, 'chat')
+    focusRequests.current += 1
+    setFocusAwaiting({ id: awaitingId, request: focusRequests.current })
+  }
+
+  // The finances line sits above the conversation, so the link that shows it opens its check there.
+  function toggleFinances(id: string) {
+    if (id === selectedId && showFinances) {
+      setShowFinances(false)
+      return
+    }
+    if (id === selectedId) setPane('chat')
+    else select(id, 'chat')
+    setShowFinances(true)
   }
 
   // Folding the archived group would hide the open check when it is archived, so the newest
@@ -224,6 +252,10 @@ export function Shell({ user, onSignOut }: Props) {
         onArchive={(id) => void archive(id)}
         onRestore={(id) => void restore(id)}
         onDelete={(id) => void remove(id)}
+        onOpenAwaiting={openAwaiting}
+        financesShown={showFinances}
+        financesLocked={termCardLive}
+        onFinancesToggle={toggleFinances}
       />
     )
 
@@ -258,6 +290,9 @@ export function Shell({ user, onSignOut }: Props) {
             onChecksChanged={refresh}
             onClone={(line) => duplicate(selected.id, line)}
             onOpenCheck={(id) => void openCheck(id)}
+            focusAwaiting={focusAwaiting}
+            showFinances={showFinances}
+            onTermCardLive={setTermCardLive}
           />
         </main>
       )}

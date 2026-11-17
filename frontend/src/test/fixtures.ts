@@ -3,13 +3,18 @@
  * `recommendationPrime` carry figures from an engine run; the other options are hand-made.
  */
 import type {
+  AwaitingOffer,
   ChartShown,
   CheckEvent,
   Finances,
   LoanRequest,
   LoanSimulation,
+  OfferIdentified,
+  OptionPrice,
   OptionSaved,
   Question,
+  Reading,
+  ReadingKind,
   RecommendationPresented,
   Track,
   TrackSimulation,
@@ -114,6 +119,7 @@ interface OptionSpec {
   simulation: Omit<TrackSimulation, 'schedule' | 'balloon_due'> & {
     balloon_due?: string | null
   }
+  price?: OptionPrice
   seq: number
 }
 
@@ -148,6 +154,7 @@ function savedOption(spec: OptionSpec): EventOf<'option.saved'> {
       total_paid: track.total_paid,
       rate_as_of: RATES_AS_OF,
       cpi_as_of: CPI_AS_OF,
+      price: spec.price ?? null,
     },
     result,
   }
@@ -223,6 +230,12 @@ export const optionOfferFixed = savedOption({
   offer_date: '2026-11-02',
   track: fixedTrack,
   seq: 7,
+  price: {
+    rate_today: '6.9',
+    against_market: 'below',
+    market_rate: '7.9',
+    market_rate_month: '2026-08-01',
+  },
   simulation: {
     first_payment: '890.00',
     max_base_payment: '890.00',
@@ -292,4 +305,135 @@ export function checkArchived(seq: number): EventOf<'check.archived'> {
     data: { archived_at: '2026-11-14T09:30:00+00:00' },
     seq,
   }
+}
+
+const AVIS_TRACK: Track = {
+  principal: '45000',
+  term_months: 60,
+  rate_kind: 'fixed',
+  annual_rate: '10.58',
+  prime_spread: null,
+  cpi_linked: false,
+  method: 'spitzer',
+}
+
+/** An offer of 45,000 over 60 months known by its payment alone, so the readings are the fixed
+ * rate that gives 969, the matching prime margin and the same rate linked to the index. */
+export const awaitingAvis: AwaitingOffer = {
+  awaiting_id: 'a-1',
+  lender: 'סוכנות אוויס רכבים',
+  amount: '45000',
+  term_months: 60,
+  monthly_payment: '969',
+  payment_rate: '10.58',
+  type_words: [],
+  readings: [
+    {
+      kind: 'fixed_unlinked',
+      track: AVIS_TRACK,
+      first_payment: '969',
+      total_rate: '10.58',
+      approximate: false,
+    },
+    {
+      kind: 'prime_margin',
+      track: { ...AVIS_TRACK, rate_kind: 'prime', annual_rate: null, prime_spread: '5.83' },
+      first_payment: '969',
+      total_rate: '10.58',
+      approximate: false,
+    },
+    {
+      kind: 'fixed_linked',
+      track: { ...AVIS_TRACK, cpi_linked: true },
+      first_payment: '969',
+      total_rate: '10.58',
+      approximate: true,
+    },
+  ],
+  likely: null,
+  identified: false,
+  prime: '4.75',
+  rate_as_of: '2026-11-15',
+}
+
+/** An offer of prime + 6.45 quoted on 20,000 that the check prices on its 45,000 loan. */
+export const identifiedMax: OfferIdentified = {
+  option_id: 'offer-max',
+  lender: 'מקס',
+  reading: {
+    kind: 'prime_margin',
+    track: { ...AVIS_TRACK, rate_kind: 'prime', annual_rate: null, prime_spread: '6.45' },
+    first_payment: '934',
+    total_rate: '11.2',
+    approximate: false,
+  },
+  prime: '4.75',
+  rate_as_of: '2026-11-15',
+  monthly_payment: '934',
+  quoted_amount: '20000',
+  loan_amount: '45000',
+}
+
+/** Max's prime + 6.45 at 934 a month, identified on its 20,000 and awaiting Max's answer on the
+ * check's loan of 45,000. */
+export const awaitingMaxShort: AwaitingOffer = {
+  awaiting_id: 'a-max',
+  lender: 'מקס',
+  amount: '20000',
+  term_months: 24,
+  monthly_payment: '934',
+  payment_rate: '11.17',
+  type_words: ['prime'],
+  readings: [identifiedMax.reading],
+  likely: null,
+  identified: true,
+  prime: '4.75',
+  rate_as_of: '2026-11-15',
+}
+
+export function offerDropped(
+  seq: number,
+  offer: AwaitingOffer,
+  loanAmount: string,
+): EventOf<'offer.dropped'> {
+  return {
+    type: 'offer.dropped',
+    data: {
+      awaiting_id: offer.awaiting_id,
+      lender: offer.lender,
+      quoted_amount: offer.amount,
+      loan_amount: loanAmount,
+    },
+    seq,
+  }
+}
+
+export function offerAwaiting(seq: number, offer: AwaitingOffer): EventOf<'offer.awaiting'> {
+  return { type: 'offer.awaiting', data: offer, seq }
+}
+
+export function offerIdentified(seq: number, offer: OfferIdentified): EventOf<'offer.identified'> {
+  return { type: 'offer.identified', data: offer, seq }
+}
+
+export function offerUnrecognized(
+  seq: number,
+  lender: string | null,
+): EventOf<'offer.unrecognized'> {
+  return { type: 'offer.unrecognized', data: { lender }, seq }
+}
+
+export function offerSettled(
+  seq: number,
+  awaiting_id: string,
+  reading: Reading,
+): EventOf<'offer.settled'> {
+  return { type: 'offer.settled', data: { awaiting_id, kind: reading.kind, reading }, seq }
+}
+
+/** The reading of the given kind on Avis's card. */
+export function avisReading(kind: ReadingKind): Reading {
+  const reading = awaitingAvis.readings.find((r) => r.kind === kind)
+  if (reading === undefined) throw new Error(`Avis's card has no ${kind} reading`)
+  return reading
 }

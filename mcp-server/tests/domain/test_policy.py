@@ -1,14 +1,17 @@
+import dataclasses
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
-from loan_engine.domain.assumptions import LOAN_STEP
+from loan_engine.domain.assumptions import LOAN_STEP, PENSION_FUND_RATE, SIMILAR_RATE_POINTS
 from loan_engine.domain.history import MarketHistory, simulate
 from loan_engine.domain.limits import MAX_TERM
 from loan_engine.domain.models import Track
 from loan_engine.domain.policy import (
     largest_comfortable_loan,
+    lender_tracks,
     proposed_offer_term,
     proposed_term,
+    rate_against_market,
     shortest_comfortable_offer_term,
     shortest_comfortable_term,
     suggest_tracks,
@@ -33,7 +36,7 @@ def test_suggest_tracks_from_published_average() -> None:
         consumer_rate_month=date(2026, 8, 1),
         consumer_month_prime=Decimal("5.0"),
     )
-    fixed, prime = suggest_tracks(Decimal(31000), 48, history)
+    fixed, prime, pension = suggest_tracks(Decimal(31000), 48, history)
     assert (fixed.rate_kind, fixed.annual_rate, fixed.prime_spread) == (
         "fixed",
         Decimal("7.9"),
@@ -44,9 +47,15 @@ def test_suggest_tracks_from_published_average() -> None:
         None,
         Decimal("2.9"),
     )
-    for track in (fixed, prime):
+    assert (pension.rate_kind, pension.annual_rate, pension.cpi_linked) == (
+        "fixed",
+        PENSION_FUND_RATE,
+        True,
+    )
+    assert not fixed.cpi_linked and not prime.cpi_linked
+    assert lender_tracks(Decimal(31000), 48, history) == [fixed, prime]
+    for track in (fixed, prime, pension):
         assert (track.principal, track.term_months) == (31000, 48)
-        assert not track.cpi_linked
         assert track.method == "spitzer"
         assert track.one_time_fee == 0 and track.monthly_fee == 0
 
@@ -73,7 +82,7 @@ FLAT = ten_years([Decimal("3.5")] * 120)
 def _peak(principal: Decimal, term: int, history: MarketHistory) -> Decimal:
     return max(
         (o.base.max_payment if o.worst is None else o.worst.max_payment)
-        for o in (simulate(t, history) for t in suggest_tracks(principal, term, history))
+        for o in (simulate(t, history) for t in lender_tracks(principal, term, history))
     )
 
 
@@ -114,8 +123,21 @@ def _fits_on_one_track(
 ) -> bool:
     return any(
         (o.base.max_payment if o.worst is None else o.worst.max_payment) <= ceiling
-        for o in (simulate(t, history) for t in suggest_tracks(principal, term, history))
+        for o in (simulate(t, history) for t in lender_tracks(principal, term, history))
     )
+
+
+def test_the_searches_leave_out_the_pension_fund_example() -> None:
+    # At a 12% bank average the pension fund's 4% fits 800 a month, in its worst historical
+    # window, from 42 months; the lenders' tracks from 54.
+    dear = dataclasses.replace(FLAT, consumer_rate=Decimal(12))
+    principal, ceiling = Decimal(31000), Decimal(800)
+    worst = simulate(suggest_tracks(principal, 42, dear)[-1], dear).worst
+    assert worst is not None and worst.max_payment <= ceiling
+    assert _peak(principal, 54, dear) <= ceiling < _peak(principal, 48, dear)
+
+    assert shortest_comfortable_term(principal, ceiling, dear, any_track=True) == 54
+    assert largest_comfortable_loan(ceiling, 48, dear) == 30000
 
 
 def test_a_ceiling_below_the_smallest_loan_carries_none() -> None:
@@ -161,7 +183,7 @@ def test_a_rate_rise_in_history_lengthens_the_term_through_the_prime_track() -> 
 
 def _first_payment(principal: Decimal, term: int, history: MarketHistory) -> Decimal:
     return max(
-        simulate(t, history).base.first_payment for t in suggest_tracks(principal, term, history)
+        simulate(t, history).base.first_payment for t in lender_tracks(principal, term, history)
     )
 
 
@@ -183,3 +205,32 @@ def test_an_offer_proposes_its_own_maximum_when_nothing_is_under_the_limit() -> 
 
 def test_an_offer_proposes_the_first_term_under_the_limit() -> None:
     assert proposed_offer_term(_offer(84), Decimal(1500), FLAT) == 24
+
+
+def _priced_against(history: MarketHistory, **track: object) -> str | None:
+    fields: dict[str, object] = {
+        "principal": Decimal(45000),
+        "term_months": 60,
+        "cpi_linked": False,
+        "method": "spitzer",
+        **track,
+    }
+    return rate_against_market(Track(**fields), history)  # type: ignore[arg-type]
+
+
+def test_an_unlinked_rate_is_set_against_the_average_consumer_rate() -> None:
+    history = dataclasses.replace(FLAT, current_boi_rate=Decimal("3.25"))
+    assert SIMILAR_RATE_POINTS == Decimal("0.25")
+    # Prime today is 4.75, so prime + 6 charges 10.75, above the average of 7.9.
+    assert _priced_against(history, rate_kind="prime", prime_spread=Decimal(6)) == "above"
+    assert _priced_against(history, rate_kind="fixed", annual_rate=Decimal("6.9")) == "below"
+    for rate in ("7.65", "7.9", "8.15"):
+        assert _priced_against(history, rate_kind="fixed", annual_rate=Decimal(rate)) == "similar"
+    assert _priced_against(history, rate_kind="fixed", annual_rate=Decimal("8.16")) == "above"
+    assert _priced_against(history, rate_kind="fixed", annual_rate=Decimal("7.64")) == "below"
+
+
+def test_a_linked_rate_is_not_set_against_the_unlinked_average() -> None:
+    history = FLAT
+    linked = {"rate_kind": "fixed", "annual_rate": Decimal(4), "cpi_linked": True}
+    assert _priced_against(history, **linked) is None

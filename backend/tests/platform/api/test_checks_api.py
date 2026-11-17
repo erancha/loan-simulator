@@ -1,7 +1,7 @@
 """Checks over HTTP: a person creates, lists and reads only their own checks, sends messages
-within the turn rules, and their ID token never reaches a checkpoint. Startup ends the turns a
-stopped process left running; the health probe answers while the process runs and the readiness
-probe needs the database."""
+and the answers to the page's cards within the turn rules, and their ID token never reaches a
+checkpoint. Startup ends the turns a stopped process left running; the health probe answers while
+the process runs and the readiness probe needs the database."""
 
 import asyncio
 import threading
@@ -13,14 +13,23 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from app_world import DANA, DANA_TOKEN, FINANCES, OMER, OMER_TOKEN, World, seed_recommended_check
+from app_world import (
+    DANA,
+    DANA_TOKEN,
+    FINANCES,
+    LOAN,
+    OMER,
+    OMER_TOKEN,
+    World,
+    seed_recommended_check,
+)
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.checkpoint.memory import InMemorySaver
 
-from fakes import NOW, PRIME_TRACK
-from loan_agent.domain.models import Check, Finances, OptionSource
+from fakes import NOW, PRIME_SIMULATION, PRIME_TRACK, awaiting_offer
+from loan_agent.domain.models import Check, Finances, LoanRequest, OptionSource
 from loan_agent.platform.check_runner import FAILURE_MESSAGE
 from loan_agent.ports.engine import EngineError
 
@@ -57,8 +66,11 @@ def test_list_shows_only_the_persons_checks_newest_first(world: World, client: T
             "term_months": None,
             "recommendation": None,
             "recommends_examples_only": False,
+            "compares_options": False,
             "archived": False,
             "started": False,
+            "has_finances": False,
+            "awaiting_offers": [],
         },
         {
             "id": "c-rec",
@@ -74,10 +86,51 @@ def test_list_shows_only_the_persons_checks_newest_first(world: World, client: T
                 "created_at": "2026-10-27T09:00:00Z",
             },
             "recommends_examples_only": False,
+            "compares_options": False,
             "archived": False,
             "started": False,
+            "has_finances": True,
+            "awaiting_offers": [],
         },
     ]
+
+
+def test_list_shows_a_checks_awaiting_offers_oldest_first(world: World, client: TestClient) -> None:
+    seed_recommended_check(world)
+    world.awaiting.rows["c-rec"] = [
+        awaiting_offer("c-rec", "a1", "סוכנות אוויס רכבים", Decimal(969)),
+        awaiting_offer("c-rec", "a2", "בנק הפועלים", None),
+    ]
+
+    [listed] = client.get("/api/checks").json()
+
+    assert listed["awaiting_offers"] == [
+        {"id": "a1", "lender": "סוכנות אוויס רכבים", "monthly_payment": "969"},
+        {"id": "a2", "lender": "בנק הפועלים", "monthly_payment": None},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("finances", "ceiling", "has_finances"),
+    [
+        (Finances(), None, False),
+        (Finances(fixed_expenses=Decimal(6500)), None, True),
+        (Finances(), Decimal(1000), True),
+    ],
+)
+def test_list_says_whether_the_check_holds_a_ceiling_or_a_finances_figure(
+    world: World,
+    client: TestClient,
+    finances: Finances,
+    ceiling: Decimal | None,
+    has_finances: bool,
+) -> None:
+    source = None if ceiling is None else "stated"
+    world.checks.rows["c1"] = Check("c1", DANA.id, NOW, None, None, ceiling, source, finances)
+
+    [listed] = client.get("/api/checks").json()
+
+    assert listed["has_finances"] is has_finances
 
 
 def test_a_check_is_started_once_the_person_sends_it_a_message(
@@ -128,6 +181,30 @@ def test_list_says_whether_the_recommendation_names_only_examples(
     assert listed["recommends_examples_only"] is examples_only
 
 
+@pytest.mark.parametrize(
+    ("second", "compares"),
+    [
+        (None, False),
+        ({"source": "offer"}, True),
+        # The check's term is 60 months: an example of another term is off the card.
+        ({"source": "example"}, False),
+        ({"source": "example", "loan": {"tracks": [{**PRIME_TRACK, "term_months": 60}]}}, True),
+    ],
+)
+def test_list_says_whether_the_recommendation_compares_more_than_one_option(
+    world: World, client: TestClient, second: dict[str, object] | None, compares: bool
+) -> None:
+    seed_recommended_check(world)
+    seeded = world.options.rows["c-rec"][0]
+    if second is not None:
+        added = replace(seeded, id="o2", **second)  # type: ignore[arg-type]
+        world.options.rows["c-rec"].append(added)
+
+    [listed] = client.get("/api/checks").json()
+
+    assert listed["compares_options"] is compares
+
+
 def test_get_shows_the_loan_figures_options_and_the_recommendation(
     world: World, client: TestClient
 ) -> None:
@@ -163,6 +240,12 @@ def test_get_shows_the_loan_figures_options_and_the_recommendation(
                 "total_paid": "90623.31",
                 "rate_as_of": "2026-10-26",
                 "cpi_as_of": "2026-09-01",
+                "price": {
+                    "rate_today": "6.25",
+                    "against_market": "below",
+                    "market_rate": "7.9",
+                    "market_rate_month": "2026-08-01",
+                },
             },
             "created_at": "2026-10-27T09:00:00Z",
         }
@@ -249,6 +332,95 @@ def test_the_offer_sample_is_accepted_with_202_and_answered_without_the_model(
         "message.user",
         "turn.status",
     ]
+
+
+OPENING = {"text": "רכב: הלוואה בסך 45,000 ₪", "purpose": "רכב", "amount": "45000"}
+
+
+def test_the_opening_is_accepted_with_202_and_saves_the_loan(
+    world: World, client: TestClient
+) -> None:
+    world.engine.simulations = [PRIME_SIMULATION, PRIME_SIMULATION]
+    check_id = client.post("/api/checks").json()["id"]
+
+    response = client.post(f"/api/checks/{check_id}/opening", json=OPENING)
+    world.drain(client)
+
+    assert response.status_code == 202
+    assert world.checks.rows[check_id].loan == LoanRequest("רכב", Decimal(45000))
+    assert [event.type for event in world.events.rows[check_id]][:3] == [
+        "loan.set",
+        "message.user",
+        "turn.status",
+    ]
+
+
+def test_a_refused_opening_is_422_with_the_reason(world: World, client: TestClient) -> None:
+    world.engine.suggest_error = EngineError("principal below 10000")
+    check_id = client.post("/api/checks").json()["id"]
+
+    response = client.post(f"/api/checks/{check_id}/opening", json={**OPENING, "amount": "500"})
+
+    assert response.status_code == 422
+    assert "principal below 10000" in response.json()["detail"]
+    assert check_id not in world.events.rows
+
+
+def test_an_opening_with_a_blank_purpose_or_no_amount_is_422(client: TestClient) -> None:
+    check_id = client.post("/api/checks").json()["id"]
+    for body in (
+        {**OPENING, "purpose": ""},
+        {**OPENING, "purpose": "   "},
+        {**OPENING, "amount": "0"},
+    ):
+        assert client.post(f"/api/checks/{check_id}/opening", json=body).status_code == 422
+
+
+def test_a_confirmed_term_is_accepted_with_202_and_opens_the_offer_form(
+    world: World, client: TestClient
+) -> None:
+    check_id = client.post("/api/checks").json()["id"]
+    world.checks.rows[check_id] = replace(world.checks.rows[check_id], loan=LOAN, term_months=60)
+
+    response = client.post(f"/api/checks/{check_id}/term-confirmation", json={"text": "אישור"})
+    world.drain(client)
+
+    assert response.status_code == 202
+    asked = world.events.rows[check_id][2]
+    assert (asked.type, asked.data["question"]["kind"]) == ("question.asked", "offer")
+
+
+def test_a_skipped_offer_form_is_accepted_with_202_and_answered_without_the_model(
+    world: World, client: TestClient
+) -> None:
+    check_id = client.post("/api/checks").json()["id"]
+
+    response = client.post(f"/api/checks/{check_id}/offer-skip", json={"text": "דילוג"})
+    world.drain(client)
+
+    assert response.status_code == 202
+    assert [event.type for event in world.events.rows[check_id]] == [
+        "message.user",
+        "turn.status",
+        "message.assistant",
+        "turn.status",
+    ]
+
+
+def test_the_runners_replies_on_another_persons_check_are_404(
+    world: World, public_key: Path
+) -> None:
+    with world.client(public_key, token=OMER_TOKEN) as omer:
+        omers = omer.post("/api/checks").json()["id"]
+    with world.client(public_key, token=DANA_TOKEN) as dana:
+        for route, body in (
+            ("opening", OPENING),
+            ("term-confirmation", {"text": "אישור"}),
+            ("offer-skip", {"text": "דילוג"}),
+        ):
+            assert dana.post(f"/api/checks/{omers}/{route}", json=body).status_code == 404
+    assert world.checks.rows[omers].loan is None
+    assert world.events.rows == {}
 
 
 def test_an_empty_message_is_422(client: TestClient) -> None:
@@ -604,6 +776,127 @@ def test_put_term_to_an_archived_check_is_409(world: World, client: TestClient) 
     assert response.status_code == 409
 
 
+def seed_awaiting_offer(world: World, amount: Decimal = LOAN.amount) -> None:
+    """An awaiting offer on the recommended check, quoted for its loan amount unless amount says
+    otherwise."""
+    seed_recommended_check(world)
+    world.awaiting.rows["c-rec"] = [awaiting_offer("c-rec", "a1", "אוויס", None, amount)]
+
+
+AMOUNT_URL = "/api/checks/c-rec/awaiting-offers/a1/amount"
+
+
+def test_put_amount_saves_a_short_offer_at_the_loan_amount(
+    world: World, client: TestClient
+) -> None:
+    seed_awaiting_offer(world, Decimal(45000))
+    world.engine.simulations = [PRIME_SIMULATION]
+
+    response = client.put(AMOUNT_URL, json={"covers": True, "reading": "fixed_unlinked"})
+
+    assert response.status_code == 204
+    assert [event.type for event in world.events.rows["c-rec"][-2:]] == [
+        "option.saved",
+        "offer.settled",
+    ]
+    assert world.awaiting.rows["c-rec"] == []
+
+
+def test_put_amount_drops_a_short_offer_the_lender_does_not_cover(
+    world: World, client: TestClient
+) -> None:
+    seed_awaiting_offer(world, Decimal(45000))
+
+    response = client.put(AMOUNT_URL, json={"covers": False})
+
+    assert response.status_code == 204
+    (dropped,) = [event for event in world.events.rows["c-rec"] if event.type == "offer.dropped"]
+    assert dropped.data == {
+        "awaiting_id": "a1",
+        "lender": "אוויס",
+        "quoted_amount": "45000",
+        "loan_amount": "120000",
+    }
+    assert world.awaiting.rows["c-rec"] == []
+
+
+def test_put_amount_is_422_for_an_offer_of_the_loan_amount_and_404_for_an_unknown_one(
+    world: World, client: TestClient
+) -> None:
+    seed_awaiting_offer(world)
+
+    assert client.put(AMOUNT_URL, json={"covers": False}).status_code == 422
+    unknown = "/api/checks/c-rec/awaiting-offers/nope/amount"
+    assert client.put(unknown, json={"covers": False}).status_code == 404
+    assert len(world.awaiting.rows["c-rec"]) == 1
+
+
+def test_put_awaiting_offer_saves_the_chosen_reading(world: World, client: TestClient) -> None:
+    seed_awaiting_offer(world)
+    world.engine.simulations = [PRIME_SIMULATION]
+
+    response = client.put(
+        "/api/checks/c-rec/awaiting-offers/a1", json={"reading": "fixed_unlinked"}
+    )
+
+    assert response.status_code == 204
+    assert [event.type for event in world.events.rows["c-rec"][-2:]] == [
+        "option.saved",
+        "offer.settled",
+    ]
+    assert world.awaiting.rows["c-rec"] == []
+
+
+def test_put_awaiting_offer_is_404_for_an_unknown_offer_and_a_second_confirmation(
+    world: World, client: TestClient
+) -> None:
+    seed_awaiting_offer(world)
+    url = "/api/checks/c-rec/awaiting-offers/a1"
+    world.engine.simulations = [PRIME_SIMULATION]
+
+    assert client.put(url, json={"reading": "fixed_unlinked"}).status_code == 204
+
+    assert client.put(url, json={"reading": "fixed_unlinked"}).status_code == 404
+    other = "/api/checks/c-rec/awaiting-offers/nope"
+    assert client.put(other, json={"reading": "fixed_unlinked"}).status_code == 404
+
+
+def test_put_awaiting_offer_is_404_for_another_persons_check(
+    world: World, client: TestClient
+) -> None:
+    seed_awaiting_offer(world)
+    world.checks.rows["c-rec"] = replace(world.checks.rows["c-rec"], user_id="other")
+
+    response = client.put(
+        "/api/checks/c-rec/awaiting-offers/a1", json={"reading": "fixed_unlinked"}
+    )
+
+    assert response.status_code == 404
+
+
+def test_put_awaiting_offer_is_409_on_an_archived_check(world: World, client: TestClient) -> None:
+    seed_awaiting_offer(world)
+    assert client.post("/api/checks/c-rec/archive").status_code == 204
+
+    response = client.put(
+        "/api/checks/c-rec/awaiting-offers/a1", json={"reading": "fixed_unlinked"}
+    )
+
+    assert response.status_code == 409
+
+
+@pytest.mark.parametrize("reading", ["prime_margin", "no_such_kind"])
+def test_put_awaiting_offer_is_422_for_a_reading_the_offer_lacks(
+    world: World, client: TestClient, reading: str
+) -> None:
+    seed_awaiting_offer(world)
+
+    response = client.put("/api/checks/c-rec/awaiting-offers/a1", json={"reading": reading})
+
+    assert response.status_code == 422
+    assert len(world.awaiting.rows["c-rec"]) == 1
+
+
 def test_put_finances_refuses_an_unknown_field(client: TestClient) -> None:
     check_id = client.post("/api/checks").json()["id"]
 
@@ -656,6 +949,25 @@ def test_put_finances_while_a_turn_runs_is_409(
     assert gate.entered.wait(TIMEOUT_SECONDS)
 
     response = client.put(f"/api/checks/{check_id}/finances", json={"fixed_expenses": "1"})
+
+    assert response.status_code == 409
+    assert response.json()["check_id"] == check_id
+    gate.opened.set()
+    world.drain(client)
+
+
+def test_put_awaiting_offer_while_a_turn_runs_is_409(
+    world: World, gate: Gate, client: TestClient
+) -> None:
+    """gate comes before client, so the app is built with the gated tool."""
+    world.replies(calls_size_loan(), AIMessage("בבקשה"))
+    check_id = client.post("/api/checks").json()["id"]
+    assert client.post(f"/api/checks/{check_id}/messages", json={"text": "א"}).status_code == 202
+    assert gate.entered.wait(TIMEOUT_SECONDS)
+
+    response = client.put(
+        f"/api/checks/{check_id}/awaiting-offers/a1", json={"reading": "fixed_unlinked"}
+    )
 
     assert response.status_code == 409
     assert response.json()["check_id"] == check_id

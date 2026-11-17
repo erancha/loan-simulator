@@ -28,12 +28,38 @@ export function isZero(amount: string): boolean {
 export function exceeds(amount: string, limit: string): boolean {
   assertDecimal(amount)
   assertDecimal(limit)
-  const scaled = (text: string, places: number) => {
-    const [whole, fraction = ''] = text.split('.')
-    return BigInt(whole + fraction.padEnd(places, '0'))
-  }
   const places = Math.max(amount.split('.')[1]?.length ?? 0, limit.split('.')[1]?.length ?? 0)
   return scaled(amount, places) > scaled(limit, places)
+}
+
+/** The digits of a decimal as one integer, scaled to the given number of places. */
+function scaled(text: string, places: number): bigint {
+  const [whole, fraction = ''] = text.split('.')
+  return BigInt(whole + fraction.padEnd(places, '0'))
+}
+
+/** An integer scaled by 10^places, as decimal text without trailing zeros. */
+function unscaled(value: bigint, places: number): string {
+  const padded = value.toString().padStart(places + 1, '0')
+  const whole = padded.slice(0, padded.length - places)
+  const fraction = padded.slice(padded.length - places).replace(/0+$/, '')
+  return fraction === '' ? whole : `${whole}.${fraction}`
+}
+
+/** a minus b, for b at most a; throws RangeError otherwise. */
+export function subtractAmounts(a: string, b: string): string {
+  if (exceeds(b, a)) throw new RangeError(`${b} exceeds ${a}`)
+  const places = Math.max(a.split('.')[1]?.length ?? 0, b.split('.')[1]?.length ?? 0)
+  return unscaled(scaled(a, places) - scaled(b, places), places)
+}
+
+/** A percent rounded half up to the given decimals, trailing zeros dropped: 10.58 -> 10.6. */
+export function roundedPercent(value: string, decimals: number): string {
+  assertDecimal(value)
+  const [whole, fraction = ''] = value.split('.')
+  const kept = BigInt(whole + fraction.padEnd(decimals, '0').slice(0, decimals))
+  const next = fraction[decimals]
+  return unscaled(next !== undefined && next >= '5' ? kept + 1n : kept, decimals)
 }
 
 /** Decimal text of an amount or rate the agent sent as a string or a number, without arithmetic. */

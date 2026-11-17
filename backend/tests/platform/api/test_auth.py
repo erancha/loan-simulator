@@ -26,10 +26,10 @@ PUBLIC = {
 
 
 def protected_routes(app: FastAPI) -> list[tuple[str, str]]:
-    """Each method and path the app's OpenAPI schema lists outside PUBLIC, with a check id filled
-    in."""
+    """Each method and path the app's OpenAPI schema lists outside PUBLIC, with a check id and an
+    awaiting offer id filled in."""
     routes = sorted(
-        (method.upper(), path.replace("{check_id}", "c1"))
+        (method.upper(), path.replace("{check_id}", "c1").replace("{awaiting_id}", "a1"))
         for path, operations in app.openapi()["paths"].items()
         for method in operations
         if (method.upper(), path) not in PUBLIC

@@ -15,21 +15,25 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from fakes import (
     BALLOON_SIMULATION,
+    LEUMI_READINGS,
     NOW,
     PRIME_SIMULATION,
     PRIME_TRACK,
     Clock,
     FakeLoanEngine,
     Ids,
+    InMemoryAwaitingOfferRepository,
     InMemoryCheckRepository,
     InMemoryOptionRepository,
     InMemoryRecommendationRepository,
     RecordingSink,
     ScriptedChatModel,
+    awaiting_offer,
     engine_fixture,
 )
 from loan_agent.adapters.engine_mcp import MODEL_ENGINE_TOOLS
 from loan_agent.application.agent_graph import (
+    EVALUATION_HEADING,
     RECOMMENDATION_HEADING,
     SYSTEM_PROMPT,
     AskArgs,
@@ -39,20 +43,34 @@ from loan_agent.application.agent_graph import (
     OfferTrackArgs,
     PresentRecommendationArgs,
     QuestionField,
+    ReadOfferArgs,
     SaveOptionArgs,
     SetCeilingArgs,
     SetLoanArgs,
     SetTermArgs,
     TrackArgs,
     UpdateFinancesArgs,
+    _after_tools,
     build_agent_graph,
     check_config,
 )
-from loan_agent.application.check_tools import ASKED_RESULT, ToolDeps
+from loan_agent.application.check_tools import ASKED_RESULT, READING_ON_SCREEN, ToolDeps
 from loan_agent.application.turn_state import turn_state
-from loan_agent.domain.models import Check, Finances, LoanRequest, OptionSource, Recommendation
+from loan_agent.domain.models import (
+    Check,
+    Finances,
+    LoanRequest,
+    OptionSource,
+    Recommendation,
+)
 from loan_agent.platform.checkpointer import checkpoint_serde
-from loan_agent.ports.events import QUESTION_ASKED
+from loan_agent.ports.events import (
+    OFFER_AWAITING,
+    OFFER_DROPPED,
+    OFFER_IDENTIFIED,
+    OFFER_SETTLED,
+    QUESTION_ASKED,
+)
 
 PERSON = "1001"
 CHECK = "check-1"
@@ -68,6 +86,8 @@ CHECK_TOOL_NAMES = {
     "update_finances",
     "save_option",
     "save_offer",
+    "read_offer",
+    "answer_offer_amount",
     "present_recommendation",
     "ask",
     "show_chart",
@@ -98,6 +118,7 @@ async def world() -> World:
     deps = ToolDeps(
         checks=checks,
         options=options,
+        awaiting=InMemoryAwaitingOfferRepository(),
         recommendations=recommendations,
         engine=engine,
         sink=sink,
@@ -404,12 +425,22 @@ async def test_every_tool_the_system_prompt_names_is_bound(world: World) -> None
         *AskQuestion.model_fields,
         *AskArgs.model_fields,
         *PresentRecommendationArgs.model_fields,
+        *ReadOfferArgs.model_fields,
     }
     state_keys = {
         line.split(":")[0] for line in (await turn_state(PERSON, CHECK, world.deps)).splitlines()
     }
     # Keys of a tool's result that the prompt tells the model how to use.
-    result_keys = {"ceiling_margin", "preferred_figures", "alternative_figures"}
+    result_keys = {
+        "ceiling_margin",
+        "preferred_figures",
+        "alternative_figures",
+        "preferred_price",
+        "alternative_price",
+        "only_option",
+        "interest_cost",
+        "rate_today",
+    }
     named_tools = (
         (identifiers - set(get_args(OptionSource)) - set(get_args(QuestionField)) - tool_fields)
         - state_keys
@@ -669,6 +700,20 @@ async def test_a_recommendation_written_without_its_tool_is_redone_and_never_sav
     ]
 
 
+async def test_an_evaluation_of_one_offer_written_without_its_tool_is_redone(
+    world: World,
+) -> None:
+    evaluation = AIMessage(f"**{EVALUATION_HEADING}**\nההצעה של לאומי")
+    model = ScriptedChatModel(replies=[evaluation, AIMessage("עוד אין הצעה")])
+    graph = run(world, model)
+
+    state = await graph.ainvoke(said("הצעה"), check_config(PERSON, CHECK))
+
+    assert len(model.received) == 2
+    assert "present_recommendation" in model.received[1][-1].content
+    assert state["messages"][-1].content == "עוד אין הצעה"
+
+
 async def test_a_recommendation_is_redone_only_once(world: World) -> None:
     model = ScriptedChatModel(replies=[recommendation_text(), recommendation_text()])
     graph = run(world, model)
@@ -707,6 +752,14 @@ async def test_a_recommendation_from_an_earlier_turn_does_not_back_this_ones_tex
 
 def test_the_recommendation_heading_is_the_one_the_system_prompt_asks_for() -> None:
     assert f"**{RECOMMENDATION_HEADING}**" in SYSTEM_PROMPT
+    assert f"**{EVALUATION_HEADING}**" in SYSTEM_PROMPT
+
+
+def test_the_prompt_names_examples_only_by_the_counts_and_prices_every_offer() -> None:
+    assert "option_counts" in SYSTEM_PROMPT
+    for key in ("interest_cost", "rate_today", "preferred_price", "only_option"):
+        assert key in SYSTEM_PROMPT, key
+    assert "מתחת לתקרה" in SYSTEM_PROMPT
 
 
 async def test_a_reply_with_an_english_word_is_rewritten_once(world: World) -> None:
@@ -789,7 +842,12 @@ async def test_ask_term_ends_the_turn(world: World) -> None:
     assert state["messages"][-1].content == ASKED_RESULT
     assert [e.data for e in world.sink.events] == [
         {
-            "question": {"kind": "term", "term_months": 24, "first_payment": "1750.00"},
+            "question": {
+                "kind": "term",
+                "term_months": 24,
+                "first_payment": "1750.00",
+                "basis": {"kind": "first_payment_target", "amount": "1000", "fits": False},
+            },
             "lead_in": None,
         }
     ]
@@ -810,6 +868,13 @@ async def test_ask_term_and_ask_in_one_message_are_both_refused(world: World) ->
     assert all(r.status == "error" for r in tool_messages(state["messages"]))
     assert not world.sink.events
     assert len(model.received) == 2
+
+
+def test_the_prompt_saves_three_examples_one_of_them_a_pension_funds() -> None:
+    assert "save_option לשניים" not in SYSTEM_PROMPT
+    assert "שתי הדוגמאות" not in SYSTEM_PROMPT
+    assert SYSTEM_PROMPT.count("save_option לשלושתם") == 3
+    assert "קרן פנסיה" in SYSTEM_PROMPT
 
 
 def test_the_prompt_no_longer_names_removed_tools() -> None:
@@ -842,3 +907,235 @@ async def test_a_smaller_loan_is_asked_as_a_free_question_once_the_loan_is_saved
     assert refused.status == "error" and "already known" in str(refused.content)
     assert asked.content == ASKED_RESULT
     assert "שאלה חופשית עם text" in SYSTEM_PROMPT
+
+
+async def car_loan_of_60_months(world: World) -> None:
+    await world.checks.set_loan(CHECK, LoanRequest("רכב", Decimal(45000)))
+    await world.checks.set_term(CHECK, 60)
+
+
+AVIS_OFFER = {
+    "lender": "אוויס",
+    "amount": "45000",
+    "term_months": 60,
+    "monthly_payment": "969",
+}
+LEUMI_OFFER = {
+    "lender": "לאומי",
+    "amount": "45000",
+    "term_months": 60,
+    "stated_rate": "6",
+    "monthly_payment": "972",
+    "type_words": ["prime"],
+}
+
+
+def recommend(option_id: str) -> tuple[str, dict[str, Any]]:
+    return ("present_recommendation", {"preferred_option_id": option_id, "reasoning": "הזולה"})
+
+
+def test_a_reply_with_no_tool_results_goes_back_to_the_model() -> None:
+    assert _after_tools({"messages": [HumanMessage("שלום"), AIMessage("")]}) == "model"
+
+
+async def test_an_offer_carded_on_the_screen_ends_the_turn(world: World) -> None:
+    await car_loan_of_60_months(world)
+    model = ScriptedChatModel(replies=[calls(("read_offer", AVIS_OFFER)), AIMessage("never")])
+
+    state = await run(world, model).ainvoke(said("אוויס: 969 ₪ בחודש"), check_config(PERSON, CHECK))
+
+    assert len(model.received) == 1
+    assert state["messages"][-1].content == READING_ON_SCREEN
+    assert [event.type for event in world.sink.events] == [OFFER_AWAITING]
+
+
+async def test_an_identified_offer_goes_back_to_the_model_for_the_recommendation(
+    world: World,
+) -> None:
+    await car_loan_of_60_months(world)
+    world.engine.readings = LEUMI_READINGS
+    world.engine.simulations = [PRIME_SIMULATION]
+    model = ScriptedChatModel(
+        replies=[
+            calls(("read_offer", LEUMI_OFFER)),
+            calls(recommend("option-1")),
+            AIMessage(f"**{RECOMMENDATION_HEADING}**\nלקחת את ההצעה של לאומי"),
+        ]
+    )
+
+    await run(world, model).ainvoke(said("לאומי: פריים 6, 972 ₪"), check_config(PERSON, CHECK))
+
+    assert len(model.received) == 3
+    assert OFFER_IDENTIFIED in [event.type for event in world.sink.events]
+    recommendation = await world.recommendations.latest(CHECK)
+    assert recommendation is not None
+    assert recommendation.preferred_option_id == "option-1"
+
+
+async def test_a_carded_offer_beside_an_identified_one_does_not_end_the_turn(world: World) -> None:
+    await car_loan_of_60_months(world)
+    # Avis states a payment and no number, so its card shows all four readings; only prime
+    # plus 6 fits Leumi's 972.
+    world.engine.readings = LEUMI_READINGS
+    world.engine.simulations = [PRIME_SIMULATION]
+    model = ScriptedChatModel(
+        replies=[
+            calls(("read_offer", AVIS_OFFER), ("read_offer", LEUMI_OFFER)),
+            calls(recommend("option-1")),
+            AIMessage("ההמלצה מוכנה"),
+        ]
+    )
+
+    await run(world, model).ainvoke(said("אוויס ולאומי"), check_config(PERSON, CHECK))
+
+    assert len(model.received) == 3
+    types = [event.type for event in world.sink.events]
+    assert OFFER_AWAITING in types and OFFER_IDENTIFIED in types
+
+
+async def test_the_lenders_answer_on_the_amount_in_words_saves_the_short_offer(
+    world: World,
+) -> None:
+    await world.checks.set_loan(CHECK, LoanRequest("רכב", Decimal(80000)))
+    await world.checks.set_term(CHECK, 60)
+    await world.deps.awaiting.save(awaiting_offer(CHECK, "awaiting-1", "אוויס", None))
+    world.engine.simulations = [PRIME_SIMULATION]
+    model = ScriptedChatModel(
+        replies=[
+            calls(("answer_offer_amount", {"awaiting_id": "awaiting-1", "covers": True})),
+            calls(recommend("option-1")),
+            AIMessage("ההמלצה מוכנה"),
+        ]
+    )
+
+    await run(world, model).ainvoke(
+        said("אוויס אמרו שהם נותנים 80,000 באותם תנאים"), check_config(PERSON, CHECK)
+    )
+
+    (option,) = await world.options.list(CHECK)
+    assert option.lender == "אוויס"
+    types = [event.type for event in world.sink.events]
+    assert OFFER_SETTLED in types
+    assert await world.recommendations.latest(CHECK) is not None
+
+
+async def test_the_lender_refusing_the_amount_in_words_drops_the_short_offer(
+    world: World,
+) -> None:
+    await world.checks.set_loan(CHECK, LoanRequest("רכב", Decimal(80000)))
+    await world.deps.awaiting.save(awaiting_offer(CHECK, "awaiting-1", "אוויס", None))
+    model = ScriptedChatModel(
+        replies=[
+            calls(("answer_offer_amount", {"awaiting_id": "awaiting-1", "covers": False})),
+            AIMessage("אפשר להביא הצעה מגוף אחר"),
+        ]
+    )
+
+    await run(world, model).ainvoke(said("אוויס לא נותנים יותר"), check_config(PERSON, CHECK))
+
+    assert [event.type for event in world.sink.events] == [OFFER_DROPPED]
+    assert await world.deps.awaiting.list(CHECK) == []
+    assert len(model.received) == 2
+
+
+async def test_a_refused_read_offer_goes_back_to_the_model(world: World) -> None:
+    await car_loan_of_60_months(world)
+    nameless = {key: value for key, value in AVIS_OFFER.items() if key != "lender"}
+    model = ScriptedChatModel(
+        replies=[calls(("read_offer", nameless)), AIMessage("מי נתן את ההצעה?")]
+    )
+
+    state = await run(world, model).ainvoke(said("969 ₪ בחודש"), check_config(PERSON, CHECK))
+
+    (refusal,) = tool_messages(state["messages"])
+    assert refusal.status == "error"
+    assert "lender is missing" in str(refusal.content)
+    assert len(model.received) == 2
+
+
+async def test_read_offer_schema_takes_only_the_three_type_words(world: World) -> None:
+    await car_loan_of_60_months(world)
+    model = ScriptedChatModel(
+        replies=[
+            calls(("read_offer", {**AVIS_OFFER, "type_words": ["variable"]})),
+            AIMessage("אתקן"),
+        ]
+    )
+
+    state = await run(world, model).ainvoke(said("אוויס"), check_config(PERSON, CHECK))
+
+    (refusal,) = tool_messages(state["messages"])
+    assert refusal.status == "error"
+    assert world.engine.calls == []
+    (tool,) = [tool for tool in model.tools if tool.name == "read_offer"]
+    schema = tool.tool_call_schema.model_json_schema()
+    assert schema["properties"]["type_words"]["items"]["enum"] == ["prime", "fixed", "linked"]
+
+
+HAREL_TRACKS = [
+    {"rate_kind": "prime", "rate": "0.5", "cpi_linked": False},
+    {"rate_kind": "fixed", "rate": "3.5", "cpi_linked": True},
+]
+
+
+async def test_harels_offer_in_words_without_a_term_opens_the_form_filled_in(
+    world: World,
+) -> None:
+    await car_loan_of_60_months(world)
+    model = ScriptedChatModel(
+        replies=[
+            calls(("ask_offer", {"lender": "הראל פנסיה", "tracks": HAREL_TRACKS})),
+            AIMessage("never reached"),
+        ]
+    )
+
+    state = await run(world, model).ainvoke(
+        said("קיבלתי הצעה מהראל פנסיה: פריים פלוס חצי, או קבועה 3.5% צמודה"),
+        check_config(PERSON, CHECK),
+    )
+
+    assert len(model.received) == 1
+    assert state["messages"][-1].content == ASKED_RESULT
+    (asked,) = world.sink.events
+    assert (asked.type, asked.data["question"]) == (
+        QUESTION_ASKED,
+        {
+            "kind": "offer",
+            "lender": "הראל פנסיה",
+            "tracks": HAREL_TRACKS,
+            "max_term_months": None,
+        },
+    )
+
+
+async def test_harels_offer_from_the_form_is_saved_directly(world: World) -> None:
+    await car_loan_of_60_months(world)
+    world.engine.simulations = [PRIME_SIMULATION, BALLOON_SIMULATION]
+    of_the_check = {"principal": "45000", "term_months": 60, "method": "spitzer"}
+    tracks = [
+        {**of_the_check, "rate_kind": "prime", "prime_spread": "0.5", "cpi_linked": False},
+        {**of_the_check, "rate_kind": "fixed", "annual_rate": "3.5", "cpi_linked": True},
+    ]
+    model = ScriptedChatModel(
+        replies=[
+            calls(
+                (
+                    "save_offer",
+                    {"tracks": tracks, "lender": "הראל פנסיה", "max_term_months": 84},
+                )
+            ),
+            calls(recommend("option-1")),
+            AIMessage("ההמלצה מוכנה"),
+        ]
+    )
+    form_line = (
+        "קיבלתי הצעה מגוף מלווה, הראל פנסיה: (1) פריים פלוס 0.5%, לא צמוד למדד (2) ריבית קבועה "
+        "3.5%, צמוד למדד. לתקופה של עד 84 חודשים, בתשלומים חודשיים שווים."
+    )
+
+    await run(world, model).ainvoke(said(form_line), check_config(PERSON, CHECK))
+
+    saved = await world.options.list(CHECK)
+    assert [(option.source, option.lender) for option in saved] == [("offer", "הראל פנסיה")] * 2
+    assert [event.type for event in world.sink.events if event.type == QUESTION_ASKED] == []
+    assert not [event for event in world.sink.events if event.type.startswith("offer.")]

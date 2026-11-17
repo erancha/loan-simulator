@@ -5,6 +5,7 @@
 - TrackOutcome: the base schedule, the worst window and the range across all windows
 - simulate(): prices the track on the base path (today's rate held flat, BASE_ANNUAL_INFLATION
   each month) and replays each window's rate changes and inflation
+- rate_today(): the annual rate the track charges in its first month on the base path
 """
 
 from collections.abc import Sequence
@@ -106,6 +107,13 @@ def simulate(track: Track, history: MarketHistory) -> TrackOutcome:
         total_paid_range=(min(totals), max(totals)),
         windows=len(windows),
     )
+
+
+def rate_today(track: Track, history: MarketHistory) -> Decimal:
+    """The fixed rate, or today's prime plus the spread; for a CPI-linked track, the rate on top
+    of the CPI."""
+    (rate,) = _rates(track, history, [Decimal(0)])
+    return rate
 
 
 def _month_index(month: date) -> int:

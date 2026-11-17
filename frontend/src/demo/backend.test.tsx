@@ -3,9 +3,14 @@ import { afterEach, expect, test, vi } from 'vitest'
 import { App } from '../App.tsx'
 import {
   assistantMessage,
+  awaitingAvis,
   loanSet,
+  offerAwaiting,
+  avisReading,
+  offerSettled,
   questionAsked,
   optionFixed36,
+  optionOfferFixed,
   optionPrime36,
   recommendationPrime,
   REFERENCE_DECISION,
@@ -16,6 +21,7 @@ import {
 } from '../test/fixtures.ts'
 import { createDemoBackend } from './backend.ts'
 import type { Entry, Recording } from './backend.ts'
+import { wholeText } from '../test/wholeText.ts'
 
 const REPLY = 'הנה ההמלצה: מסלול הפריים.'
 const PACE = { pauseMs: 0, typingMs: 0, typedChars: 8, entryMs: 0 }
@@ -57,7 +63,7 @@ test('the demo signs in and replays the recorded check into the page', async () 
   const shown = { ignore: '.visually-hidden, script, style' }
   expect(await screen.findByText(REPLY, shown, { timeout: 3000 })).toBeInTheDocument()
   expect(screen.getByText('אני רוצה לקנות רכב ב-55,000 ₪', shown)).toBeInTheDocument()
-  expect(screen.getByText(REFERENCE_DECISION)).toBeInTheDocument()
+  expect(screen.getByText(wholeText(REFERENCE_DECISION))).toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'תפריט חשבון' })).toBeInTheDocument()
 })
 
@@ -69,6 +75,7 @@ test('the demo lists the check with the loan and term the replay has set so far'
     loan: null,
     term_months: null,
     recommendation: null,
+    compares_options: false,
     archived: false,
   })
 
@@ -84,7 +91,25 @@ test('the demo lists the check with the loan and term the replay has set so far'
         payment_ceiling: '1900.00',
         checked: true,
       },
+      compares_options: true,
     })
+  })
+})
+
+test('the demo lists a recommendation of one offer alone as not comparing options', async () => {
+  const only = withSeq(
+    {
+      ...recommendationPrime,
+      data: { ...recommendationPrime.data, preferred: optionOfferFixed.data, alternative: null },
+    },
+    8,
+  )
+  const events = [...recording.events.slice(0, 4), withSeq(optionOfferFixed, 7), only]
+  const backend = createDemoBackend({ events, source: null }, PACE, noEntry)
+  await vi.waitFor(async () => {
+    const [summary] = await (await backend.fetch('/api/checks')).json()
+    expect(summary.recommendation).not.toBeNull()
+    expect(summary.compares_options).toBe(false)
   })
 })
 
@@ -92,6 +117,38 @@ test('the demo accepts the offer chip, which a visitor may tap', async () => {
   const backend = createDemoBackend(recording, PACE, noEntry)
   const response = await backend.fetch('/api/checks/demo/offer-sample', { method: 'POST' })
   expect(response.status).toBe(202)
+})
+
+test('the demo answers the opening, term confirmation, skip and reading routes', async () => {
+  const backend = createDemoBackend(recording, PACE, noEntry)
+  for (const route of ['opening', 'term-confirmation', 'offer-skip']) {
+    const response = await backend.fetch(`/api/checks/demo/${route}`, { method: 'POST' })
+    expect(response.status).toBe(202)
+  }
+  const reading = await backend.fetch('/api/checks/demo/awaiting-offers/a-1', { method: 'PUT' })
+  expect(reading.status).toBe(204)
+})
+
+test('the demo lists the offers still awaiting their lender, each in its first place', async () => {
+  const unpaid = { ...awaitingAvis, monthly_payment: null }
+  const direct = { ...unpaid, awaiting_id: 'a-2', lender: 'מימון ישיר' }
+  const bank = { ...unpaid, awaiting_id: 'a-3', lender: 'בנק' }
+  const events = [
+    userMessage(1, '969 שח קבוע'),
+    offerAwaiting(2, awaitingAvis),
+    offerAwaiting(3, direct),
+    offerAwaiting(4, awaitingAvis),
+    offerAwaiting(5, bank),
+    offerSettled(6, 'a-2', avisReading('fixed_unlinked')),
+  ]
+  const backend = createDemoBackend({ events, source: null }, PACE, noEntry)
+  await vi.waitFor(async () => {
+    const [summary] = await (await backend.fetch('/api/checks')).json()
+    expect(summary.awaiting_offers).toEqual([
+      { id: 'a-1', lender: 'סוכנות אוויס רכבים', monthly_payment: '969' },
+      { id: 'a-3', lender: 'בנק', monthly_payment: null },
+    ])
+  })
 })
 
 test('the demo refuses a profile request, which the page never makes', async () => {

@@ -23,8 +23,20 @@
       "balloon_amount": "0",
       "one_time_fee": "0",
       "monthly_fee": "0"
+    },
+    {
+      "principal": "80000",
+      "term_months": 48,
+      "rate_kind": "fixed",
+      "annual_rate": "4",
+      "prime_spread": null,
+      "cpi_linked": true,
+      "method": "spitzer",
+      "balloon_amount": "0",
+      "one_time_fee": "0",
+      "monthly_fee": "0"
     }
   ],
   "as_of": "2026-08-01",
-  "source": "Bank of Israel average rate on new unindexed household consumer loans, series BNK_99010_LR_BIR_1893"
+  "source": "Bank of Israel average rate on new unindexed household consumer loans, series BNK_99010_LR_BIR_1893; the linked track at the upper end of the rate a large pension fund publishes for loans to its members"
 }

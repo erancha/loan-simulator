@@ -23,6 +23,7 @@ AGENT_TABLES = (
     "recommendations",
     "check_events",
     "deleted_event_times",
+    "awaiting_offers",
 )
 
 

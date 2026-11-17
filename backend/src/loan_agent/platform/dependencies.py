@@ -22,6 +22,7 @@ from loan_agent.ports.auth import TokenVerifier
 from loan_agent.ports.engine import LoanEngine
 from loan_agent.ports.events import EventBus, EventSink
 from loan_agent.ports.repositories import (
+    AwaitingOfferRepository,
     CheckEventStore,
     CheckRepository,
     OptionRepository,
@@ -33,6 +34,7 @@ from loan_agent.ports.repositories import (
 class Infrastructure:
     checks: CheckRepository
     options: OptionRepository
+    awaiting: AwaitingOfferRepository
     recommendations: RecommendationRepository
     events: CheckEventStore
     engine: LoanEngine
@@ -49,6 +51,7 @@ class Infrastructure:
 class AppDeps:
     checks: CheckRepository
     options: OptionRepository
+    awaiting: AwaitingOfferRepository
     recommendations: RecommendationRepository
     events: CheckEventStore
     sink: EventSink

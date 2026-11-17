@@ -1,6 +1,7 @@
 import { expect, test } from 'vitest'
 import {
   assistantMessage,
+  awaitingAvis,
   checkArchived,
   chartShown,
   cpiChart,
@@ -9,11 +10,19 @@ import {
   examplesRemoved,
   finances,
   financesUpdated,
+  identifiedMax,
   loan,
   loanSet,
   optionFixed36,
   optionOfferFixed,
   optionPrime36,
+  offerAwaiting,
+  offerIdentified,
+  avisReading,
+  offerSettled,
+  offerDropped,
+  awaitingMaxShort,
+  offerUnrecognized,
   questionAsked,
   recommendationPrime,
   turnFailed,
@@ -23,7 +32,14 @@ import {
   withSeq,
 } from '../test/fixtures.ts'
 import type { CheckEvent } from '../api/types.ts'
-import { initialState, isArchived, liveQuestion, reduce } from './events.ts'
+import {
+  holdsOption,
+  initialState,
+  isArchived,
+  liveQuestion,
+  quotedBelowLoan,
+  reduce,
+} from './events.ts'
 
 const play = (events: CheckEvent[]) => events.reduce(reduce, initialState)
 
@@ -206,13 +222,25 @@ test('the loan, term and ceiling events set the check\'s figures', () => {
   ])
   expect(state.loan).toBe(loan)
   expect(state.termMonths).toBe(36)
-  expect(state.ceiling).toEqual({ amount: '1900', source: 'stated' })
+  expect(state.ceiling).toEqual({ amount: '1900', source: 'stated', basis: null })
+})
+
+test('a finances save that derives the ceiling keeps the caps behind it', () => {
+  const basis = {
+    income_percent: '30.00',
+    ceiling_by_income_share: '3000.00',
+    disposable_percent: '50.00',
+    ceiling_by_disposable_income: '1900.00',
+  }
+  const derived = { ...financesUpdated, data: { ...financesUpdated.data, ceiling_basis: basis } }
+  const state = play([withSeq(derived, 1)])
+  expect(state.ceiling).toEqual({ amount: '1900', source: 'finances', basis })
 })
 
 test('a finances save sets the figures and the ceiling that follows from them', () => {
   const state = play([withSeq(financesUpdated, 1)])
   expect(state.finances).toBe(finances)
-  expect(state.ceiling).toEqual({ amount: '1900', source: 'finances' })
+  expect(state.ceiling).toEqual({ amount: '1900', source: 'finances', basis: null })
 })
 
 test('an archive closes the conversation with its note', () => {
@@ -256,4 +284,93 @@ test('messages and questions keep the time of their stored event; a streaming re
     at,
     undefined,
   ])
+})
+
+test('an awaiting offer becomes a card entry and is counted as awaiting', () => {
+  const at = '2026-11-16T09:30:05+00:00'
+  const state = play([userMessage(1, '969 שח קבוע'), { ...offerAwaiting(2, awaitingAvis), at }])
+  expect(state.messages.at(-1)).toEqual({
+    id: 'r-a-1',
+    role: 'readings',
+    offer: awaitingAvis,
+    settled: null,
+    dropped: null,
+    at,
+  })
+  expect([...state.awaiting.values()]).toEqual([awaitingAvis])
+})
+
+test('the same offer emitted again replaces its card where it stands', () => {
+  const likely = { ...awaitingAvis, likely: 'fixed_unlinked' as const }
+  const state = play([
+    offerAwaiting(1, awaitingAvis),
+    userMessage(2, 'וגם 60 חודשים'),
+    offerAwaiting(3, likely),
+  ])
+  expect(state.messages.map((entry) => entry.id)).toEqual(['r-a-1', 'u-2'])
+  expect(state.messages[0]).toMatchObject({ role: 'readings', offer: { likely: 'fixed_unlinked' } })
+  expect([...state.awaiting.values()]).toEqual([likely])
+})
+
+test('a settled offer marks its card and leaves the awaiting offers', () => {
+  const other = { ...awaitingAvis, awaiting_id: 'a-2' }
+  const state = play([
+    offerAwaiting(1, awaitingAvis),
+    offerAwaiting(2, other),
+    offerSettled(3, 'a-1', avisReading('prime_margin')),
+  ])
+  expect(state.messages[0]).toMatchObject({ id: 'r-a-1', settled: avisReading('prime_margin') })
+  expect(state.messages[1]).toMatchObject({ id: 'r-a-2', settled: null })
+  expect([...state.awaiting.keys()]).toEqual(['a-2'])
+})
+
+test('a dropped offer marks its card and leaves the awaiting offers', () => {
+  const state = play([
+    offerAwaiting(1, awaitingMaxShort),
+    offerDropped(2, awaitingMaxShort, '45000'),
+  ])
+  expect(state.messages[0]).toMatchObject({
+    id: 'r-a-max',
+    settled: null,
+    dropped: { lender: 'מקס', quoted_amount: '20000', loan_amount: '45000' },
+  })
+  expect(state.awaiting.size).toBe(0)
+})
+
+test('an offer dropped with no card is a broken stream', () => {
+  expect(() => play([offerDropped(1, awaitingMaxShort, '45000')])).toThrow(
+    'offer.dropped for a-max, which no offer.awaiting showed',
+  )
+})
+
+test('an offer quoted for less than the loan awaits the amount', () => {
+  expect(quotedBelowLoan(awaitingMaxShort, '45000')).toBe(true)
+  expect(quotedBelowLoan(awaitingMaxShort, '20000')).toBe(false)
+  expect(quotedBelowLoan(awaitingMaxShort, '15000')).toBe(false)
+})
+
+test('identified and unrecognized offers are entries of their own', () => {
+  const state = play([offerIdentified(1, identifiedMax), offerUnrecognized(2, 'מקס')])
+  expect(state.messages).toEqual([
+    { id: 'i-1', role: 'identified', offer: identifiedMax },
+    { id: 'n-2', role: 'unrecognized', lender: 'מקס' },
+  ])
+  expect(state.awaiting.size).toBe(0)
+})
+
+test('a message after a card leaves it unanswered and unsettled', () => {
+  const state = play([
+    questionAsked(1, { field: 'amount', text: null, choices: null }),
+    offerAwaiting(2, awaitingAvis),
+    userMessage(3, 'עוד הצעה'),
+  ])
+  expect(state.messages[1]).toMatchObject({ role: 'readings', settled: null })
+  expect(state.awaiting.has('a-1')).toBe(true)
+})
+
+test('holdsOption is true for an example, a saved offer or an awaiting one', () => {
+  expect(holdsOption(play([]))).toBe(false)
+  expect(holdsOption(play([optionPrime36]))).toBe(true)
+  expect(holdsOption(play([optionOfferFixed]))).toBe(true)
+  expect(holdsOption(play([offerAwaiting(9, awaitingAvis)]))).toBe(true)
 })

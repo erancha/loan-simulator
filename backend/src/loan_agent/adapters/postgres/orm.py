@@ -1,8 +1,9 @@
-"""Tables of the loan agent: checks with their options, recommendation and event log.
+"""Tables of the loan agent: checks with their options, awaiting offers, recommendation and event
+log.
 
-Every row belongs to a Google account id; options and recommendations reach it through their
-check, while events also carry it themselves. Money inside JSONB columns is a decimal string
-and dates are ISO strings."""
+Every row belongs to a Google account id; options, awaiting offers and recommendations reach it
+through their check, while events also carry it themselves. Money inside JSONB columns is a
+decimal string and dates are ISO strings."""
 
 from __future__ import annotations
 
@@ -69,6 +70,20 @@ class RecommendationRow(Base):
 
     check_id: Mapped[str] = mapped_column(ForeignKey("checks.id"), primary_key=True)
     data: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AwaitingOfferRow(Base):
+    """An offer whose type awaits its lender's answer; its id is unique within its check, which a
+    clone keeps, as it keeps option ids."""
+
+    __tablename__ = "awaiting_offers"
+
+    check_id: Mapped[str] = mapped_column(ForeignKey("checks.id"), primary_key=True)
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    lender: Mapped[str] = mapped_column(Text)
+    data: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    """Every other field of the offer, its readings included."""
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 

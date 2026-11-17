@@ -1,6 +1,7 @@
 """The agent loop: a language model leads the Hebrew conversation and calls the engine's tools and
-the check tools until it has a reply for the person or has asked them a question through ask,
-ask_term or ask_offer; each check's conversation is one checkpoint thread.
+the check tools until it has a reply for the person, has asked them a question through ask,
+ask_term or ask_offer, or read_offer has put an offer's readings on their screen; each check's
+conversation is one checkpoint thread.
 
 - build_agent_graph: the model node and the tool node over the thread's messages, as an
   AgentGraph; a reply's tool calls skip the tool node and are refused when an argument holds a
@@ -12,7 +13,8 @@ ask_term or ask_offer; each check's conversation is one checkpoint thread.
 - last_message: the last message of a check's conversation
 - people_said: the texts of the person's own messages, whose English words a reply may repeat
 - SYSTEM_PROMPT: the Hebrew instructions sent ahead of the messages on every model call, followed
-  by the turn_state block of the check's stored loan, ceiling and finances
+  by the turn_state block of the check's stored loan, ceiling, finances, options and awaiting
+  offers
 - The check tools' argument schemas, with money as decimal strings like the engine's own schema
 
 The person and the check come from the run configuration, never from the model's arguments, so
@@ -37,6 +39,7 @@ from langgraph.prebuilt import InjectedState, ToolNode
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from loan_agent.application.check_tools import (
+    READING_ON_SCREEN,
     ChartSeries,
     CheckTools,
     ToolDeps,
@@ -44,6 +47,7 @@ from loan_agent.application.check_tools import (
     english_words,
 )
 from loan_agent.application.turn_state import turn_state
+from loan_agent.domain.models import ReadingKind, TypeWord
 
 log = logging.getLogger(__name__)
 
@@ -69,7 +73,12 @@ RECOMMENDATION_HEADING = "ההמלצה שלי"
 """The section of a reply that recommends, as the system prompt writes it. The person's card
 changes only through present_recommendation, so this section without that call is a false
 promise."""
-_RECOMMENDATION_SECTION = re.compile(rf"^\W*{RECOMMENDATION_HEADING}\W*$", re.MULTILINE)
+EVALUATION_HEADING = "ההצעה שבדקתי"
+"""The section of a reply that evaluates the check's only option in place of recommending one;
+the card changes through present_recommendation all the same."""
+_RECOMMENDATION_SECTION = re.compile(
+    rf"^\W*(?:{RECOMMENDATION_HEADING}|{EVALUATION_HEADING})\W*$", re.MULTILINE
+)
 _REDO_THE_RECOMMENDATION = (
     "Your reply was discarded and the person did not see it: it has a recommendation section, but "
     "present_recommendation did not succeed in this turn, so nothing was calculated or saved. Make "
@@ -233,6 +242,45 @@ class SaveOfferArgs(_Args):
         description="The longest term of an offer that leaves the term open ('up to 84 months'), "
         "with each track's term_months the term to save, which a refusal names; omit when the "
         "offer fixes the term or the person chose it",
+    )
+
+
+class ReadOfferArgs(_Args):
+    lender: str | None = Field(default=None, description="Who made the offer, when said")
+    amount: str | None = _optional_money("The amount the lender quoted")
+    term_months: int | None = Field(
+        default=None, description="The months the lender quoted, when said"
+    )
+    stated_rate: str | None = Field(
+        default=None,
+        pattern=_SIGNED_DECIMAL,
+        description="The number stated with the offer, as the person wrote it ('6', '6.45'), as "
+        "a decimal string; omit when the offer states none",
+    )
+    monthly_payment: str | None = _optional_money("The monthly payment the lender quoted")
+    type_words: list[TypeWord] = Field(
+        default=[],
+        description="The type words the person used: 'prime' for פריים, 'fixed' for קבוע, "
+        "'linked' for צמוד",
+    )
+    awaiting_id: str | None = Field(
+        default=None,
+        description="The id from awaiting_offers when the message adds to or corrects that "
+        "offer; omit for a new offer",
+    )
+
+
+class AnswerOfferAmountArgs(_Args):
+    awaiting_id: str = Field(
+        description="The id from awaiting_offers of the offer quoted for less than the loan"
+    )
+    covers: bool = Field(
+        description="True when the lender lends the check's loan amount on the same terms"
+    )
+    reading: ReadingKind | None = Field(
+        default=None,
+        description="With covers, the reading from the offer's readings that the lender meant; "
+        "omit when the offer holds one reading",
     )
 
 
@@ -408,6 +456,28 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
             offered, lender, offer_date, max_term_months
         )
 
+    async def read_offer(
+        config: RunnableConfig,
+        lender: str | None = None,
+        amount: str | None = None,
+        term_months: int | None = None,
+        stated_rate: str | None = None,
+        monthly_payment: str | None = None,
+        type_words: Sequence[TypeWord] = (),
+        awaiting_id: str | None = None,
+    ) -> str:
+        return await _tools_for(config, deps).read_offer(
+            lender, amount, term_months, stated_rate, monthly_payment, type_words, awaiting_id
+        )
+
+    async def answer_offer_amount(
+        awaiting_id: str,
+        covers: bool,
+        config: RunnableConfig,
+        reading: ReadingKind | None = None,
+    ) -> str:
+        return await _tools_for(config, deps).answer_offer_amount(awaiting_id, covers, reading)
+
     async def present_recommendation(
         preferred_option_id: str,
         reasoning: str,
@@ -444,9 +514,11 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
         StructuredTool.from_function(
             coroutine=ask_term,
             name="ask_term",
-            description="Show the term card: a term with its first payment, and a form with the "
-            "term and the payment ceiling under one confirm button, and the turn ends; the answer "
-            "arrives as the person's next message. Without term_months the card proposes the term.",
+            description="Show the term card: a first calculation of a term with its first "
+            "payment, and a form with the term and the payment ceiling under one confirm button, "
+            "and the turn ends; the answer arrives as the person's next message. Without "
+            "term_months the card proposes the term from the check's ceiling or, with none, from "
+            "an assumed first payment, and states which.",
             args_schema=AskTermArgs,
         ),
         StructuredTool.from_function(
@@ -500,6 +572,28 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
             "engine's search over that track gives. Saving an offer removes the check's "
             "examples, and a recommendation that names one.",
             args_schema=SaveOfferArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=read_offer,
+            name="read_offer",
+            description="Call this for an offer the person describes in words when the "
+            "description holds a monthly payment, or leaves the loan's type open: a bare number "
+            "that may be a margin over prime or the whole rate, or no rate at all. Pass only what "
+            "the person said: the lender, the amount and months the lender quoted, the number "
+            "stated with the offer, the monthly payment, and the type words used. The screen "
+            "shows the result. To add a detail to an offer that awaits its lender, pass its "
+            "awaiting_id from the state message with the new detail alone.",
+            args_schema=ReadOfferArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=answer_offer_amount,
+            name="answer_offer_amount",
+            description="Call this when the person tells the lender's answer about an awaiting "
+            "offer quoted for less than the check's loan: whether the lender lends the loan "
+            "amount on the same terms. With covers the offer is saved at the loan amount; "
+            "without it the offer leaves the check and the screen says it does not enter the "
+            "comparison.",
+            args_schema=AnswerOfferAmountArgs,
         ),
         StructuredTool.from_function(
             coroutine=present_recommendation,
@@ -620,18 +714,23 @@ def _correction_for(reply: AIMessage, messages: Sequence[BaseMessage], check_id:
 
 
 def _after_tools(state: MessagesState) -> Literal["model", "__end__"]:
-    """Ends the turn once ask, ask_term or ask_offer put a question on the person's screen; a
-    refused question, like any other tool result, goes back to the model."""
+    """Ends the turn once ask, ask_term or ask_offer put a question on the person's screen, or
+    when every result of the reply's calls is a reading on the screen, which the person answers
+    there. A refused question, an identified offer, a refusal and any other tool's result go back
+    to the model."""
     asked = _question_call_ids(state)
+    results: list[ToolMessage] = []
     for message in reversed(state["messages"]):
         if isinstance(message, AIMessage):
             break
-        if (
-            isinstance(message, ToolMessage)
-            and message.tool_call_id in asked
-            and message.status != "error"
-        ):
-            return "__end__"
+        if isinstance(message, ToolMessage):
+            results.append(message)
+    if any(result.tool_call_id in asked and result.status != "error" for result in results):
+        return "__end__"
+    if results and all(
+        result.status != "error" and result.content == READING_ON_SCREEN for result in results
+    ):
+        return "__end__"
     return "model"
 
 

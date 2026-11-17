@@ -11,18 +11,22 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from loan_agent.adapters.postgres.orm import CheckRow
 from loan_agent.adapters.postgres.repositories import (
+    PostgresAwaitingOfferRepository,
     PostgresCheckEventStore,
     PostgresCheckRepository,
     PostgresOptionRepository,
     PostgresRecommendationRepository,
 )
-from loan_agent.domain.errors import CheckNotFoundError
+from loan_agent.domain.errors import AwaitingOfferNotFoundError, CheckNotFoundError
 from loan_agent.domain.models import (
+    AwaitingOffer,
     Check,
     Finances,
     LoanRequest,
     Option,
     OptionFigures,
+    OptionPrice,
+    Reading,
     Recommendation,
 )
 from loan_agent.platform.db import build_engine, session_factory
@@ -47,6 +51,7 @@ class Repos:
     options: PostgresOptionRepository
     recommendations: PostgresRecommendationRepository
     events: PostgresCheckEventStore
+    awaiting: PostgresAwaitingOfferRepository
 
 
 @pytest.fixture
@@ -65,6 +70,7 @@ def repos(sessions: async_sessionmaker[AsyncSession]) -> Repos:
         PostgresOptionRepository(sessions),
         PostgresRecommendationRepository(sessions),
         PostgresCheckEventStore(sessions),
+        PostgresAwaitingOfferRepository(sessions),
     )
 
 
@@ -83,6 +89,32 @@ def make_figures() -> OptionFigures:
         total_paid=Decimal("101234.56"),
         rate_as_of=date(2026, 9, 1),
         cpi_as_of=date(2026, 8, 1),
+        price=OptionPrice(
+            rate_today=Decimal("10.75"),
+            against_market="above",
+            market_rate=Decimal("7.9"),
+            market_rate_month=date(2026, 8, 1),
+        ),
+    )
+
+
+def make_awaiting(awaiting_id: str, check_id: str, created_at: datetime = T0) -> AwaitingOffer:
+    track = {"principal": "45000", "term_months": 60, "rate_kind": "fixed", "cpi_linked": True}
+    return AwaitingOffer(
+        id=awaiting_id,
+        check_id=check_id,
+        lender="בנק הפועלים",
+        amount=Decimal(45000),
+        term_months=60,
+        stated_rate=Decimal("5.83"),
+        monthly_payment=Decimal("969.00"),
+        payment_rate=Decimal("10.58"),
+        type_words=("fixed", "linked"),
+        readings=(Reading("fixed_linked", track, Decimal("970.61"), Decimal("10.58"), True),),
+        likely="fixed_linked",
+        prime=Decimal("4.75"),
+        rate_as_of=date(2026, 10, 20),
+        created_at=created_at,
     )
 
 
@@ -204,6 +236,70 @@ async def test_option_remove_takes_only_the_named_options_of_the_check(repos: Re
     assert await repos.options.list("c-keep") == kept[1:]
 
 
+async def test_an_awaiting_offer_round_trips(repos: Repos) -> None:
+    await repos.checks.add(make_check("c-await"))
+    offer = make_awaiting("a-1", "c-await")
+    bare = replace(
+        make_awaiting("a-2", "c-await", T0 + timedelta(hours=1)),
+        stated_rate=None,
+        payment_rate=None,
+        type_words=(),
+        likely=None,
+    )
+
+    await repos.awaiting.save(offer)
+    await repos.awaiting.save(bare)
+
+    assert await repos.awaiting.get("c-await", "a-1") == offer
+    assert await repos.awaiting.list("c-await") == [offer, bare]
+
+
+async def test_saving_an_awaiting_offer_again_replaces_it_in_its_place(repos: Repos) -> None:
+    await repos.checks.add(make_check("c-again"))
+    first = make_awaiting("a-1", "c-again")
+    await repos.awaiting.save(first)
+    await repos.awaiting.save(make_awaiting("a-2", "c-again", T0 + timedelta(hours=1)))
+    changed = replace(first, lender="מזרחי טפחות", monthly_payment=Decimal("1012.40"))
+
+    await repos.awaiting.save(changed)
+
+    assert [o.id for o in await repos.awaiting.list("c-again")] == ["a-1", "a-2"]
+    assert await repos.awaiting.get("c-again", "a-1") == changed
+
+
+async def test_an_awaiting_offer_saved_again_later_keeps_its_place(repos: Repos) -> None:
+    await repos.checks.add(make_check("c-later-save"))
+    first = make_awaiting("a-1", "c-later-save")
+    await repos.awaiting.save(first)
+    await repos.awaiting.save(make_awaiting("a-2", "c-later-save", T0 + timedelta(hours=1)))
+
+    await repos.awaiting.save(replace(first, created_at=T0 + timedelta(hours=2)))
+
+    assert [o.id for o in await repos.awaiting.list("c-later-save")] == ["a-1", "a-2"]
+
+
+async def test_an_awaiting_offer_the_check_does_not_hold_is_not_found(repos: Repos) -> None:
+    await repos.checks.add(make_check("c-held"))
+    await repos.checks.add(make_check("c-other-held"))
+    await repos.awaiting.save(make_awaiting("a-1", "c-other-held"))
+
+    with pytest.raises(AwaitingOfferNotFoundError):
+        await repos.awaiting.get("c-held", "a-1")
+    with pytest.raises(AwaitingOfferNotFoundError):
+        await repos.awaiting.get("c-held", "a-unknown")
+
+
+async def test_remove_drops_only_that_awaiting_offer(repos: Repos) -> None:
+    await repos.checks.add(make_check("c-remove"))
+    await repos.awaiting.save(make_awaiting("a-1", "c-remove"))
+    kept = make_awaiting("a-2", "c-remove", T0 + timedelta(hours=1))
+    await repos.awaiting.save(kept)
+
+    await repos.awaiting.remove("c-remove", "a-1")
+
+    assert await repos.awaiting.list("c-remove") == [kept]
+
+
 async def test_recommendation_replaced_per_check(repos: Repos) -> None:
     await repos.checks.add(make_check("c-rec"))
     assert await repos.recommendations.latest("c-rec") is None
@@ -286,6 +382,7 @@ async def test_delete_removes_the_check_and_everything_it_produced(repos: Repos)
         )
     )
     await repos.events.append("c-del", "message.user", {"text": "a"})
+    await repos.awaiting.save(make_awaiting("a-del", "c-del"))
 
     await repos.checks.delete("c-del", "message.user", T0)
 
@@ -294,6 +391,7 @@ async def test_delete_removes_the_check_and_everything_it_produced(repos: Repos)
     assert await repos.options.list("c-del") == []
     assert await repos.recommendations.latest("c-del") is None
     assert await repos.events.list("c-del", 0) == []
+    assert await repos.awaiting.list("c-del") == []
 
 
 async def test_delete_keeps_the_recent_times_of_one_event_type_until_they_expire(
@@ -384,6 +482,8 @@ async def test_clone_copies_the_loan_term_ceiling_and_finances_options_recommend
         T0,
     )
     await repos.recommendations.save(recommendation)
+    awaiting = make_awaiting("a-1", "c-src")
+    await repos.awaiting.save(awaiting)
     before = datetime.now(UTC)
     await repos.events.append("c-src", "message.user", {"text": "a"})
     await repos.events.append("c-src", "check.archived", {})
@@ -406,6 +506,7 @@ async def test_clone_copies_the_loan_term_ceiling_and_finances_options_recommend
     assert await repos.recommendations.latest("c-copy") == replace(
         recommendation, check_id="c-copy"
     )
+    assert await repos.awaiting.list("c-copy") == [replace(awaiting, check_id="c-copy")]
     copied = await repos.events.list("c-copy", 0)
     assert [(e.seq, e.type, dict(e.data)) for e in copied] == [
         (1, "message.user", {"text": "a"}),

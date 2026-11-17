@@ -1,8 +1,10 @@
 """In-memory test doubles for the application's ports.
 
 Core building blocks:
-- InMemoryCheckRepository, InMemoryOptionRepository,
+- InMemoryCheckRepository, InMemoryOptionRepository, InMemoryAwaitingOfferRepository,
   InMemoryRecommendationRepository: dict-backed storage
+- awaiting_offer: an awaiting offer of a given lender and payment
+- reading, readings_of, LEUMI_READINGS: the engine's readings of an offer, built by hand
 - FakeLoanEngine: answers with values captured from the real engine (adapters/fixtures/engine),
   overridable per test, and records its calls
 - InMemoryCheckEventStore: the per-check event log, stamped by the given clock
@@ -26,21 +28,26 @@ from langchain_core.messages.tool import tool_call_chunk
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from pydantic import Field
 
-from loan_agent.adapters.engine_mcp import market_series_of
-from loan_agent.domain.errors import CheckNotFoundError
+from loan_agent.adapters.engine_mcp import market_series_of, offer_readings_of
+from loan_agent.domain.errors import AwaitingOfferNotFoundError, CheckNotFoundError
 from loan_agent.domain.models import (
+    AwaitingOffer,
     CeilingSource,
     Check,
     Finances,
     LoanRequest,
     Option,
     OptionFigures,
+    OptionPrice,
+    Reading,
+    ReadingKind,
     Recommendation,
 )
 from loan_agent.ports.engine import (
     Bounds,
     EngineError,
     MarketSeries,
+    OfferReadings,
     OfferTerm,
     ProposedTerm,
     Simulation,
@@ -65,6 +72,7 @@ ENGINE_TOOL_NAMES = {
     "propose_offer_term",
     "largest_comfortable_loan",
     "suggest_tracks",
+    "offer_readings",
     "market_series",
 }
 COMFORTABLE_OFFER_TERM = OfferTerm(term_months=24, comfortable=True)
@@ -101,6 +109,12 @@ PRIME_SIMULATION = Simulation(
         total_paid=Decimal("90623.31"),
         rate_as_of=date(2026, 10, 26),
         cpi_as_of=date(2026, 9, 1),
+        price=OptionPrice(
+            rate_today=Decimal("6.25"),
+            against_market="below",
+            market_rate=Decimal("7.9"),
+            market_rate_month=date(2026, 8, 1),
+        ),
     ),
     structured=engine_fixture("simulate_loan_unlinked_prime"),
 )
@@ -115,8 +129,55 @@ BALLOON_SIMULATION = Simulation(
         total_paid=Decimal("96049.73"),
         rate_as_of=date(2026, 10, 26),
         cpi_as_of=date(2026, 9, 1),
+        price=OptionPrice(
+            rate_today=Decimal("4.9"),
+            against_market=None,
+            market_rate=Decimal("7.9"),
+            market_rate_month=date(2026, 8, 1),
+        ),
     ),
     structured=engine_fixture("simulate_loan_linked_balloon"),
+)
+
+
+def reading(
+    kind: ReadingKind, rate: str, first_payment: str, total_rate: str, principal: str, term: int
+) -> Reading:
+    """A reading as the engine prices it: prime readings carry the spread, fixed ones the rate."""
+    prime = kind in ("prime_margin", "prime_total")
+    return Reading(
+        kind=kind,
+        track={
+            "principal": principal,
+            "term_months": term,
+            "rate_kind": "prime" if prime else "fixed",
+            "annual_rate": None if prime else rate,
+            "prime_spread": rate if prime else None,
+            "cpi_linked": kind == "fixed_linked",
+            "method": "spitzer",
+        },
+        first_payment=Decimal(first_payment),
+        total_rate=Decimal(total_rate),
+        approximate=False,
+    )
+
+
+def readings_of(*readings: Reading, payment_rate: str | None = None) -> OfferReadings:
+    return OfferReadings(
+        prime=Decimal("4.75"),
+        rate_as_of=date(2026, 11, 15),
+        payment_rate=None if payment_rate is None else Decimal(payment_rate),
+        readings=readings,
+    )
+
+
+# Leumi's "prime plus 6", 45,000 over 60 months at 972 a month.
+LEUMI_READINGS = readings_of(
+    reading("prime_margin", "6", "972.81", "10.75", "45000", 60),
+    reading("prime_total", "1.25", "869.98", "6", "45000", 60),
+    reading("fixed_unlinked", "6", "869.98", "6", "45000", 60),
+    reading("fixed_linked", "6", "871.41", "6", "45000", 60),
+    payment_rate="5.91",
 )
 
 
@@ -139,13 +200,14 @@ class Ids:
 
 
 class InMemoryCheckRepository:
-    """clone copies options and the recommendation only when option_store and
-    recommendation_store are set."""
+    """clone copies options, awaiting offers and the recommendation only when option_store,
+    awaiting_store and recommendation_store are set."""
 
     def __init__(self) -> None:
         self.rows: dict[str, Check] = {}
         self.event_store: InMemoryCheckEventStore | None = None
         self.option_store: InMemoryOptionRepository | None = None
+        self.awaiting_store: InMemoryAwaitingOfferRepository | None = None
         self.recommendation_store: InMemoryRecommendationRepository | None = None
 
     async def add(self, check: Check) -> None:
@@ -162,8 +224,8 @@ class InMemoryCheckRepository:
         return sorted(mine, key=lambda check: check.created_at, reverse=True)
 
     async def delete(self, check_id: str, kept_type: str, kept_since: datetime) -> None:
-        """Options and recommendations stay in their fakes, where nothing reaches them without
-        the check; the Postgres tests prove they go."""
+        """Options, awaiting offers and recommendations stay in their fakes, where nothing reaches
+        them without the check; the Postgres tests prove they go."""
         check = self.rows.pop(check_id)
         assert self.event_store is not None
         self.event_store.forget(check, kept_type, kept_since)
@@ -205,6 +267,11 @@ class InMemoryCheckRepository:
                 replace(option, check_id=clone.id)
                 for option in self.option_store.rows.get(source_id, [])
             ]
+        if self.awaiting_store is not None:
+            self.awaiting_store.rows[clone.id] = [
+                replace(offer, check_id=clone.id)
+                for offer in self.awaiting_store.rows.get(source_id, [])
+            ]
         if self.recommendation_store is not None:
             recommendation = self.recommendation_store.rows.get(source_id)
             if recommendation is not None:
@@ -238,6 +305,61 @@ class InMemoryOptionRepository:
 
     async def remove(self, check_id: str, option_ids: Collection[str]) -> None:
         self.rows[check_id] = [o for o in self.rows[check_id] if o.id not in option_ids]
+
+
+class InMemoryAwaitingOfferRepository:
+    """Keeps each check's offers in the order they were first saved."""
+
+    def __init__(self) -> None:
+        self.rows: dict[str, list[AwaitingOffer]] = {}
+
+    async def save(self, offer: AwaitingOffer) -> None:
+        offers = self.rows.setdefault(offer.check_id, [])
+        held = [i for i, kept in enumerate(offers) if kept.id == offer.id]
+        if held:
+            (index,) = held
+            offers[index] = offer
+        else:
+            offers.append(offer)
+
+    async def list(self, check_id: str) -> list[AwaitingOffer]:
+        return list(self.rows.get(check_id, []))
+
+    async def get(self, check_id: str, awaiting_id: str) -> AwaitingOffer:
+        for offer in self.rows.get(check_id, []):
+            if offer.id == awaiting_id:
+                return offer
+        raise AwaitingOfferNotFoundError(check_id, awaiting_id)
+
+    async def remove(self, check_id: str, awaiting_id: str) -> None:
+        self.rows[check_id] = [o for o in self.rows[check_id] if o.id != awaiting_id]
+
+
+def awaiting_offer(
+    check_id: str,
+    awaiting_id: str,
+    lender: str,
+    monthly_payment: Decimal | None,
+    amount: Decimal = Decimal(45000),
+) -> AwaitingOffer:
+    """An offer over 60 months whose words name no type, read from a stated 5.83%; quoted for
+    45,000 unless amount says otherwise."""
+    return AwaitingOffer(
+        id=awaiting_id,
+        check_id=check_id,
+        lender=lender,
+        amount=amount,
+        term_months=60,
+        stated_rate=Decimal("5.83"),
+        monthly_payment=monthly_payment,
+        payment_rate=None,
+        type_words=(),
+        readings=(reading("fixed_unlinked", "5.83", "867.30", "5.83", str(amount), 60),),
+        likely=None,
+        prime=Decimal("4.75"),
+        rate_as_of=date(2026, 10, 20),
+        created_at=NOW,
+    )
 
 
 class InMemoryRecommendationRepository:
@@ -327,7 +449,9 @@ class FakeLoanEngine:
     """simulations are answered in order; simulate_error, suggest_error, assess_error and
     market_error, when set, are raised instead; suggest answers the captured tracks at the
     principal and term asked for; market_series answers from the captured engine result.
-    comfortable_terms and largest_loans answer the ceiling searches, None meaning nothing fits."""
+    comfortable_terms and largest_loans answer the ceiling searches, None meaning nothing fits.
+    offer_readings answers readings, captured from the engine for 45,000 over 60 months at a
+    payment of 969, or raises readings_error when it is set."""
 
     bounds: Bounds = ASSESSED_BOUNDS
     simulations: list[Simulation] = field(default_factory=list)
@@ -340,6 +464,10 @@ class FakeLoanEngine:
     proposed: ProposedTerm = PROPOSED_TERM
     comfortable_terms: int | None = 24
     largest_loans: Decimal | None = Decimal("90000.00")
+    readings: OfferReadings = field(
+        default_factory=lambda: offer_readings_of(engine_fixture("offer_readings"))
+    )
+    readings_error: EngineError | None = None
     calls: list[tuple[str, Mapping[str, object]]] = field(default_factory=list)
 
     async def assess(self, profile: Mapping[str, object]) -> Bounds:
@@ -401,6 +529,31 @@ class FakeLoanEngine:
             ("largest_loan", {"payment_ceiling": payment_ceiling, "term_months": term_months})
         )
         return self.largest_loans
+
+    async def offer_readings(
+        self,
+        principal: Decimal,
+        term_months: int,
+        stated_rate: Decimal | None,
+        monthly_payment: Decimal | None,
+        *,
+        prime_total: bool,
+    ) -> OfferReadings:
+        self.calls.append(
+            (
+                "offer_readings",
+                {
+                    "principal": principal,
+                    "term_months": term_months,
+                    "stated_rate": stated_rate,
+                    "monthly_payment": monthly_payment,
+                    "prime_total": prime_total,
+                },
+            )
+        )
+        if self.readings_error is not None:
+            raise self.readings_error
+        return self.readings
 
     async def market_series(self, months: int) -> MarketSeries:
         self.calls.append(("market_series", {"months": months}))

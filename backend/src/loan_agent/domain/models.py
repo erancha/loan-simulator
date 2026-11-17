@@ -1,19 +1,22 @@
-"""Framework-free types of the loan agent: people, finances, loans, checks, options and
-recommendations.
+"""Framework-free types of the loan agent: people, finances, loans, checks, options, offers that
+await their lender's answer, and recommendations.
 
 - User, and the VerifiedToken that names them
 - Finances (partial until the person has told both figures), LoanRequest
 - Check, which holds the loan, the term, the payment ceiling and the finances
-- Option with its OptionFigures, Recommendation
+- Option with its OptionFigures and their OptionPrice, Recommendation, and compares_options:
+  whether a recommendation's card ranks more than one option
+- Reading, one loan an offer of open type may mean; AwaitingOffer, an offer whose type awaits
+  the lender's answer, with its readings
 
 Money is Decimal. Datetimes are timezone-aware UTC.
 """
 
-from collections.abc import Mapping
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from typing import Any, Literal
+from typing import Any, Literal, cast, get_args
 
 from loan_agent.domain.errors import FinancesError, LoanError
 
@@ -69,6 +72,10 @@ class Finances:
     def missing(self) -> tuple[str, ...]:
         return tuple(name for name in _MONEY_FIELDS if getattr(self, name) is None)
 
+    def has_figures(self) -> bool:
+        """The person has told at least one figure, by taking the help path for the ceiling."""
+        return len(self.missing()) < len(_MONEY_FIELDS)
+
     def merged(self, update: Mapping[str, object]) -> "Finances":
         unknown = sorted(set(update) - set(_MONEY_FIELDS))
         if unknown:
@@ -84,11 +91,7 @@ class Finances:
         return {name: str(getattr(self, name)) for name in _MONEY_FIELDS}
 
 
-# The purpose the term card treats as a car loan, stored in this normalised form.
-CAR_PURPOSE = "רכב"
-# The term the card proposes for a car loan.
-CAR_TERM_MONTHS = 60
-# The first payment the card aims for when it proposes a term for another purpose.
+# The first payment the term card assumes when it proposes a term for a check with no ceiling.
 FIRST_PAYMENT_TARGET = Decimal(1000)
 
 
@@ -138,6 +141,44 @@ class Check:
 OptionSource = Literal["example", "offer"]
 
 
+# How a loan's rate today stands against the published average rate on consumer loans: the
+# engine calls it similar within a set band of percentage points.
+RateAgainstMarket = Literal["above", "similar", "below"]
+
+
+@dataclass(frozen=True)
+class OptionPrice:
+    """The loan's rate today against the market, as the engine priced it."""
+
+    rate_today: Decimal
+    """The annual percent charged in the first month; on top of the CPI for a linked loan."""
+    against_market: RateAgainstMarket | None
+    """None for a CPI-linked loan, whose rate is not comparable with the unlinked average."""
+    market_rate: Decimal
+    """The Bank of Israel average annual percent on new unlinked household consumer loans."""
+    market_rate_month: date
+
+    def to_json(self) -> dict[str, str | None]:
+        return {
+            "rate_today": str(self.rate_today),
+            "against_market": self.against_market,
+            "market_rate": str(self.market_rate),
+            "market_rate_month": self.market_rate_month.isoformat(),
+        }
+
+    @classmethod
+    def from_json(cls, data: Mapping[str, Any]) -> "OptionPrice":
+        against = data["against_market"]
+        if against is not None and against not in get_args(RateAgainstMarket):
+            raise ValueError(f"Unknown rate comparison: {against!r}")
+        return cls(
+            rate_today=Decimal(data["rate_today"]),
+            against_market=against,
+            market_rate=Decimal(data["market_rate"]),
+            market_rate_month=date.fromisoformat(data["market_rate_month"]),
+        )
+
+
 @dataclass(frozen=True)
 class OptionFigures:
     first_payment: Decimal
@@ -149,6 +190,9 @@ class OptionFigures:
     total_paid: Decimal
     rate_as_of: date
     cpi_as_of: date
+    price: OptionPrice | None
+    """None when the stored figures hold no price: those of an option saved by a release whose
+    engine reported no rates."""
 
     @property
     def risk_payment(self) -> Decimal:
@@ -156,7 +200,7 @@ class OptionFigures:
             return self.worst_peak_payment
         return self.peak_payment
 
-    def to_json(self) -> dict[str, str | None]:
+    def to_json(self) -> dict[str, object]:
         """The one encoding of the figures, stored and sent to the page alike: money as decimal
         strings, dates as ISO strings."""
         return {
@@ -169,10 +213,13 @@ class OptionFigures:
             "total_paid": str(self.total_paid),
             "rate_as_of": self.rate_as_of.isoformat(),
             "cpi_as_of": self.cpi_as_of.isoformat(),
+            "price": None if self.price is None else self.price.to_json(),
         }
 
     @classmethod
     def from_json(cls, data: Mapping[str, Any]) -> "OptionFigures":
+        # price is the one key stored figures may lack.
+        price = data.get("price")
         return cls(
             first_payment=Decimal(data["first_payment"]),
             peak_payment=Decimal(data["peak_payment"]),
@@ -183,6 +230,7 @@ class OptionFigures:
             total_paid=Decimal(data["total_paid"]),
             rate_as_of=date.fromisoformat(data["rate_as_of"]),
             cpi_as_of=date.fromisoformat(data["cpi_as_of"]),
+            price=None if price is None else OptionPrice.from_json(price),
         )
 
 
@@ -219,6 +267,37 @@ class Option:
     def __post_init__(self) -> None:
         _require_utc("created_at", self.created_at)
 
+    @property
+    def principal(self) -> Decimal:
+        """The loan's total principal; a saved loan's principals are decimal strings or
+        integers."""
+        tracks = cast(list[Mapping[str, object]], self.loan["tracks"])
+        return sum((Decimal(cast(str | int, track["principal"])) for track in tracks), Decimal(0))
+
+    @property
+    def interest_cost(self) -> Decimal:
+        """What the loan costs over its principal at today's terms: its total paid on the base
+        path minus the principal, so for a linked loan the CPI's rise is in it too."""
+        return self.summary.total_paid - self.principal
+
+    def for_term(self, term_months: int | None) -> bool:
+        """Whether the option is one for the check's term: an offer always is, since the term's
+        save prices an open offer at it; an example is when every track runs for the term."""
+        if term_months is None or self.source == "offer":
+            return True
+        tracks = cast(list[Mapping[str, object]], self.loan["tracks"])
+        return all(track["term_months"] == term_months for track in tracks)
+
+
+def compares_options(
+    options: Iterable[Option], named_ids: Collection[str], term_months: int | None
+) -> bool:
+    """Whether a recommendation compares more than one option: the options its card shows, those
+    it names and every other one for the check's term, number more than one. One option alone
+    is evaluated, not recommended."""
+    shown = [option for option in options if option.id in named_ids or option.for_term(term_months)]
+    return len(shown) > 1
+
 
 @dataclass(frozen=True)
 class Recommendation:
@@ -236,3 +315,82 @@ class Recommendation:
     @property
     def checked(self) -> bool:
         return self.payment_ceiling is not None
+
+    @property
+    def named_option_ids(self) -> tuple[str, ...]:
+        """The preferred option's id, then the alternative's when there is one."""
+        if self.alternative_option_id is None:
+            return (self.preferred_option_id,)
+        return (self.preferred_option_id, self.alternative_option_id)
+
+
+# The loans an offer of open type may mean, in the order its card lists them. prime_margin is
+# prime plus the stated number, prime_total prices prime at the stated number's total rate
+# today, fixed_unlinked and fixed_linked are a fixed rate without and with linkage to the CPI.
+ReadingKind = Literal["prime_margin", "prime_total", "fixed_unlinked", "fixed_linked"]
+_READING_KINDS: tuple[str, ...] = get_args(ReadingKind)
+# The words of an offer that name its type, which the offer says in Hebrew.
+TypeWord = Literal["prime", "fixed", "linked"]
+
+
+@dataclass(frozen=True)
+class Reading:
+    kind: ReadingKind
+    track: Mapping[str, object]
+    """The engine's Track arguments of this reading's loan."""
+    first_payment: Decimal
+    total_rate: Decimal
+    """The annual percent charged today."""
+    approximate: bool
+    """Set for the linked reading of an offer that quotes only its payment, whose rate is the one
+    that gives the payment unlinked."""
+
+    def to_json(self) -> dict[str, object]:
+        """The one encoding of a reading, in the engine's results, the events and the store."""
+        return {
+            "kind": self.kind,
+            "track": dict(self.track),
+            "first_payment": str(self.first_payment),
+            "total_rate": str(self.total_rate),
+            "approximate": self.approximate,
+        }
+
+    @classmethod
+    def from_json(cls, data: Mapping[str, Any]) -> "Reading":
+        kind = data["kind"]
+        if kind not in _READING_KINDS:
+            raise ValueError(f"Unknown reading kind: {kind!r}")
+        return cls(
+            kind=kind,
+            track=data["track"],
+            first_payment=Decimal(data["first_payment"]),
+            total_rate=Decimal(data["total_rate"]),
+            approximate=data["approximate"],
+        )
+
+
+@dataclass(frozen=True)
+class AwaitingOffer:
+    """A lender's offer whose words leave its type open, kept with its readings until the person
+    tells which one the lender meant. The offer states a rate, quotes a payment, or both."""
+
+    id: str
+    check_id: str
+    lender: str
+    amount: Decimal
+    """The amount the lender quoted, which may differ from the check's loan."""
+    term_months: int
+    stated_rate: Decimal | None
+    monthly_payment: Decimal | None
+    payment_rate: Decimal | None
+    """The fixed rate that gives monthly_payment; None when the offer quotes no payment."""
+    type_words: tuple[TypeWord, ...]
+    readings: tuple[Reading, ...]
+    likely: ReadingKind | None
+    """The reading the offer's words point to, when they point to one."""
+    prime: Decimal
+    rate_as_of: date
+    created_at: datetime
+
+    def __post_init__(self) -> None:
+        _require_utc("created_at", self.created_at)

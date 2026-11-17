@@ -60,10 +60,10 @@ window as long as its term. The constants live in `domain/assumptions.py`.
 
 ### Base path
 
-The base path gives today's payment and the expected total cost. The rate is held flat at
-today's value: the fixed rate, or the current Bank of Israel rate + 1.5 + the track's spread for
-a prime track. The spread runs from -1.5, prime minus its whole margin, which leaves the
-Bank of Israel rate itself, up to 20. A CPI-linked track is indexed by 2% a year, `(1.02)^(1/12) - 1` per month, the
+The base path gives today's payment and the expected total cost. The rate is held flat at today's
+value: the fixed rate, or the current Bank of Israel rate + 1.5 + the track's spread for a prime
+track. The spread runs from -1.5, prime minus its whole margin, which leaves the Bank of Israel rate
+itself, up to 20. A CPI-linked track is indexed by 2% a year, `(1.02)^(1/12) - 1` per month, the
 middle of the Bank of Israel's 1-3% inflation target.
 
 ### Windows
@@ -148,37 +148,72 @@ a ceiling that the prime track, at its worst window's payment, passes.
 
 ### Typical tracks
 
-Before the person has real offers, two tracks are priced from the Bank of Israel's published
-average rate on new unindexed household consumer loans, for its latest month:
+Before the person has real offers, three example tracks illustrate the loan. Two are typical
+tracks, what most consumer lenders (banks, credit-card companies, car financiers) offer, priced
+from the Bank of Israel's published average rate on new unindexed household consumer loans, for
+its latest month:
 
 - Fixed, unlinked, at that average rate.
 - Prime, unlinked, with a spread equal to that average minus the prime in effect in the same
   month (2026-08: 7.9% - 5.0% = 2.9%).
 
-Both are equal-payment (spitzer) tracks without fees. The series mixes fixed and variable rates
-and has no split between them, so the same average prices both kinds. No published series covers
-CPI-linked consumer loans, so there is no typical linked track; a linked track enters only as a
-real offer.
+The series mixes fixed and variable rates and has no split between them, so the same average
+prices both kinds. No published series covers CPI-linked consumer loans. The third example is the
+kind of loan a pension, provident or study fund gives its members against their savings: fixed at
+4% a year, linked to the CPI (`PENSION_FUND_RATE` in `domain/assumptions.py`). A large Israeli
+pension fund publishes 3.5% or 4% plus the CPI, depending on underwriting, for up to 84 months
+and up to 30% of the fund's balance; the example takes the upper end, so it never promises the
+better underwriting result. It shows a person with such a fund what to ask it, and its card's
+range replays the CPI history for a linked track.
 
-These tracks are examples, which illustrate a loan before any lender has quoted one; nobody can
-take them. The first real offer saved on a check deletes its examples, with a recommendation that
-names one, and no example is saved while the check holds an offer of its loan amount. From then on
-offers are compared only with each other, so no offer is ever measured against an example.
+All three are equal-payment (spitzer) tracks without fees, at the check's principal and term.
+They are examples, which illustrate a loan before any lender has quoted one; nobody can take
+them. They are saved as options only when the person asks for them. The first real offer
+saved on a check, or the first offer that awaits its lender, deletes its examples, with a
+recommendation that names one, and no example is saved while the check holds an offer of its loan
+amount or an awaiting offer. From then on offers are compared only with each other, so no offer
+is ever measured against an example. The term card's proposal and the searches below price the
+two typical tracks alone, without saving them, since they are what most lenders offer; the
+pension fund example is priced at the check's term, and when its worst case passes the ceiling
+the card says so as for any option.
+
+### The price of an offer
+
+A payment that fits the ceiling says only that the person can carry it, not that the loan is a
+good one, so every real offer is shown with its price, worked out in code and never by the model:
+
+- **Interest cost**: the total paid on the base path minus the principal (`Option.interest_cost`
+  in `backend/src/loan_agent/domain/models.py`), so fees and, for a CPI-linked loan, the CPI's
+  rise on the base path are in it. Prime + 6% on 45,000 ₪ over 60 months, at a prime of 4.75%,
+  pays 58,368 ₪ in total: about 13,368 ₪ over the principal.
+- **Rate today against the market**: the rate the loan charges in its first month (`rate_today`
+  in `domain/history.py`: the fixed rate, or today's prime plus the spread) against the Bank of
+  Israel's average rate on new unindexed household consumer loans, the same average the typical
+  tracks are priced at. An unlinked rate within 0.25 percentage points of the average is similar
+  to it (`SIMILAR_RATE_POINTS` in `domain/assumptions.py`); further off it is above or below
+  (`rate_against_market` in `domain/policy.py`). In the example, 10.75% is above 7.9%.
+- A CPI-linked rate is on top of the CPI, so setting it against an unlinked average would compare
+  unlike rates: it is stated as "4% מעל המדד", with no comparison.
+
+`simulate_loan` returns each track's rate today and its comparison, and the average with its
+month, and the agent stores them with the option's figures. An option saved before the engine
+reported them has no rate line; its interest cost is still shown.
 
 ### Proposed term
 
-The term card's term is chosen by the agent from two constants of its own
-(`backend/src/loan_agent/domain/models.py`) and the engine's searches, all in 6-month steps up
-to 84 months:
+The term card is a first calculation from a stated assumption, which the person tunes on the
+card; a real offer later carries its own term. The agent chooses the term the same way for every
+purpose, from the engine's searches in 6-month steps up to 84 months:
 
-- A car loan gets 60 months, the usual dealer maximum.
-- Another purpose, while the check has no ceiling, gets the shortest term at which both typical
-  tracks' first payment is under 1,000 ₪ (`propose_term`), else 84 months. The first payment is
-  a starting point the person adjusts on the card.
-- Another purpose, once the check has a ceiling, gets the shortest term at which both typical
-  tracks fit it (`shortest_comfortable_term`), else 84 months.
+- While the check has no ceiling, the card assumes a first payment of 1,000 ₪
+  (`FIRST_PAYMENT_TARGET` in `backend/src/loan_agent/domain/models.py`) and takes the shortest
+  term at which both typical tracks' first payment is under it (`propose_term`), else 84 months.
+- Once the check has a ceiling, stated or derived, it takes the shortest term at which both
+  typical tracks' worst-case payments fit it (`shortest_comfortable_term`), else 84 months.
 
 The first payment shown on the card is the higher of the two tracks' first payments at that term.
+The card states which assumption it used, with its amount, and says so when even 84 months does
+not keep the payment under it.
 
 ### Remedies above the ceiling
 
@@ -207,3 +242,70 @@ first term whose first payment is under 1,000 ₪ (`propose_offer_term`); with o
 fits it (`shortest_comfortable_offer_term`); in either case the maximum when none does. A longer
 term only adds interest, so the offer is kept at that term, and `save_offer` refuses it at any
 other. Each track of an offer is searched on its own, since each is saved as an option of its own.
+
+### Reading an offer
+
+Lenders often word an offer so that one sentence fits several loans: "פריים 6.45" may mean prime +
+6.45% or 6.45% in total, and "969 ₪ קבוע" names no rate at all. The agent's model extracts only what
+the person said (the lender, the amount and term the lender quoted, a stated number, the monthly
+payment and the type words פריים, קבוע and צמוד); the engine's `offer_readings`
+(`domain/readings.py`) prices each loan those figures may mean, and the agent's
+`application/offer_reading.py` decides between them. Every reading is one equal-payment (spitzer)
+track with no fee, priced on the amount and term the lender quoted, since the payment belongs to
+them, and its first payment is the one of the base path. A reading whose rate falls outside what the
+engine prices (a prime spread of -1.5 to 20, a fixed rate of 0% to 30%) is left out.
+
+The candidate readings:
+
+- **With a stated number X**: prime + X; X as the total rate today, that is prime + (X - prime),
+  only when the words say פריים; fixed X, not linked; and fixed X, linked to the CPI.
+- **With a payment and no number**: first the rate r at which a fixed, unlinked track of the
+  quoted amount and term starts with that payment; then fixed r, not linked; prime + (r - prime
+  today); and fixed r, linked to the CPI. The linked reading is marked approximate: its base path
+  indexes the balance by 2% a year before the first payment, so it starts a little above the
+  quoted payment at the same rate.
+
+The rate r is found by bisection between 0% and 30%: 40 halvings of the bracket, each keeping the
+half whose first payment holds the quoted payment, leave it far narrower than 0.01%, and the upper
+bound is rounded half up to 0.01%. A payment below the 0% payment or above the 30% one gives no
+rate and no reading.
+
+The decision, for an offer that states a number and quotes a payment: a reading fits when its
+first payment is within 1% of the quoted payment, the edge included.
+
+- **Exactly one fits**: the offer is identified and saved as a real offer, whatever its type words
+  said, since the payment is the lender's own arithmetic. It is saved on the check's loan amount at
+  the quoted term, as every offer is priced on the check's amount.
+- **Several fit**: the person sees those readings on a card and the offer awaits its lender.
+- **None fits**: the type is not recognized and nothing is saved.
+
+The simulator compares single loans of the check's amount and never combines lenders or tracks, so
+an offer quoted for less than the check's loan is never saved by its reading, identified or not:
+it awaits its lender's answer on lending the loan amount on the same terms. A yes saves its
+reading, the identified one or the one chosen on the card, on the check's loan amount at the
+quoted term; a no removes the offer, which stays out of the comparison. An offer quoted for the
+loan amount or more is saved on the check's amount as above.
+
+An offer with only a number or only a payment goes to the card with every reading: a number alone
+has no payment to fit against, and readings priced from a payment all match it. A payment that no
+rate gives leaves no reading, and the type is not recognized. On a card, פריים keeps only the prime
+readings when it has some; צמוד marks the linked fixed reading as the likely one, else קבוע the
+unlinked one. An offer on a card is left out of the recommendation until the person confirms one of
+its readings, which is then saved as the offer.
+
+With prime at 4.75% (a Bank of Israel rate of 3.25% plus the 1.5 margin):
+
+- **Leumi**, 45,000 ₪ over 60 months, "פריים פלוס 6 ... 972 שח קבוע": prime + 6% starts at
+  972.81 ₪; 6% in total and fixed 6% both start at 869.98 ₪, and fixed 6% linked at 871.41 ₪.
+  Only the first is within 9.72 ₪ of 972 ₪, so the offer is prime + 6%, 10.75% today, though the
+  words said קבוע.
+- **Max**, 20,000 ₪ over 24 months, "6.45 פריים, 934 בחודש", on a check of 45,000 ₪: prime +
+  6.45% starts at 933.85 ₪ on the quoted 20,000 ₪, so the offer is identified, but it waits for
+  Max's answer on lending 45,000 ₪ on the same terms; saved on 45,000 ₪ it would start near
+  2,100 ₪, a payment Max never quoted.
+- **Max**, 20,000 ₪ over 24 months, "6.45 פריים, 934 ₪": prime + 6.45% starts at 934.01 ₪, and
+  6.45% in total, the same as fixed 6.45%, at 890.47 ₪. The offer is prime + 6.45%, 11.2% today,
+  saved on the check's loan of 45,000 ₪ at 24 months.
+- **Avis**, 45,000 ₪ over 60 months, "969 ₪, קבוע", no rate: the payment amounts to a fixed
+  10.58%, so the card shows fixed 10.58% not linked, prime + 5.83%, and about 10.58% linked, with
+  the unlinked fixed reading likely because of קבוע.

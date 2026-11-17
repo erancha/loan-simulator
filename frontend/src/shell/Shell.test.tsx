@@ -1,11 +1,22 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import type { CheckSummary, User } from '../api/types.ts'
 import { FakeEventSource } from '../test/fakeEventSource.ts'
 import { checkTitle } from '../check/copy.ts'
-import { loan } from '../test/fixtures.ts'
+import {
+  awaitingAvis,
+  financesUpdated,
+  loan,
+  loanSet,
+  offerAwaiting,
+  questionAsked,
+  turnStatus,
+  userMessage,
+} from '../test/fixtures.ts'
+import { restoreScrollIntoView, stubScrollIntoView } from '../test/scrollIntoView.ts'
 import { Shell } from './Shell.tsx'
+import { wholeText } from '../test/wholeText.ts'
 
 const LOAN_TITLE = checkTitle(loan)
 const dana: User = { id: '1001', email: 'dana@example.com', name: 'Dana' }
@@ -17,9 +28,12 @@ function summary(id: string, created_at: string, over: Partial<CheckSummary> = {
     loan: null,
     recommendation: null,
     recommends_examples_only: false,
+    compares_options: false,
     term_months: null,
     archived: false,
     started: true,
+    has_finances: false,
+    awaiting_offers: [],
     ...over,
   }
 }
@@ -73,7 +87,12 @@ beforeEach(() => {
   vi.stubGlobal('EventSource', FakeEventSource)
   window.history.replaceState(null, '', '/')
 })
-afterEach(() => vi.unstubAllGlobals())
+// A page still mounting opens its check's stream, so it unmounts before the stubs go.
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+  restoreScrollIntoView()
+})
 
 test('the account menu names the person and signs out', async () => {
   stubApi([[summary('a', '2026-01-01T00:00:00Z')]])
@@ -136,7 +155,11 @@ test('no checks: the empty state; the button creates and opens a check', async (
 test('lists checks with price and recommendation markers; the newest opens', async () => {
   stubApi([
     [
-      summary('old', '2026-01-01T00:00:00Z', { loan, recommendation: RECOMMENDATION }),
+      summary('old', '2026-01-01T00:00:00Z', {
+        loan,
+        recommendation: RECOMMENDATION,
+        compares_options: true,
+      }),
       summary('new', '2026-03-01T00:00:00Z'),
     ],
   ])
@@ -173,7 +196,7 @@ test('picking a check opens its recommendation if it has one, else its chat', as
   expect(document.querySelector('.check-page')).toHaveAttribute('data-active-pane', 'chat')
 })
 
-test('a check recommending only examples says so beside its ready chip', async () => {
+test('the ready chip is for a comparison: examples and one offer alone have their own', async () => {
   stubApi([
     [
       summary('examples', '2026-03-01T00:00:00Z', {
@@ -181,17 +204,25 @@ test('a check recommending only examples says so beside its ready chip', async (
         recommendation: RECOMMENDATION,
         recommends_examples_only: true,
       }),
+      summary('offers', '2026-02-01T00:00:00Z', {
+        loan,
+        recommendation: RECOMMENDATION,
+        compares_options: true,
+      }),
       summary('offer', '2026-01-01T00:00:00Z', { loan, recommendation: RECOMMENDATION }),
     ],
   ])
   render(<Shell user={dana} onSignOut={vi.fn()} />)
 
   const list = await screen.findByRole('navigation', { name: 'הבדיקות שלי' })
-  const [examples, offer] = within(list).getAllByRole('listitem')
-  expect(within(examples).getByText('המלצה מוכנה')).toBeInTheDocument()
+  const [examples, offers, offer] = within(list).getAllByRole('listitem')
+  expect(within(examples).queryByText('המלצה מוכנה')).not.toBeInTheDocument()
   expect(within(examples).getByText('דוגמא')).toBeInTheDocument()
-  expect(within(offer).getByText('המלצה מוכנה')).toBeInTheDocument()
-  expect(within(offer).queryByText('דוגמא')).not.toBeInTheDocument()
+  expect(within(offers).getByText('המלצה מוכנה')).toHaveClass('chip', 'chip-green')
+  expect(within(offers).queryByText('דוגמא')).not.toBeInTheDocument()
+  // One real offer alone is evaluated, not recommended.
+  expect(within(offer).getByText('הצעה נבדקה')).toHaveClass('chip', 'chip-green')
+  expect(within(offer).queryByText('המלצה מוכנה')).not.toBeInTheDocument()
 })
 
 test('the hash selects a check; clicking another switches stream and hash', async () => {
@@ -479,11 +510,12 @@ test('a check with a confirmed term shows it under its title', async () => {
   render(<Shell user={dana} onSignOut={vi.fn()} />)
 
   const [termed, open] = await screen.findAllByRole('button', { name: new RegExp(`^${LOAN_TITLE}`) })
-  expect(within(termed).getByText('72 חודשים')).toBeInTheDocument()
-  expect(open).not.toHaveTextContent('חודשים')
+  expect(termed).toHaveAccessibleName(`${LOAN_TITLE} 72 חודשים`)
+  expect(within(termed.closest('li')!).getByText(wholeText('72 חודשים'))).toBeInTheDocument()
+  expect(open.closest('li')).not.toHaveTextContent('חודשים')
 })
 
-test('a check holding only the opening line has no duplicate or archive icon', async () => {
+test('a check showing only the opening card has no duplicate or archive icon', async () => {
   stubApi([[summary('empty', '2026-01-01T00:00:00Z', { started: false })]])
   render(<Shell user={dana} onSignOut={vi.fn()} />)
 
@@ -598,4 +630,197 @@ test('collapsing the archived group over the open check opens the newest live on
 
   await waitFor(() => expect(window.location.hash).toBe('#check=live-new'))
   expect(archivedGroup()).not.toHaveAttribute('open')
+})
+
+const AVIS = { id: 'a-1', lender: 'סוכנות אוויס רכבים', monthly_payment: '969' }
+const DIRECT = { id: 'a-2', lender: 'מימון ישיר', monthly_payment: null }
+const AVIS_LINK = 'סוכנות אוויס רכבים · 969 ₪ בחודש'
+const ONE_TIP = 'הצעה אחת ממתינה לבירור מול הגוף המלווה'
+const AWAITING_BUBBLE = /ממתינ.* לבירור/
+
+test('a check with one awaiting offer shows a bubble with 1 and the singular tooltip', async () => {
+  stubApi([[summary('c', '2026-01-01T00:00:00Z', { loan, awaiting_offers: [AVIS] })]])
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+
+  const bubble = await screen.findByRole('button', { name: ONE_TIP })
+  expect(bubble).toHaveTextContent('1')
+})
+
+test('three awaiting offers show 3 and the plural tooltip', async () => {
+  const three = [AVIS, DIRECT, { ...AVIS, id: 'a-3' }]
+  stubApi([[summary('c', '2026-01-01T00:00:00Z', { loan, awaiting_offers: three })]])
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+
+  const bubble = await screen.findByRole('button', {
+    name: '3 הצעות ממתינות לבירור מול הגוף המלווה',
+  })
+  expect(bubble).toHaveTextContent('3')
+})
+
+test('a check with no awaiting offer has no bubble', async () => {
+  stubApi([[summary('c', '2026-01-01T00:00:00Z', { loan })]])
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+
+  await screen.findByRole('button', { name: `שכפול הבדיקה: ${LOAN_TITLE}` })
+  expect(screen.queryByRole('button', { name: AWAITING_BUBBLE })).not.toBeInTheDocument()
+})
+
+test('the bubble opens and closes a list of links under its check', async () => {
+  stubApi([[summary('c', '2026-01-01T00:00:00Z', { loan, awaiting_offers: [AVIS, DIRECT] })]])
+  const user = userEvent.setup()
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+
+  const bubble = await screen.findByRole('button', {
+    name: '2 הצעות ממתינות לבירור מול הגוף המלווה',
+  })
+  expect(bubble).toHaveAttribute('aria-expanded', 'false')
+  expect(screen.queryByText('ממתינות לבירור מול הגוף המלווה')).not.toBeInTheDocument()
+
+  await user.click(bubble)
+  expect(bubble).toHaveAttribute('aria-expanded', 'true')
+  expect(screen.getByText('ממתינות לבירור מול הגוף המלווה')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: AVIS_LINK })).toBeVisible()
+  expect(screen.getByRole('button', { name: 'מימון ישיר' })).toBeVisible()
+
+  await user.click(bubble)
+  expect(screen.queryByRole('button', { name: 'מימון ישיר' })).not.toBeInTheDocument()
+})
+
+test('a link opens its check on the conversation', async () => {
+  stubApi([
+    [
+      summary('other', '2026-02-01T00:00:00Z', { loan, recommendation: RECOMMENDATION }),
+      summary('c', '2026-01-01T00:00:00Z', { loan, awaiting_offers: [AVIS] }),
+    ],
+  ])
+  const user = userEvent.setup()
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+
+  await user.click(await screen.findByRole('button', { name: ONE_TIP }))
+  await user.click(screen.getByRole('button', { name: AVIS_LINK }))
+
+  await waitFor(() => expect(window.location.hash).toBe('#check=c'))
+  expect(screen.getByRole('tab', { name: 'שיחה' })).toHaveAttribute('aria-selected', 'true')
+})
+
+test('a link of the bubble opens its check and names the card to focus, on every tap', async () => {
+  stubApi([
+    [
+      summary('other', '2026-02-01T00:00:00Z', { loan, recommendation: RECOMMENDATION }),
+      summary('c', '2026-01-01T00:00:00Z', { loan, awaiting_offers: [AVIS] }),
+    ],
+  ])
+  const scrolled = stubScrollIntoView()
+  const user = userEvent.setup()
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+
+  await user.click(await screen.findByRole('button', { name: ONE_TIP }))
+  await user.click(screen.getByRole('button', { name: AVIS_LINK }))
+  await waitFor(() => expect(openedStreams()).toContain('/api/checks/c/events'))
+  const stream = FakeEventSource.last()
+  act(() => {
+    for (const event of [userMessage(1, '969 שח קבוע'), loanSet, offerAwaiting(4, awaitingAvis)]) {
+      stream.emit(event.type, JSON.stringify(event.data), String(event.seq))
+    }
+  })
+
+  const card = document.getElementById('awaiting-a-1')!
+  expect(scrolled).toHaveBeenCalledOnce()
+  expect(scrolled.mock.contexts[0]).toBe(card)
+  expect(card).toHaveClass('card-focus')
+
+  // The list is drawn anew with the check it opened, so its bubble starts folded again.
+  await user.click(screen.getByRole('button', { name: ONE_TIP }))
+  await user.click(screen.getByRole('button', { name: AVIS_LINK }))
+  expect(scrolled).toHaveBeenCalledTimes(2)
+})
+
+test('an archived check shows no bubble', async () => {
+  stubApi([[summary('c', '2026-01-01T00:00:00Z', { archived: true, awaiting_offers: [AVIS] })]])
+  const user = userEvent.setup()
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+
+  await user.click(await screen.findByText('בדיקות בארכיון (1)'))
+  expect(screen.queryByRole('button', { name: AWAITING_BUBBLE })).not.toBeInTheDocument()
+})
+
+const FINANCES_LINK = 'פרטים כספיים'
+
+test('only a check with finances has the finances link, on its months row', async () => {
+  stubApi([
+    [
+      summary('told', '2026-03-01T00:00:00Z', { loan, term_months: 30, has_finances: true }),
+      summary('untold', '2026-01-01T00:00:00Z', { loan, term_months: 30 }),
+    ],
+  ])
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+
+  const list = await screen.findByRole('navigation', { name: 'הבדיקות שלי' })
+  const [told, untold] = within(list).getAllByRole('listitem')
+  const link = within(told).getByRole('button', { name: FINANCES_LINK })
+  expect(link.closest('.check-term-row')).toHaveTextContent('30 חודשים · פרטים כספיים')
+  expect(link).toHaveAttribute('aria-expanded', 'false')
+  expect(within(untold).queryByRole('button', { name: FINANCES_LINK })).not.toBeInTheDocument()
+})
+
+test('the finances link opens its check on the chat with the line; again hides it', async () => {
+  stubApi([
+    [
+      summary('other', '2026-03-01T00:00:00Z', { loan, recommendation: RECOMMENDATION }),
+      summary('told', '2026-01-01T00:00:00Z', { loan, has_finances: true }),
+    ],
+  ])
+  const user = userEvent.setup()
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+
+  await user.click(await screen.findByRole('button', { name: FINANCES_LINK }))
+  await waitFor(() => expect(window.location.hash).toBe('#check=told'))
+  expect(screen.getByRole('tab', { name: 'שיחה' })).toHaveAttribute('aria-selected', 'true')
+  const stream = FakeEventSource.last()
+  act(() => {
+    for (const event of [financesUpdated, turnStatus(3, 'idle')]) {
+      stream.emit(event.type, JSON.stringify(event.data), String(event.seq))
+    }
+  })
+  expect(document.querySelector('.finances-panel')).not.toBeNull()
+  const link = screen.getByRole('button', { name: FINANCES_LINK })
+  expect(link).toHaveAttribute('aria-expanded', 'true')
+
+  await user.click(link)
+  expect(document.querySelector('.finances-panel')).toBeNull()
+  expect(screen.getByRole('button', { name: FINANCES_LINK })).toHaveAttribute(
+    'aria-expanded',
+    'false',
+  )
+})
+
+test('the open check hides its finances link while its term card takes the ceiling', async () => {
+  stubApi([[summary('told', '2026-01-01T00:00:00Z', { loan, has_finances: true })]])
+  const user = userEvent.setup()
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+
+  await user.click(await screen.findByRole('button', { name: FINANCES_LINK }))
+  const stream = FakeEventSource.last()
+  const term = questionAsked(4, { kind: 'term', term_months: 60, first_payment: '910.00' })
+  act(() => {
+    for (const event of [financesUpdated, turnStatus(3, 'idle'), term]) {
+      stream.emit(event.type, JSON.stringify(event.data), String(event.seq))
+    }
+  })
+  expect(screen.queryByRole('button', { name: FINANCES_LINK })).not.toBeInTheDocument()
+  expect(document.querySelector('.finances-panel')).toBeNull()
+})
+
+test('opening a check with finances starts with the finances line hidden', async () => {
+  stubApi([[summary('told', '2026-01-01T00:00:00Z', { loan, has_finances: true })]])
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+
+  await waitFor(() => expect(openedStreams()).toEqual(['/api/checks/told/events']))
+  const stream = FakeEventSource.last()
+  act(() => {
+    for (const event of [financesUpdated, turnStatus(3, 'idle')]) {
+      stream.emit(event.type, JSON.stringify(event.data), String(event.seq))
+    }
+  })
+  expect(document.querySelector('.finances-panel')).toBeNull()
 })

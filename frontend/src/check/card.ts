@@ -2,7 +2,10 @@
  * Maps a check's stored engine results to the recommendation card the page renders.
  *
  * Every number on the card is read from an option's stored figures and simulation, or from the
- * recommendation's loan amount; none comes from the model's text.
+ * recommendation's loan amount; none comes from the model's text. A real offer also shows its
+ * price: the interest it costs at today's terms and its rate today against the market.
+ * comparesOptions says whether the card ranks more than one option, the one rule behind both
+ * the card's labels and the checks list's chip.
  */
 import type { OptionSaved, RecommendationPresented, Track } from '../api/types.ts'
 import {
@@ -14,6 +17,7 @@ import {
   formatShekels,
   formatYearRange,
   isZero,
+  subtractAmounts,
 } from '../money.ts'
 import {
   CEILING_LABEL,
@@ -33,15 +37,20 @@ import {
   SPITZER_MOVING,
   UNCHECKED_NOTE,
   aboveCeilingText,
+  awaitingNote,
   balloonLine,
   chipText,
   dataDatesLine,
   decisionText,
+  interestLine,
   offerSource,
+  rateAgainstMarketLine,
+  rateOverIndexLine,
+  shortAwaitingNote,
   termText,
   totalRangeText,
 } from './copy.ts'
-import type { CheckState } from './events.ts'
+import { quotedBelowLoan, type CheckState } from './events.ts'
 
 export interface OptionCard {
   id: string
@@ -56,6 +65,11 @@ export interface OptionCard {
   balloon: string | null
   totalToday: string
   totalRange: string | null
+  /**
+   * A real offer's price; null for an example. The rate line is null for an offer stored before
+   * the engine reported the rates.
+   */
+  price: { interest: string; rate: string | null } | null
 }
 
 export interface CardModel {
@@ -73,6 +87,8 @@ export interface CardModel {
   /** The preferred option, then the alternative when there is one. */
   recommended: OptionCard[]
   others: { title: string; options: OptionCard[] } | null
+  /** One note per offer awaiting its lender's answer; such an offer is not in the comparison. */
+  awaiting: string[]
   reasoning: string | null
   fold: { assumptions: string[] } | null
 }
@@ -132,7 +148,11 @@ function totalRangeOf(option: OptionSaved): string | null {
 }
 
 function sourceOf(option: OptionSaved): string {
-  if (option.source === 'example') return SOURCE_EXAMPLE
+  if (option.source === 'example') {
+    // The engine's only CPI-linked example is the pension fund's.
+    const { cpi_linked: linked } = option.loan.tracks[0]
+    return linked ? SOURCE_EXAMPLE.pensionFund : SOURCE_EXAMPLE.bankAverage
+  }
   const date = option.offer_date === null ? null : formatDate(option.offer_date)
   return offerSource(option.lender, date)
 }
@@ -159,6 +179,30 @@ function optionCard(
         : balloonLine(formatShekels(option.figures.balloon_due)),
     totalToday: formatShekels(option.figures.total_paid),
     totalRange: totalRangeOf(option),
+    price: priceOf(option, track),
+  }
+}
+
+function priceOf(option: OptionSaved, track: Track): OptionCard['price'] {
+  if (option.source === 'example') return null
+  const principal = decimalText(track.principal)
+  const interest = interestLine(
+    formatShekels(subtractAmounts(option.figures.total_paid, principal)),
+    formatShekels(principal),
+    track.cpi_linked,
+  )
+  const price = option.figures.price
+  if (price === undefined || price === null) return { interest, rate: null }
+  const rate = decimalText(price.rate_today)
+  if (price.against_market === null) return { interest, rate: rateOverIndexLine(rate) }
+  return {
+    interest,
+    rate: rateAgainstMarketLine(
+      rate,
+      price.against_market,
+      decimalText(price.market_rate),
+      formatMonth(price.market_rate_month),
+    ),
   }
 }
 
@@ -219,29 +263,51 @@ function cheapestFirst(options: OptionSaved[]): OptionSaved[] {
   })
 }
 
-export function buildCard(state: CheckState): CardModel {
+/** The options the latest recommendation names, the preferred one first, with their labels. */
+function namedOptions(
+  state: CheckState,
+): Array<{ option: OptionSaved; label: OptionCard['label'] }> {
   const recommendation = state.recommendation
-  const named: Array<{ option: OptionSaved; label: OptionCard['label'] }> = []
-  if (recommendation !== null) {
+  if (recommendation === null) return []
+  const named: Array<{ option: OptionSaved; label: OptionCard['label'] }> = [
+    { option: storedOption(state, recommendation.preferred.option_id), label: LABEL_PREFERRED },
+  ]
+  if (recommendation.alternative !== null) {
     named.push({
-      option: storedOption(state, recommendation.preferred.option_id),
-      label: LABEL_PREFERRED,
+      option: storedOption(state, recommendation.alternative.option_id),
+      label: LABEL_ALTERNATIVE,
     })
-    if (recommendation.alternative !== null) {
-      named.push({
-        option: storedOption(state, recommendation.alternative.option_id),
-        label: LABEL_ALTERNATIVE,
-      })
-    }
   }
-  const namedIds = named.map(({ option }) => option.option_id)
+  return named
+}
+
+/** The options the card shows besides the named ones, cheapest first. */
+function otherOptionsOf(state: CheckState, namedIds: string[]): OptionSaved[] {
   // An example made for another term, before the term changed here or in the check this one was
   // cloned from, illustrates nothing the person is now deciding, so it drops out; an offer keeps
   // its lender's term.
-  const otherOptions = cheapestFirst(
+  return cheapestFirst(
     [...state.options.values()].filter(
       (o) => !namedIds.includes(o.option_id) && (o.source === 'offer' || forTheTerm(o, state)),
     ),
+  )
+}
+
+/**
+ * Whether the card shows more than one option, so a recommendation ranks them; one option alone
+ * is evaluated, not recommended.
+ */
+export function comparesOptions(state: CheckState): boolean {
+  const namedIds = namedOptions(state).map(({ option }) => option.option_id)
+  return namedIds.length + otherOptionsOf(state, namedIds).length > 1
+}
+
+export function buildCard(state: CheckState): CardModel {
+  const recommendation = state.recommendation
+  const named = namedOptions(state)
+  const otherOptions = otherOptionsOf(
+    state,
+    named.map(({ option }) => option.option_id),
   )
   const shown = [...named.map(({ option }) => option), ...otherOptions]
 
@@ -255,10 +321,17 @@ export function buildCard(state: CheckState): CardModel {
           ),
           options: otherOptions.map((o) => optionCard(o, null, state.termMonths)),
         }
+  // A label ranks the options against each other, so a single option on the card has none.
+  const ranked = comparesOptions(state)
   const recommendedCards = named.map(({ option, label }) =>
-    optionCard(option, label, state.termMonths),
+    optionCard(option, ranked ? label : null, state.termMonths),
   )
 
+  const awaiting = [...state.awaiting.values()].map((offer) =>
+    state.loan !== null && quotedBelowLoan(offer, state.loan.amount)
+      ? shortAwaitingNote(offer.lender)
+      : awaitingNote(offer.lender),
+  )
   const ceiling =
     state.ceiling === null
       ? { label: CEILING_LABEL, amount: CEILING_NOT_SET, source: null }
@@ -275,6 +348,7 @@ export function buildCard(state: CheckState): CardModel {
       ceiling,
       recommended: [],
       others,
+      awaiting,
       reasoning: null,
       fold: null,
     }
@@ -292,6 +366,7 @@ export function buildCard(state: CheckState): CardModel {
     ceiling,
     recommended: recommendedCards,
     others,
+    awaiting,
     reasoning: recommendation.reasoning,
     fold: { assumptions: assumptionsOf(preferred, shown) },
   }

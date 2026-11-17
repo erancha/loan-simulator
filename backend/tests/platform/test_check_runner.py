@@ -1,5 +1,7 @@
 """The runner runs one turn per check at a time within the person's message cap, streams the
-reply's text live, stores the complete reply, and reports a failed turn without losing the check."""
+reply's text live, stores the complete reply, and reports a failed turn without losing the check.
+It answers the opening card, a confirmed term with no option and a skipped offer form without
+calling the model, and saves a confirmed reading or an amount answer before any message."""
 
 import asyncio
 from collections.abc import AsyncIterator, Mapping
@@ -23,11 +25,14 @@ from fakes import (
     Clock,
     FakeLoanEngine,
     Ids,
+    InMemoryAwaitingOfferRepository,
     InMemoryCheckEventStore,
     InMemoryCheckRepository,
     InMemoryOptionRepository,
     InMemoryRecommendationRepository,
     ScriptedChatModel,
+    awaiting_offer,
+    readings_of,
 )
 from loan_agent.adapters.memory_bus import InMemoryEventBus
 from loan_agent.application.agent_graph import (
@@ -35,7 +40,7 @@ from loan_agent.application.agent_graph import (
     TURN_STEP_LIMIT,
     build_agent_graph,
 )
-from loan_agent.application.check_tools import ToolDeps
+from loan_agent.application.check_tools import ToolDeps, ToolError
 from loan_agent.application.event_sink import CheckEventSink, check_channel
 from loan_agent.domain.errors import (
     CheckArchivedError,
@@ -46,8 +51,10 @@ from loan_agent.domain.errors import (
 )
 from loan_agent.domain.models import Check, Finances, LoanRequest, Option, Recommendation, User
 from loan_agent.platform.check_runner import (
+    DESCRIBE_THE_OFFER,
     FAILURE_MESSAGE,
     OFFER_FORM_SHOWN,
+    OPENING_CARD_ANSWERED,
     TERM_CARD_FOR_CEILING,
     TOOL_CALL_OUTCOME_UNKNOWN,
     CheckRunner,
@@ -83,11 +90,14 @@ def world() -> World:
     bus = InMemoryEventBus()
     engine = FakeLoanEngine()
     options = InMemoryOptionRepository()
+    awaiting = InMemoryAwaitingOfferRepository()
     recommendations = InMemoryRecommendationRepository()
-    checks.option_store, checks.recommendation_store = options, recommendations
+    checks.option_store, checks.awaiting_store = options, awaiting
+    checks.recommendation_store = recommendations
     deps = ToolDeps(
         checks=checks,
         options=options,
+        awaiting=awaiting,
         recommendations=recommendations,
         engine=engine,
         sink=CheckEventSink(store, bus),
@@ -802,6 +812,76 @@ async def test_saves_from_the_page_are_refused_for_an_archived_or_busy_check(wor
     await checks.aclose()
 
 
+async def test_confirming_a_reading_saves_the_offer_before_any_message(world: World) -> None:
+    model = ScriptedChatModel(replies=[AIMessage(REPLY)])
+    checks = runner(world, model)
+    check = await checks.create(PERSON)
+    await world.checks.set_loan(check.id, LOAN)
+    await world.checks.set_term(check.id, 60)
+    await world.deps.awaiting.save(
+        awaiting_offer(check.id, "awaiting-1", "אוויס", None, LOAN.amount)
+    )
+    world.engine.simulations = [PRIME_SIMULATION]
+
+    await checks.confirm_reading(PERSON, check.id, "awaiting-1", "fixed_unlinked")
+    await checks.drain()
+
+    types = [type for type, _ in await stored(world, check.id)]
+    assert types[-2:] == ["option.saved", "offer.settled"]
+    assert "message.user" not in types
+    assert model.received == []
+    assert await world.deps.awaiting.list(check.id) == []
+
+
+async def test_a_reading_is_not_confirmed_on_a_busy_or_archived_check(world: World) -> None:
+    started = asyncio.Event()
+
+    async def hangs() -> str:
+        started.set()
+        await asyncio.Event().wait()
+        return "never"
+
+    checks = runner(world, ScriptedChatModel(replies=[calls_size_loan()]), [engine_tool(hangs)])
+    archived = await checks.create(PERSON)
+    await world.checks.archive(archived.id, NOW)
+    busy = await checks.create(PERSON)
+    await checks.send(PERSON, busy.id, "כמה ללוות?")
+    await started.wait()
+
+    with pytest.raises(CheckArchivedError):
+        await checks.confirm_reading(PERSON, archived.id, "awaiting-1", "fixed_unlinked")
+    with pytest.raises(TurnConflictError):
+        await checks.confirm_reading(PERSON, busy.id, "awaiting-1", "fixed_unlinked")
+    with pytest.raises(CheckArchivedError):
+        await checks.answer_amount(PERSON, archived.id, "awaiting-1", False, None)
+    with pytest.raises(TurnConflictError):
+        await checks.answer_amount(PERSON, busy.id, "awaiting-1", False, None)
+    await checks.aclose()
+
+
+async def test_answering_the_amount_question_saves_or_drops_before_any_message(
+    world: World,
+) -> None:
+    model = ScriptedChatModel(replies=[AIMessage(REPLY)])
+    checks = runner(world, model)
+    check = await checks.create(PERSON)
+    await world.checks.set_loan(check.id, LOAN)
+    await world.checks.set_term(check.id, 60)
+    for awaiting_id in ("awaiting-1", "awaiting-2"):
+        await world.deps.awaiting.save(awaiting_offer(check.id, awaiting_id, "אוויס", None))
+    world.engine.simulations = [PRIME_SIMULATION]
+
+    await checks.answer_amount(PERSON, check.id, "awaiting-1", True, "fixed_unlinked")
+    await checks.answer_amount(PERSON, check.id, "awaiting-2", False, None)
+    await checks.drain()
+
+    types = [type for type, _ in await stored(world, check.id)]
+    assert types[-3:] == ["option.saved", "offer.settled", "offer.dropped"]
+    assert "message.user" not in types
+    assert model.received == []
+    assert await world.deps.awaiting.list(check.id) == []
+
+
 MARKET_SAMPLE = "מהי ריבית הפריים הנוכחית"
 
 
@@ -985,6 +1065,33 @@ async def test_no_ceiling_question_with_a_ceiling_or_without_a_recommendation(
         assert "question.asked" not in [type for type, _ in await stored(world, check.id)]
 
 
+def read_avis_offer() -> AIMessage:
+    """The model's call reading Avis's 969 a month, which has no number and no type."""
+    args = {"lender": "אוויס", "amount": "45000", "term_months": 60, "monthly_payment": "969"}
+    return AIMessage(
+        content="",
+        tool_calls=[{"name": "read_offer", "args": args, "id": "call-read", "type": "tool_call"}],
+    )
+
+
+@pytest.mark.parametrize("unrecognized", [False, True])
+async def test_a_turn_ending_on_an_offers_reading_asks_no_ceiling(
+    world: World, unrecognized: bool
+) -> None:
+    if unrecognized:
+        world.engine.readings = readings_of(payment_rate="10.58")
+    checks = runner(world, ScriptedChatModel(replies=[read_avis_offer(), AIMessage("never")]))
+    check = await unchecked_check(world, checks)
+
+    await checks.send(PERSON, check.id, "אוויס: 45,000 ₪ ל-60 חודשים, 969 ₪ בחודש")
+    await checks.drain()
+
+    types = [type for type, _ in await stored(world, check.id)]
+    reading = "offer.unrecognized" if unrecognized else "offer.awaiting"
+    assert types[-2:] == [reading, "turn.status"]
+    assert "question.asked" not in types
+
+
 async def test_a_turn_ending_with_the_models_question_is_left_alone(world: World) -> None:
     asks = AIMessage(
         content="",
@@ -1028,7 +1135,10 @@ async def test_a_ceiling_on_the_term_card_is_saved_and_brings_a_card_for_it(worl
         "question.asked",
         "turn.status",
     ]
-    assert events[3][1]["question"]["term_months"] == 72
+    question = events[3][1]["question"]
+    assert question["term_months"] == 72
+    basis = question["basis"]
+    assert (basis["kind"], Decimal(basis["amount"]), basis["fits"]) == ("ceiling", 1000, True)
     assert model.received == []
 
     await checks.send(PERSON, check.id, "אישור: 72 חודשים")
@@ -1038,3 +1148,208 @@ async def test_a_ceiling_on_the_term_card_is_saved_and_brings_a_card_for_it(worl
         "החזר חודשי מרבי: 1,000 ₪",
         TERM_CARD_FOR_CEILING,
     ]
+
+
+OPENING = "רכב: הלוואה בסך 45,000 ₪"
+
+
+async def test_the_opening_card_saves_the_loan_and_shows_the_term_card_with_no_model_call(
+    world: World,
+) -> None:
+    model = ScriptedChatModel(replies=[AIMessage(REPLY)])
+    checks = runner(world, model)
+    check = await checks.create(PERSON)
+    world.engine.simulations = [PRIME_SIMULATION, PRIME_SIMULATION]
+
+    await checks.send_opening(PERSON, check.id, OPENING, "רכב", Decimal(45000))
+    await checks.drain()
+
+    saved = await world.checks.get(PERSON.id, check.id)
+    assert saved.loan == LoanRequest("רכב", Decimal(45000))
+    events = await stored(world, check.id)
+    assert [type for type, _ in events] == [
+        "loan.set",
+        "message.user",
+        "turn.status",
+        "question.asked",
+        "turn.status",
+    ]
+    assert events[0][1] == {"purpose": "רכב", "amount": "45000"}
+    assert events[1][1] == {"text": OPENING}
+    assert (events[2][1], events[4][1]) == ({"status": "running"}, {"status": "idle"})
+    assert events[3][1]["question"]["kind"] == "term"
+    assert events[3][1]["question"]["basis"]["kind"] == "first_payment_target"
+    assert model.received == []
+
+    await checks.send(PERSON, check.id, "אישור: 60 חודשים")
+    await checks.drain()
+    said = [message for message in model.received[0] if not isinstance(message, SystemMessage)]
+    assert [type(message) for message in said] == [HumanMessage, AIMessage, HumanMessage]
+    assert (said[0].content, said[1].content) == (OPENING, OPENING_CARD_ANSWERED)
+
+
+async def test_a_refused_opening_records_nothing(world: World) -> None:
+    world.engine.suggest_error = EngineError("principal below 10000")
+    checks = runner(world, ScriptedChatModel(replies=[]))
+    check = await checks.create(PERSON)
+
+    with pytest.raises(ToolError, match="principal below 10000"):
+        await checks.send_opening(PERSON, check.id, OPENING, "רכב", Decimal(500))
+    await checks.drain()
+
+    assert (await world.checks.get(PERSON.id, check.id)).loan is None
+    assert await stored(world, check.id) == []
+
+
+async def test_an_opening_on_a_check_that_has_a_loan_is_refused(world: World) -> None:
+    checks = runner(world, ScriptedChatModel(replies=[]))
+    check = await checks.create(PERSON)
+    await world.checks.set_loan(check.id, LOAN)
+
+    with pytest.raises(ToolError, match="already"):
+        await checks.send_opening(PERSON, check.id, OPENING, "רכב", Decimal(45000))
+
+    assert (await world.checks.get(PERSON.id, check.id)).loan == LOAN
+    assert await stored(world, check.id) == []
+
+
+TERM_CONFIRMED = "אישור: 60 חודשים"
+
+
+async def test_a_confirmed_term_with_no_option_opens_the_offer_form_with_no_model_call(
+    world: World,
+) -> None:
+    model = ScriptedChatModel(replies=[AIMessage(REPLY)])
+    checks = runner(world, model)
+    check = await checks.create(PERSON)
+    await world.checks.set_loan(check.id, LOAN)
+    await world.checks.set_term(check.id, 60)
+
+    await checks.send_term_confirmation(PERSON, check.id, TERM_CONFIRMED)
+    await checks.drain()
+
+    events = await stored(world, check.id)
+    assert [type for type, _ in events] == [
+        "message.user",
+        "turn.status",
+        "question.asked",
+        "turn.status",
+    ]
+    question = events[2][1]["question"]
+    assert (question["kind"], question["lender"], question["tracks"]) == ("offer", None, [])
+    assert model.received == []
+
+
+async def test_a_confirmed_term_with_examples_only_runs_the_model(world: World) -> None:
+    model = ScriptedChatModel(replies=[AIMessage(REPLY)])
+    checks = runner(world, model)
+    check = await checks.create(PERSON)
+    await world.checks.set_loan(check.id, LOAN)
+    await world.checks.set_term(check.id, 60)
+    await world.options.add(
+        Option(
+            "example-1",
+            check.id,
+            {"tracks": [PRIME_TRACK]},
+            "example",
+            None,
+            None,
+            None,
+            PRIME_SIMULATION.figures,
+            NOW,
+        )
+    )
+
+    await checks.send_term_confirmation(PERSON, check.id, TERM_CONFIRMED)
+    await checks.drain()
+
+    assert model.received[0][-1].content == TERM_CONFIRMED
+    assert "question.asked" not in [type for type, _ in await stored(world, check.id)]
+
+
+async def test_a_confirmed_term_with_a_saved_offer_runs_the_model(world: World) -> None:
+    model = ScriptedChatModel(replies=[AIMessage(REPLY)])
+    checks = runner(world, model)
+    check = await recommended_check(world, checks)
+
+    await checks.send_term_confirmation(PERSON, check.id, TERM_CONFIRMED)
+    await checks.drain()
+
+    assert model.received[0][-1].content == TERM_CONFIRMED
+    assert ("message.assistant", REPLY) in [
+        (type, data.get("text")) for type, data in await stored(world, check.id)
+    ]
+
+
+async def test_a_confirmed_term_with_an_awaiting_offer_runs_the_model(world: World) -> None:
+    model = ScriptedChatModel(replies=[AIMessage(REPLY)])
+    checks = runner(world, model)
+    check = await checks.create(PERSON)
+    await world.checks.set_loan(check.id, LOAN)
+    await world.checks.set_term(check.id, 60)
+    await world.deps.awaiting.save(awaiting_offer(check.id, "awaiting-1", "אוויס", None))
+
+    await checks.send_term_confirmation(PERSON, check.id, TERM_CONFIRMED)
+    await checks.drain()
+
+    assert model.received[0][-1].content == TERM_CONFIRMED
+    assert "question.asked" not in [type for type, _ in await stored(world, check.id)]
+
+
+OFFER_SKIP = "דילוג"
+
+
+async def test_skipping_the_offer_form_invites_a_description_with_no_model_call(
+    world: World,
+) -> None:
+    model = ScriptedChatModel(replies=[AIMessage(REPLY)])
+    checks = runner(world, model)
+    check = await checks.create(PERSON)
+
+    await checks.send_offer_skip(PERSON, check.id, OFFER_SKIP)
+    await checks.drain()
+
+    events = await stored(world, check.id)
+    assert [type for type, _ in events] == [
+        "message.user",
+        "turn.status",
+        "message.assistant",
+        "turn.status",
+    ]
+    assert events[2][1]["text"] == DESCRIBE_THE_OFFER
+    assert model.received == []
+
+    await checks.send(PERSON, check.id, "אוויס: 45,000 ₪ ל-60 חודשים, 969 ₪ בחודש")
+    await checks.drain()
+    said = [message for message in model.received[0] if not isinstance(message, SystemMessage)]
+    assert [type(message) for message in said] == [HumanMessage, AIMessage, HumanMessage]
+    assert (said[0].content, said[1].content) == (OFFER_SKIP, DESCRIBE_THE_OFFER)
+
+
+async def test_the_three_replies_count_as_messages_and_keep_the_send_guards(
+    world: World,
+) -> None:
+    checks = runner(world, ScriptedChatModel(replies=[]))
+    check = await checks.create(PERSON)
+    await world.checks.set_loan(check.id, LOAN)
+    await checks.send_offer_skip(PERSON, check.id, OFFER_SKIP)
+    await checks.drain()
+    await checks.send_term_confirmation(PERSON, check.id, TERM_CONFIRMED)
+    await checks.drain()
+    fresh = await checks.create(PERSON)
+
+    with pytest.raises(TurnLimitError):
+        await checks.send_offer_skip(PERSON, check.id, OFFER_SKIP)
+    with pytest.raises(TurnLimitError):
+        await checks.send_term_confirmation(PERSON, check.id, TERM_CONFIRMED)
+    with pytest.raises(TurnLimitError):
+        await checks.send_opening(PERSON, fresh.id, OPENING, "רכב", Decimal(45000))
+    assert (await world.checks.get(PERSON.id, fresh.id)).loan is None
+    await world.checks.archive(check.id, NOW)
+    for send in (checks.send_offer_skip, checks.send_term_confirmation):
+        with pytest.raises(CheckArchivedError):
+            await send(PERSON, check.id, OFFER_SKIP)
+    with pytest.raises(CheckArchivedError):
+        await checks.send_opening(PERSON, check.id, OPENING, "רכב", Decimal(45000))
+    with pytest.raises(CheckNotFoundError):
+        await checks.send_opening(OTHER_PERSON, fresh.id, OPENING, "רכב", Decimal(45000))

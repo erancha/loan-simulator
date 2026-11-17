@@ -1,6 +1,8 @@
 """The agent's own tools save the loan, its term, its ceiling and the finances on the check, and
 refuse a recommendation that breaks the rules, with messages the model can act on: every named
-option borrows the loan amount, and with a ceiling every one fits it."""
+option borrows the loan amount, and with a ceiling every one fits it. read_offer saves an offer
+that one of the engine's readings fits, and keeps an offer that several readings fit, or that is
+quoted for less than the loan, awaiting the person's answer."""
 
 from dataclasses import dataclass, replace
 from datetime import timedelta
@@ -11,25 +13,46 @@ import pytest
 from fakes import (
     ASSESSED_BOUNDS,
     BALLOON_SIMULATION,
+    LEUMI_READINGS,
     NOW,
     PRIME_SIMULATION,
     Clock,
     FakeLoanEngine,
     Ids,
+    InMemoryAwaitingOfferRepository,
     InMemoryCheckRepository,
     InMemoryOptionRepository,
     InMemoryRecommendationRepository,
     RecordingSink,
+    reading,
+    readings_of,
 )
-from loan_agent.application.check_tools import ASKED_RESULT, CheckTools, ToolDeps, ToolError
+from loan_agent.application.check_tools import (
+    ASKED_RESULT,
+    READING_ON_SCREEN,
+    CheckTools,
+    ToolDeps,
+    ToolError,
+)
+from loan_agent.domain.errors import AwaitingOfferNotFoundError
 from loan_agent.domain.models import Check, Finances, LoanRequest
-from loan_agent.ports.engine import EngineError, OfferTerm, ProposedTerm, Simulation
+from loan_agent.ports.engine import (
+    EngineError,
+    OfferTerm,
+    ProposedTerm,
+    Simulation,
+)
 from loan_agent.ports.events import (
     CEILING_SET,
     CHART_SHOWN,
     EXAMPLES_REMOVED,
     FINANCES_UPDATED,
     LOAN_SET,
+    OFFER_AWAITING,
+    OFFER_DROPPED,
+    OFFER_IDENTIFIED,
+    OFFER_SETTLED,
+    OFFER_UNRECOGNIZED,
     QUESTION_ASKED,
     RECOMMENDATION_PRESENTED,
     TERM_SET,
@@ -68,6 +91,7 @@ class World:
     clock: Clock
     checks: InMemoryCheckRepository
     options: InMemoryOptionRepository
+    awaiting: InMemoryAwaitingOfferRepository
     recommendations: InMemoryRecommendationRepository
     engine: FakeLoanEngine
     sink: RecordingSink
@@ -85,6 +109,7 @@ async def world() -> World:
     clock = Clock()
     checks = InMemoryCheckRepository()
     options = InMemoryOptionRepository()
+    awaiting = InMemoryAwaitingOfferRepository()
     recommendations = InMemoryRecommendationRepository()
     engine = FakeLoanEngine()
     sink = RecordingSink()
@@ -92,6 +117,7 @@ async def world() -> World:
     deps = ToolDeps(
         checks=checks,
         options=options,
+        awaiting=awaiting,
         recommendations=recommendations,
         engine=engine,
         sink=sink,
@@ -99,7 +125,14 @@ async def world() -> World:
         new_id=Ids("option"),
     )
     return World(
-        clock, checks, options, recommendations, engine, sink, CheckTools(PERSON, CHECK, deps)
+        clock,
+        checks,
+        options,
+        awaiting,
+        recommendations,
+        engine,
+        sink,
+        CheckTools(PERSON, CHECK, deps),
     )
 
 
@@ -170,25 +203,28 @@ async def test_set_loan_refuses_an_amount_that_is_not_a_positive_number(
     assert (await world.check()).loan is None
 
 
-async def test_ask_term_proposes_60_months_for_a_car(world: World) -> None:
+async def test_ask_term_proposes_a_cars_term_from_the_first_payment_target(world: World) -> None:
     await world.tools.set_loan("רכב", "60000")
-    world.engine.simulations = [PRIME_SIMULATION, BALLOON_SIMULATION]
+    world.engine.proposed = ProposedTerm(term_months=66, first_payment=Decimal("998.40"))
     world.engine.calls.clear()
 
     result = await world.tools.ask_term(None)
 
     assert result == ASKED_RESULT
+    assert world.engine.calls == [
+        ("propose_term", {"principal": Decimal(60000), "payment_limit": Decimal(1000)})
+    ]
     assert world.events_of(QUESTION_ASKED) == [
         {
-            "question": {"kind": "term", "term_months": 60, "first_payment": "1887.99"},
+            "question": {
+                "kind": "term",
+                "term_months": 66,
+                "first_payment": "998.40",
+                "basis": {"kind": "first_payment_target", "amount": "1000", "fits": True},
+            },
             "lead_in": None,
         }
     ]
-    assert world.engine.calls[0] == (
-        "suggest",
-        {"principal": Decimal(60000), "term_months": 60},
-    )
-    assert [name for name, _ in world.engine.calls] == ["suggest", "simulate", "simulate"]
 
 
 async def test_a_ceiling_decides_a_cars_term_too(world: World) -> None:
@@ -216,7 +252,12 @@ async def test_ask_term_proposes_the_first_payment_term_without_a_ceiling(world:
     ]
     assert world.events_of(QUESTION_ASKED) == [
         {
-            "question": {"kind": "term", "term_months": 84, "first_payment": "1554.00"},
+            "question": {
+                "kind": "term",
+                "term_months": 84,
+                "first_payment": "1554.00",
+                "basis": {"kind": "first_payment_target", "amount": "1000", "fits": False},
+            },
             "lead_in": None,
         }
     ]
@@ -244,6 +285,11 @@ async def test_ask_term_uses_the_worst_case_search_with_a_ceiling(
     )
     (asked,) = world.events_of(QUESTION_ASKED)
     assert isinstance(asked, dict) and asked["question"]["term_months"] == proposed
+    assert asked["question"]["basis"] == {
+        "kind": "ceiling",
+        "amount": "1000",
+        "fits": found is not None,
+    }
 
 
 async def test_ask_term_shows_the_term_the_person_typed(world: World) -> None:
@@ -257,6 +303,8 @@ async def test_ask_term_shows_the_term_the_person_typed(world: World) -> None:
         "suggest",
         {"principal": Decimal(100000), "term_months": 36},
     )
+    (asked,) = world.events_of(QUESTION_ASKED)
+    assert isinstance(asked, dict) and asked["question"]["basis"] == {"kind": "typed"}
 
 
 async def test_the_term_the_last_card_showed_is_a_confirmation_not_a_new_card(
@@ -442,6 +490,7 @@ async def test_save_offer_stores_engine_figures_and_emits_structured(world: Worl
     # The model reads amounts to the shekel, as the person does.
     for figure in ("first_payment 1888", "worst_peak_payment 2039", "total_paid 90623"):
         assert figure in track
+    assert "price interest_cost 10623 on 80000; rate_today 6.25%, below " in track
     assert "schedule" not in summary
     assert "present_recommendation" in next_step
 
@@ -824,6 +873,49 @@ async def test_a_recommendation_gives_the_named_options_current_figures(world: W
         f"total_paid 90623, rate_as_of {PRIME_SIMULATION.figures.rate_as_of}, "
         f"cpi_as_of {PRIME_SIMULATION.figures.cpi_as_of}"
     )
+    (preferred_price,) = [line for line in lines if line.startswith("preferred_price: ")]
+    assert preferred_price == (
+        "preferred_price: interest_cost 10623 on 80000; rate_today 6.25%, below the average "
+        "bank rate on consumer loans of 7.9% as of 2026-08"
+    )
+    (alternative_price,) = [line for line in lines if line.startswith("alternative_price: ")]
+    assert alternative_price == (
+        "alternative_price: interest_cost 16050 on 80000, the CPI's rise included; rate_today "
+        "4.9% on top of the CPI, not comparable with the unlinked average"
+    )
+    assert not any(line.startswith("only_option: ") for line in lines)
+
+
+async def test_one_real_offer_alone_is_evaluated_with_its_price_not_recommended(
+    world: World,
+) -> None:
+    await world.tools.set_loan(None, "80000")
+    await world.tools.set_term(48)
+    world.engine.simulations = [PRIME_SIMULATION]
+    await world.tools.save_offer([PRIME_TRACK], lender="לאומי")
+
+    result = await world.tools.present_recommendation("option-1", REASONING)
+
+    lines = result.splitlines()
+    assert "preferred_price: interest_cost 10623 on 80000; rate_today 6.25%, below " in "\n".join(
+        lines
+    )
+    (only,) = [line for line in lines if line.startswith("only_option: ")]
+    for words in ("only offer", "never call it preferred or recommended", "interest_cost"):
+        assert words in only
+    assert "another offer" in only
+
+
+async def test_an_option_saved_before_the_engine_priced_rates_gives_only_its_interest_cost(
+    world: World,
+) -> None:
+    await ready_for_recommendation(world)
+    (prime, _) = await world.options.list(CHECK)
+    await world.options.replace(replace(prime, summary=replace(prime.summary, price=None)))
+
+    result = await world.tools.present_recommendation("option-1", REASONING, "option-2")
+
+    assert "preferred_price: interest_cost 10623 on 80000\n" in result
 
 
 async def test_recommendation_needs_a_loan(world: World) -> None:
@@ -1232,3 +1324,446 @@ async def test_save_option_refuses_an_option_already_saved_with_the_same_figures
     await world.tools.save_offer([PRIME_TRACK], "Bank", "2026-10-20")
 
     assert [option.lender for option in await world.options.list(CHECK)] == ["Fund", "Bank"]
+
+
+async def test_a_lender_misspelled_by_one_letter_is_the_same_offer(world: World) -> None:
+    await world.tools.set_loan(None, "80000")
+    world.engine.simulations = [PRIME_SIMULATION, PRIME_SIMULATION, PRIME_SIMULATION]
+    await world.tools.save_offer([PRIME_TRACK], "סוכנות אוויס רכבים", "2026-10-20")
+
+    with pytest.raises(ToolError, match="already saved as option option-1"):
+        await world.tools.save_offer([PRIME_TRACK], "סוכנות אווויס רכבים", "2026-10-20")
+    with pytest.raises(ToolError, match="already saved as option option-1"):
+        await world.tools.save_offer([PRIME_TRACK], "סוכנות אויס רכבים", "2026-10-20")
+
+
+# Max's "prime 6.45", 20,000 over 24 months at 934 a month.
+MAX_READINGS = readings_of(
+    reading("prime_margin", "6.45", "933.85", "11.20", "20000", 24),
+    reading("prime_total", "1.7", "889.37", "6.45", "20000", 24),
+    reading("fixed_unlinked", "6.45", "889.37", "6.45", "20000", 24),
+    reading("fixed_linked", "6.45", "890.80", "6.45", "20000", 24),
+    payment_rate="11.17",
+)
+
+
+async def car_loan(world: World) -> None:
+    await world.tools.set_loan("רכב", "45000")
+    await world.tools.set_term(60)
+    world.sink.events.clear()
+    world.engine.calls.clear()
+
+
+async def avis_awaiting(world: World) -> str:
+    """Avis quotes 969 a month with no number and no type, read by the engine's captured
+    readings."""
+    await car_loan(world)
+    result = await world.tools.read_offer("אוויס", "45000", 60, None, "969", [], None)
+    assert result == READING_ON_SCREEN
+    (offer,) = await world.awaiting.list(CHECK)
+    return offer.id
+
+
+def offer_readings_calls(world: World) -> list[object]:
+    return [args for name, args in world.engine.calls if name == "offer_readings"]
+
+
+async def test_leumis_offer_is_identified_as_prime_plus_6(world: World) -> None:
+    await car_loan(world)
+    world.engine.readings = LEUMI_READINGS
+    world.engine.simulations = [PRIME_SIMULATION]
+
+    result = await world.tools.read_offer(
+        "לאומי", "45000", 60, "6", "972", ["prime", "fixed"], None
+    )
+
+    (option,) = await world.options.list(CHECK)
+    (track,) = option.loan["tracks"]  # type: ignore[attr-defined]
+    assert (option.source, option.lender) == ("offer", "לאומי")
+    assert (track["rate_kind"], track["prime_spread"]) == ("prime", "6")
+    assert track["principal"] == "45000"
+    (identified,) = world.events_of(OFFER_IDENTIFIED)
+    assert identified["option_id"] == option.id  # type: ignore[index]
+    assert identified["reading"]["total_rate"] == "10.75"  # type: ignore[index]
+    assert identified["monthly_payment"] == "972"  # type: ignore[index]
+    (asked,) = offer_readings_calls(world)
+    assert asked["prime_total"] is True  # type: ignore[index]
+    assert "present_recommendation" in result
+    assert await world.awaiting.list(CHECK) == []
+
+
+async def test_an_offer_quoted_for_more_is_identified_on_its_own_amount_and_saved_on_the_checks(
+    world: World,
+) -> None:
+    await world.tools.set_loan("רכב", "15000")
+    world.sink.events.clear()
+    world.engine.readings = MAX_READINGS
+    world.engine.simulations = [PRIME_SIMULATION]
+
+    await world.tools.read_offer("מקס", "20000", 24, "6.45", "934", ["prime"], None)
+
+    (asked,) = offer_readings_calls(world)
+    assert (asked["principal"], asked["term_months"]) == (Decimal(20000), 24)  # type: ignore[index]
+    (option,) = await world.options.list(CHECK)
+    (track,) = option.loan["tracks"]  # type: ignore[attr-defined]
+    assert (track["principal"], track["term_months"]) == ("15000", 24)
+    (identified,) = world.events_of(OFFER_IDENTIFIED)
+    assert {
+        key: identified[key]  # type: ignore[index]
+        for key in ("quoted_amount", "loan_amount", "lender", "prime", "rate_as_of")
+    } == {
+        "quoted_amount": "20000",
+        "loan_amount": "15000",
+        "lender": "מקס",
+        "prime": "4.75",
+        "rate_as_of": "2026-11-15",
+    }
+    assert identified["reading"]["total_rate"] == "11.20"  # type: ignore[index]
+    assert (await world.check()).payment_ceiling is None
+
+
+async def max_short(world: World) -> str:
+    """Max quotes 20,000 at prime 6.45 and 934 a month, on a check of 45,000: identified, and
+    short of the loan."""
+    await car_loan(world)
+    world.engine.readings = MAX_READINGS
+    result = await world.tools.read_offer("מקס", "20000", 24, "6.45", "934", ["prime"], None)
+    assert result == READING_ON_SCREEN
+    (offer,) = await world.awaiting.list(CHECK)
+    return offer.id
+
+
+async def test_an_identified_offer_quoted_for_less_awaits_the_lenders_answer_on_the_amount(
+    world: World,
+) -> None:
+    awaiting_id = await max_short(world)
+
+    assert await world.options.list(CHECK) == []
+    assert world.events_of(OFFER_IDENTIFIED) == []
+    (offer,) = await world.awaiting.list(CHECK)
+    assert (offer.amount, offer.term_months) == (Decimal(20000), 24)
+    assert [held.kind for held in offer.readings] == ["prime_margin"]
+    (event,) = world.events_of(OFFER_AWAITING)
+    assert event["awaiting_id"] == awaiting_id  # type: ignore[index]
+    assert event["amount"] == "20000"  # type: ignore[index]
+    assert event["identified"] is True  # type: ignore[index]
+
+
+async def test_an_open_offer_quoted_for_less_awaits_with_its_readings(world: World) -> None:
+    await car_loan(world)
+    world.engine.readings = MAX_READINGS
+
+    await world.tools.read_offer("מקס", "20000", 24, None, "934", [], None)
+
+    (offer,) = await world.awaiting.list(CHECK)
+    assert len(offer.readings) == 4
+    (event,) = world.events_of(OFFER_AWAITING)
+    assert event["identified"] is False  # type: ignore[index]
+
+
+async def test_the_lender_lending_the_loan_amount_saves_the_offer_at_it(world: World) -> None:
+    awaiting_id = await max_short(world)
+    (offer,) = await world.awaiting.list(CHECK)
+    world.engine.simulations = [PRIME_SIMULATION]
+    world.sink.events.clear()
+
+    result = await world.tools.answer_offer_amount(awaiting_id, True, None)
+
+    (option,) = await world.options.list(CHECK)
+    (track,) = option.loan["tracks"]  # type: ignore[attr-defined]
+    assert (track["principal"], track["term_months"]) == ("45000", 24)
+    assert (track["rate_kind"], track["prime_spread"]) == ("prime", "6.45")
+    assert (option.source, option.lender) == ("offer", "מקס")
+    assert await world.awaiting.list(CHECK) == []
+    assert world.events_of(OFFER_SETTLED) == [
+        {
+            "awaiting_id": awaiting_id,
+            "kind": "prime_margin",
+            "reading": offer.readings[0].to_json(),
+        }
+    ]
+    assert "present_recommendation" in result
+
+
+async def test_the_lender_not_lending_the_loan_amount_drops_the_offer(world: World) -> None:
+    awaiting_id = await max_short(world)
+    world.sink.events.clear()
+
+    result = await world.tools.answer_offer_amount(awaiting_id, False, None)
+
+    assert await world.awaiting.list(CHECK) == []
+    assert await world.options.list(CHECK) == []
+    assert world.events_of(OFFER_DROPPED) == [
+        {
+            "awaiting_id": awaiting_id,
+            "lender": "מקס",
+            "quoted_amount": "20000",
+            "loan_amount": "45000",
+        }
+    ]
+    assert "do not repeat" in result
+
+
+async def test_lending_the_loan_amount_on_a_card_of_readings_takes_the_chosen_one(
+    world: World,
+) -> None:
+    await car_loan(world)
+    world.engine.readings = MAX_READINGS
+    await world.tools.read_offer("מקס", "20000", 24, None, "934", [], None)
+    (offer,) = await world.awaiting.list(CHECK)
+    world.engine.simulations = [PRIME_SIMULATION]
+
+    with pytest.raises(ToolError, match="prime_margin, prime_total"):
+        await world.tools.answer_offer_amount(offer.id, True, None)
+    with pytest.raises(ToolError, match="no balloon reading"):
+        await world.tools.answer_amount(offer.id, True, "balloon")  # type: ignore[arg-type]
+    await world.tools.answer_amount(offer.id, True, "fixed_linked")
+
+    (option,) = await world.options.list(CHECK)
+    (track,) = option.loan["tracks"]  # type: ignore[attr-defined]
+    assert (track["principal"], track["cpi_linked"]) == ("45000", True)
+    (settled,) = world.events_of(OFFER_SETTLED)
+    assert settled["kind"] == "fixed_linked"  # type: ignore[index]
+
+
+async def test_the_amount_question_is_only_for_an_offer_quoted_for_less(world: World) -> None:
+    awaiting_id = await avis_awaiting(world)
+
+    with pytest.raises(ToolError, match="no amount question"):
+        await world.tools.answer_amount(awaiting_id, False, None)
+    with pytest.raises(AwaitingOfferNotFoundError):
+        await world.tools.answer_amount("nope", False, None)
+    with pytest.raises(ToolError, match="no awaiting offer 'nope'"):
+        await world.tools.answer_offer_amount("nope", False, None)
+
+    assert len(await world.awaiting.list(CHECK)) == 1
+
+
+async def test_a_reading_confirmed_without_the_amount_answer_is_refused(world: World) -> None:
+    awaiting_id = await max_short(world)
+
+    with pytest.raises(ToolError, match="answer its amount question"):
+        await world.tools.confirm_reading(awaiting_id, "prime_margin")
+
+    assert await world.options.list(CHECK) == []
+    assert len(await world.awaiting.list(CHECK)) == 1
+
+
+async def test_aviss_offer_awaits_with_three_readings(world: World) -> None:
+    awaiting_id = await avis_awaiting(world)
+
+    assert await world.options.list(CHECK) == []
+    (event,) = world.events_of(OFFER_AWAITING)
+    assert event == {
+        "awaiting_id": awaiting_id,
+        "lender": "אוויס",
+        "amount": "45000",
+        "term_months": 60,
+        "monthly_payment": "969",
+        "payment_rate": "10.58",
+        "type_words": [],
+        "readings": [reading.to_json() for reading in world.engine.readings.readings],
+        "likely": None,
+        "identified": False,
+        "prime": "4.75",
+        "rate_as_of": "2026-10-20",
+    }
+    assert [r["kind"] for r in event["readings"]] == [  # type: ignore[index]
+        "fixed_unlinked",
+        "prime_margin",
+        "fixed_linked",
+    ]
+
+
+async def test_a_later_word_moves_the_likely_reading_and_confirms_nothing(world: World) -> None:
+    awaiting_id = await avis_awaiting(world)
+
+    result = await world.tools.read_offer(None, None, None, None, None, ["fixed"], awaiting_id)
+
+    assert result == READING_ON_SCREEN
+    (offer,) = await world.awaiting.list(CHECK)
+    assert (offer.id, len(offer.readings), offer.likely) == (awaiting_id, 3, "fixed_unlinked")
+    assert (offer.lender, offer.monthly_payment) == ("אוויס", Decimal(969))
+    events = world.events_of(OFFER_AWAITING)
+    assert [event["awaiting_id"] for event in events] == [awaiting_id] * 2  # type: ignore[index]
+    assert await world.options.list(CHECK) == []
+
+
+async def test_an_awaiting_offer_removes_the_examples(world: World) -> None:
+    await car_loan(world)
+    world.engine.simulations = [PRIME_SIMULATION, BALLOON_SIMULATION]
+    of_the_check = {"principal": "45000", "term_months": 60}
+    await world.tools.save_option({"tracks": [{**PRIME_TRACK, **of_the_check}]})
+    await world.tools.save_option({"tracks": [{**BALLOON_TRACK, **of_the_check}]})
+    await world.tools.present_recommendation("option-1", REASONING)
+
+    await world.tools.read_offer("אוויס", "45000", 60, None, "969", [], None)
+
+    assert await world.options.list(CHECK) == []
+    assert world.recommendations.rows == {}
+    assert world.events_of(EXAMPLES_REMOVED) == [
+        {"option_ids": ["option-1", "option-2"], "recommendation_removed": True}
+    ]
+
+
+async def test_an_example_is_refused_while_an_offer_awaits(world: World) -> None:
+    await avis_awaiting(world)
+    world.engine.simulations = [PRIME_SIMULATION]
+
+    with pytest.raises(ToolError, match="examples are no longer saved") as refused:
+        await world.tools.save_option({"tracks": [{**PRIME_TRACK, "principal": "45000"}]})
+
+    assert "tell the person" in str(refused.value)
+    assert await world.options.list(CHECK) == []
+
+
+async def test_a_number_that_fits_nothing_saves_nothing(world: World) -> None:
+    await car_loan(world)
+    world.engine.readings = LEUMI_READINGS
+
+    result = await world.tools.read_offer("לאומי", "45000", 60, "5", "1100", [], None)
+
+    assert result == READING_ON_SCREEN
+    assert world.events_of(OFFER_UNRECOGNIZED) == [{"lender": "לאומי"}]
+    assert await world.options.list(CHECK) == []
+    assert await world.awaiting.list(CHECK) == []
+
+
+async def test_an_unrecognized_number_leaves_an_awaiting_offer_as_it_is(world: World) -> None:
+    awaiting_id = await avis_awaiting(world)
+    (before,) = await world.awaiting.list(CHECK)
+    world.engine.readings = readings_of(
+        reading("prime_margin", "5", "1167.74", "9.75", "45000", 60),
+        reading("fixed_unlinked", "5", "849.21", "5", "45000", 60),
+        payment_rate="10.58",
+    )
+
+    await world.tools.read_offer(None, None, None, "5", None, [], awaiting_id)
+    world.engine.readings = readings_of(payment_rate="10.58")
+    await world.tools.read_offer(None, None, None, "5", None, [], awaiting_id)
+
+    assert await world.awaiting.list(CHECK) == [before]
+    assert world.events_of(OFFER_UNRECOGNIZED) == [{"lender": "אוויס"}] * 2
+
+
+async def test_an_awaiting_offer_is_identified_once_its_number_is_known(world: World) -> None:
+    awaiting_id = await avis_awaiting(world)
+    world.engine.readings = readings_of(
+        reading("prime_margin", "10.58", "1215.40", "15.33", "45000", 60),
+        reading("fixed_unlinked", "10.58", "969.01", "10.58", "45000", 60),
+        payment_rate="10.58",
+    )
+    world.engine.simulations = [PRIME_SIMULATION]
+    world.sink.events.clear()
+
+    await world.tools.read_offer(None, None, None, "10.58", None, [], awaiting_id)
+
+    (option,) = await world.options.list(CHECK)
+    assert option.lender == "אוויס"
+    assert await world.awaiting.list(CHECK) == []
+    offer_events = [event.type for event in world.sink.events if event.type.startswith("offer.")]
+    assert offer_events == [OFFER_SETTLED, OFFER_IDENTIFIED]
+    fixed = reading("fixed_unlinked", "10.58", "969.01", "10.58", "45000", 60)
+    assert world.events_of(OFFER_SETTLED) == [
+        {"awaiting_id": awaiting_id, "kind": "fixed_unlinked", "reading": fixed.to_json()}
+    ]
+
+
+async def test_an_awaiting_offer_settles_by_a_reading_its_card_does_not_hold(
+    world: World,
+) -> None:
+    awaiting_id = await avis_awaiting(world)
+    (before,) = await world.awaiting.list(CHECK)
+    assert "prime_total" not in {held.kind for held in before.readings}
+    total = reading("prime_total", "5.83", "969.20", "10.58", "45000", 60)
+    world.engine.readings = readings_of(
+        total,
+        reading("fixed_unlinked", "10.58", "1050.00", "10.58", "45000", 60),
+        payment_rate="10.58",
+    )
+    world.engine.simulations = [PRIME_SIMULATION]
+
+    await world.tools.read_offer(None, None, None, "5.83", None, ["prime"], awaiting_id)
+
+    assert world.events_of(OFFER_SETTLED) == [
+        {"awaiting_id": awaiting_id, "kind": "prime_total", "reading": total.to_json()}
+    ]
+
+
+async def test_the_same_offer_described_again_names_the_awaiting_one(world: World) -> None:
+    awaiting_id = await avis_awaiting(world)
+
+    with pytest.raises(ToolError, match=f"awaiting_id {awaiting_id}"):
+        await world.tools.read_offer("אוויס", None, None, None, "969", ["fixed"], None)
+
+    assert len(await world.awaiting.list(CHECK)) == 1
+
+
+async def test_read_offer_refusals_name_what_to_do(world: World) -> None:
+    await world.tools.set_loan("רכב", "45000")
+
+    with pytest.raises(ToolError, match="who made the offer"):
+        await world.tools.read_offer(None, None, 60, "6", "972", [], None)
+    with pytest.raises(ToolError, match="ask_offer"):
+        await world.tools.read_offer("לאומי", None, 60, None, None, ["prime"], None)
+    with pytest.raises(ToolError, match="number of months"):
+        await world.tools.read_offer("לאומי", None, None, "6", "972", [], None)
+    with pytest.raises(ToolError, match="no awaiting offer 'nope'"):
+        await world.tools.read_offer(None, None, 60, "6", None, [], "nope")
+    world.engine.readings_error = EngineError("principal must be at least 10000")
+    with pytest.raises(ToolError, match="principal must be at least 10000"):
+        await world.tools.read_offer("לאומי", "5000", 60, "6", "972", [], None)
+
+    assert await world.options.list(CHECK) == []
+    assert await world.awaiting.list(CHECK) == []
+    assert not [event for event in world.sink.events if event.type.startswith("offer.")]
+
+
+async def test_the_word_for_a_lender_is_refused_as_its_name(world: World) -> None:
+    await world.tools.set_loan("רכב", "45000")
+
+    with pytest.raises(ToolError, match="not its name"):
+        await world.tools.read_offer("גוף מלווה", "20000", 24, "6.45", "934", ["prime"], None)
+    with pytest.raises(ToolError, match="not its name"):
+        await world.tools.save_offer([PRIME_TRACK], "הגוף המלווה")
+    with pytest.raises(ToolError, match="not its name"):
+        await world.tools.ask_offer("גוף מלווה", [], None)
+
+    assert await world.options.list(CHECK) == []
+    assert await world.awaiting.list(CHECK) == []
+
+
+async def test_read_offer_needs_a_loan(world: World) -> None:
+    with pytest.raises(ToolError, match="set_loan"):
+        await world.tools.read_offer("לאומי", "45000", 60, "6", "972", [], None)
+
+
+async def test_confirming_a_reading_saves_it_as_the_offer(world: World) -> None:
+    awaiting_id = await avis_awaiting(world)
+    (offer,) = await world.awaiting.list(CHECK)
+    (fixed,) = [held for held in offer.readings if held.kind == "fixed_unlinked"]
+    world.engine.simulations = [PRIME_SIMULATION]
+    world.sink.events.clear()
+
+    await world.tools.confirm_reading(awaiting_id, "fixed_unlinked")
+
+    (option,) = await world.options.list(CHECK)
+    (track,) = option.loan["tracks"]  # type: ignore[attr-defined]
+    assert (track["annual_rate"], track["cpi_linked"]) == ("10.58", False)
+    assert (option.source, option.lender) == ("offer", "אוויס")
+    assert await world.awaiting.list(CHECK) == []
+    assert world.events_of(OFFER_SETTLED) == [
+        {"awaiting_id": awaiting_id, "kind": "fixed_unlinked", "reading": fixed.to_json()}
+    ]
+
+
+async def test_confirming_an_unknown_offer_or_kind_is_refused(world: World) -> None:
+    awaiting_id = await avis_awaiting(world)
+
+    with pytest.raises(AwaitingOfferNotFoundError):
+        await world.tools.confirm_reading("nope", "fixed_unlinked")
+    with pytest.raises(ToolError, match="prime_total"):
+        await world.tools.confirm_reading(awaiting_id, "prime_total")
+
+    assert len(await world.awaiting.list(CHECK)) == 1
+    assert await world.options.list(CHECK) == []

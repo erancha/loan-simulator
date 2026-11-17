@@ -1,14 +1,18 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import type { CheckEvent } from '../api/types.ts'
+import type { CheckEvent, OptionPrice, Track } from '../api/types.ts'
 import {
   ceilingSet,
+  loanSet,
   optionBalloon,
   optionFixed36,
   optionOfferFixed,
   optionPrime36,
+  offerAwaiting,
+  awaitingAvis,
+  awaitingMaxShort,
   recommendationPrime,
 } from '../test/fixtures.ts'
-import { buildCard } from './card.ts'
+import { buildCard, comparesOptions } from './card.ts'
 import { initialState, reduce } from './events.ts'
 
 // The loan starts the month after the card is shown: shown in 11/2026, 36 months run to 11/2029.
@@ -29,7 +33,7 @@ const SPITZER_BY_INDEX = 'שפיצר (תשלום חודשי שווה כל עוד
 
 const PRIME_CARD = {
   id: 'prime-36',
-  label: 'מומלצת',
+  label: 'מועדפת',
   track: `מסלול פריים − 0.5%, ${SPITZER_BY_RATE}, 36 חודשים`,
   source: 'לפי ריבית ממוצעת בבנקים',
   termNote: null,
@@ -39,6 +43,7 @@ const PRIME_CARD = {
   balloon: null,
   totalToday: '32,547 ₪',
   totalRange: '32,432–34,026 ₪ (לפי 85 תקופות מהעבר)',
+  price: null,
 }
 
 const FIXED_CARD = {
@@ -53,6 +58,7 @@ const FIXED_CARD = {
   balloon: null,
   totalToday: '32,667 ₪',
   totalRange: null,
+  price: null,
 }
 
 test('no options: empty card', () => {
@@ -63,6 +69,7 @@ test('no options: empty card', () => {
     ceiling: { label: 'החזר חודשי מרבי', amount: 'לא נקבע', source: null },
     recommended: [],
     others: null,
+    awaiting: [],
     reasoning: null,
     fold: null,
   })
@@ -116,8 +123,71 @@ test('an offer after the recommendation goes under "הצעות חדשות, עו�
       balloon: null,
       totalToday: '32,040 ₪',
       totalRange: null,
+      price: {
+        interest: 'ריבית: כ-3,040 ₪ על 29,000 ₪',
+        rate: '6.9% היום — מתחת לריבית הממוצעת בבנקים להלוואה צרכנית, כ-7.9% (נכון ל-08/2026)',
+      },
     },
   ])
+})
+
+describe("a real offer's price", () => {
+  const offerAt = (price: Partial<OptionPrice>, track: Partial<Track> = {}) => ({
+    ...optionOfferFixed,
+    data: {
+      ...optionOfferFixed.data,
+      loan: { tracks: [{ ...optionOfferFixed.data.loan.tracks[0], ...track }] },
+      figures: {
+        ...optionOfferFixed.data.figures,
+        price: { ...optionOfferFixed.data.figures.price!, ...price },
+      },
+    },
+  })
+  const priceOf = (event: CheckEvent) => buildCard(stateOf(event)).others!.options[0].price
+
+  test('a rate above the market average says so with both rates and the month', () => {
+    expect(priceOf(offerAt({ rate_today: '10.75', against_market: 'above' }))).toEqual({
+      interest: 'ריבית: כ-3,040 ₪ על 29,000 ₪',
+      rate: '10.75% היום — מעל הריבית הממוצעת בבנקים להלוואה צרכנית, כ-7.9% (נכון ל-08/2026)',
+    })
+  })
+
+  test('a rate within the band reads as similar to the average', () => {
+    expect(priceOf(offerAt({ rate_today: '8', against_market: 'similar' }))?.rate).toBe(
+      '8% היום — דומה לריבית הממוצעת בבנקים להלוואה צרכנית, כ-7.9% (נכון ל-08/2026)',
+    )
+  })
+
+  test('a CPI-linked rate is on top of the index, with no comparison', () => {
+    const linked = offerAt(
+      { rate_today: '4', against_market: null },
+      { annual_rate: '4', cpi_linked: true },
+    )
+    expect(priceOf(linked)).toEqual({
+      interest: 'ריבית והצמדה: כ-3,040 ₪ על 29,000 ₪',
+      rate: '4% מעל המדד',
+    })
+  })
+
+  test('an offer stored before the engine priced rates shows its interest cost only', () => {
+    const { price: _, ...figures } = optionOfferFixed.data.figures
+    const old = { ...optionOfferFixed, data: { ...optionOfferFixed.data, figures } }
+    expect(priceOf(old)).toEqual({ interest: 'ריבית: כ-3,040 ₪ על 29,000 ₪', rate: null })
+  })
+})
+
+test('a recommendation of the only option on the card carries no label', () => {
+  const only: CheckEvent = {
+    ...recommendationPrime,
+    seq: 9,
+    data: { ...recommendationPrime.data, preferred: optionOfferFixed.data, alternative: null },
+  }
+  const state = stateOf(optionOfferFixed, only)
+  expect(buildCard(state).recommended.map((o) => [o.id, o.label])).toEqual([
+    ['offer-hapoalim', null],
+  ])
+  expect(comparesOptions(state)).toBe(false)
+  expect(comparesOptions(stateOf(optionPrime36, optionFixed36, recommendationPrime))).toBe(true)
 })
 
 test('after a new recommendation, unnamed options go under "אפשרויות נוספות"', () => {
@@ -129,7 +199,7 @@ test('after a new recommendation, unnamed options go under "אפשרויות נ�
   const card = buildCard(
     stateOf(optionPrime36, optionFixed36, recommendationPrime, optionOfferFixed, second),
   )
-  expect(card.recommended.map((o) => [o.id, o.label])).toEqual([['offer-hapoalim', 'מומלצת']])
+  expect(card.recommended.map((o) => [o.id, o.label])).toEqual([['offer-hapoalim', 'מועדפת']])
   expect(card.others?.title).toBe('אפשרויות נוספות')
   expect(card.others?.options.map((o) => o.id)).toEqual(['prime-36', 'fixed-36'])
   expect(card.fold?.assumptions[0]).toBe(
@@ -212,6 +282,24 @@ describe('a CPI-linked fixed track', () => {
   })
 })
 
+test('a CPI-linked example names the pension fund terms it follows', () => {
+  const pension = {
+    ...optionFixed36,
+    data: {
+      ...optionFixed36.data,
+      loan: {
+        tracks: [{ ...optionFixed36.data.loan.tracks[0], annual_rate: 4, cpi_linked: true }],
+      },
+    },
+  }
+  const [option] = buildCard(stateOf(pension)).others!.options
+  expect(option.source).toBe('לפי תנאים שקרן פנסיה מפרסמת לעמיתיה')
+  expect(option.isExample).toBe(true)
+  expect(buildCard(stateOf(optionFixed36)).others!.options[0].source).toBe(
+    'לפי ריבית ממוצעת בבנקים',
+  )
+})
+
 test('a prime track linked to the index says both the rate and prices', () => {
   const linked = {
     ...optionPrime36,
@@ -284,4 +372,15 @@ test('a recommendation above the ceiling shows both payments', () => {
   const card = buildCard(stateOf(optionPrime36, optionFixed36, recommendationPrime, lower))
   expect(card.check).toBe('above')
   expect(card.checkNote).toBe('מעל התקרה שלך: 955 ₪ מול 900 ₪')
+})
+
+test('awaiting offers are listed by lender and are not among the options', () => {
+  const card = buildCard(stateOf(optionPrime36, offerAwaiting(20, awaitingAvis)))
+  expect(card.awaiting).toEqual(['סוכנות אוויס רכבים: ממתינה לבירור סוג ההלוואה, לא נכללת בהשוואה'])
+  expect(card.others?.options.map((o) => o.id)).toEqual(['prime-36'])
+})
+
+test('an offer quoted for less than the loan is listed as awaiting the loan amount', () => {
+  const card = buildCard(stateOf(loanSet, offerAwaiting(20, awaitingMaxShort)))
+  expect(card.awaiting).toEqual(['מקס: ממתינה לתשובה על סכום ההלוואה, לא נכללת בהשוואה'])
 })

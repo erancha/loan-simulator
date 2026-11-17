@@ -1,17 +1,17 @@
 import { type FormEvent, useState } from 'react'
-import type { Finances, Question, QuestionField } from '../api/types.ts'
+import type { Finances, Question, QuestionField, TermBasis } from '../api/types.ts'
 import { formatAmount, normaliseMoneyInput } from '../money.ts'
 import {
   ANSWER,
   amountText,
   answerLine,
-  CEILING_BOX_PLACEHOLDER,
   CEILING_CLEARED,
   CEILING_LABEL,
   CLONE_CHOICE,
   confirmedTermLine,
   DONT_KNOW,
   NOT_A_NUMBER,
+  PAYMENT_PLANNING,
   PURPOSE_CHOICES,
   questionHint,
   questionLabel,
@@ -19,6 +19,7 @@ import {
   SKIP,
   skipLine,
   STAY_CHOICE,
+  termBasisLine,
   TERM_BOX_LABEL,
   TERM_BOX_PLACEHOLDER,
   TERM_MAX_MONTHS,
@@ -27,6 +28,7 @@ import {
 } from './copy.ts'
 import type { QuestionEntry } from './events.ts'
 import { FieldHint } from './FieldHint.tsx'
+import { hasBothFinances } from './FinancesPanel.tsx'
 import { OfferForm } from './OfferForm.tsx'
 import { rejectionText } from './rejection.ts'
 
@@ -74,6 +76,8 @@ interface Props {
   finances: Finances | null
   /** The payment ceiling the check holds, which the term card starts its box with. */
   ceiling: string | null
+  /** How the ceiling was derived from the finances; null for a stated ceiling or none. */
+  ceilingFormula: string | null
   /** Resolves false when nothing was sent; rejects with an ApiException on a refused save. */
   onAnswer: (answer: Answer) => Promise<boolean>
   onSkip: (line: string) => Promise<boolean>
@@ -128,12 +132,14 @@ function MoneyBox(props: {
 
 /**
  * A question the model asked, as an assistant bubble: the lead-in, the label and, while live, a
- * control fitted to the question. The term card confirms or changes the proposed term, and the
+ * control fitted to the question. The term card confirms or changes the calculated term, and the
  * offer form takes a lender's offer; every other question is a field's, handled by FieldBubble.
  */
 export function QuestionBubble(props: Props) {
   const { question } = props.entry
-  if (question.kind === 'term') return <TermBubble {...props} termMonths={question.term_months} />
+  if (question.kind === 'term') {
+    return <TermBubble {...props} termMonths={question.term_months} basis={question.basis} />
+  }
   if (question.kind === 'offer') {
     return (
       <OfferForm
@@ -141,6 +147,7 @@ export function QuestionBubble(props: Props) {
         question={question}
         live={props.live}
         onAnswer={props.onAnswer}
+        onSkip={props.onSkip}
       />
     )
   }
@@ -153,12 +160,25 @@ function ceilingDraft(ceiling: string | null): string {
 }
 
 /**
- * The term card: the proposed term with its first payment, and one form with the term and the
- * payment ceiling, each starting at the check's value, and one confirm button. A new ceiling with
- * the term left as proposed asks for a card worked out from that ceiling; anything else confirms
- * the term in the box, with the new ceiling when there is one.
+ * The term card: a first calculation of a term with its first payment, the assumption it was
+ * worked out from when the stored question carries one, and one form with the term and the
+ * payment ceiling, each starting at the check's value, and one confirm button. Beside the ceiling
+ * box a link sends that the person wants to plan the monthly payment first; nothing is saved. Once
+ * the check holds both finances figures that planning is done, so the link is not offered. A new
+ * ceiling with the term left as calculated asks for a card worked out from that ceiling; anything
+ * else confirms the term in the box, with the new ceiling when there is one.
  */
-function TermBubble({ entry, live, ceiling, onAnswer, termMonths }: Props & { termMonths: number }) {
+function TermBubble({
+  entry,
+  live,
+  finances,
+  ceiling,
+  ceilingFormula,
+  onAnswer,
+  onSkip,
+  termMonths,
+  basis,
+}: Props & { termMonths: number; basis: TermBasis | undefined }) {
   const [termDraft, setTermDraft] = useState(String(termMonths))
   const [ceilingText, setCeilingText] = useState(() => ceilingDraft(ceiling))
   const [error, setError] = useState<string | null>(null)
@@ -178,6 +198,15 @@ function TermBubble({ entry, live, ceiling, onAnswer, termMonths }: Props & { te
       return { line: answerLine(CEILING_LABEL, amountText(newCeiling)), ceiling: newCeiling }
     }
     return termConfirmation(months, newCeiling)
+  }
+
+  async function plan() {
+    setBusy(true)
+    try {
+      await onSkip(PAYMENT_PLANNING)
+    } finally {
+      setBusy(false)
+    }
   }
 
   async function submit(event: FormEvent) {
@@ -210,6 +239,7 @@ function TermBubble({ entry, live, ceiling, onAnswer, termMonths }: Props & { te
     <div className="bubble bubble-assistant bubble-question">
       {entry.leadIn !== null && <p className="question-lead-in">{entry.leadIn}</p>}
       <p className="question-label">{questionText(entry.question)}</p>
+      {live && basis !== undefined && <p className="card-note">{termBasisLine(basis)}</p>}
       {live && (
         <form className="term-form" onSubmit={(event) => void submit(event)}>
           <label htmlFor={termId}>{TERM_BOX_LABEL}</label>
@@ -227,11 +257,23 @@ function TermBubble({ entry, live, ceiling, onAnswer, termMonths }: Props & { te
               id={ceilingId}
               type="text"
               inputMode="decimal"
-              placeholder={CEILING_BOX_PLACEHOLDER}
               value={ceilingText}
               onChange={(event) => setCeilingText(event.target.value)}
             />
             <span className="unit">₪</span>
+            {ceilingFormula !== null && ceilingText === ceilingDraft(ceiling) && (
+              <span className="ceiling-formula">{ceilingFormula}</span>
+            )}
+            {(finances === null || !hasBothFinances(finances)) && (
+              <button
+                type="button"
+                className="underline-link term-planning"
+                disabled={busy}
+                onClick={() => void plan()}
+              >
+                {PAYMENT_PLANNING}
+              </button>
+            )}
           </span>
           {error !== null && <p className="field-error">{error}</p>}
           <div className="question-actions">

@@ -67,7 +67,12 @@ test('signed out shows our own Google button and the product name', async () => 
   const steps = screen.getAllByRole('listitem')
   expect(steps).toHaveLength(3)
   for (const step of steps) expect(step.querySelectorAll('strong')).toHaveLength(1)
-  expect(steps[0]).toHaveTextContent('מתארים את ההלוואה המבוקשת')
+  expect(steps.map((step) => step.querySelector('strong')?.textContent)).toEqual([
+    'מתארים את ההלוואה המבוקשת',
+    'מזינים את ההצעות שקיבלתם',
+    'רואים מה כל הצעה עולה באמת',
+  ])
+  expect(steps[0]).toHaveTextContent(/^\d*מתארים את ההלוואה המבוקשת: מטרה, סכום והחזר חודשי מרבי\.$/)
   expect(steps.map((step) => step.textContent).join(' ')).not.toMatch(/הכנסה|הוצאות/)
   expect(screen.queryByText('כניסה רק עם חשבון Google')).not.toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'תפריט חשבון' })).not.toBeInTheDocument()

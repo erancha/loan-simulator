@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { expect, test, vi } from 'vitest'
 import { ApiException } from '../api/client.ts'
-import { FinancesPanel, hasFinances } from './FinancesPanel.tsx'
+import { FinancesPanel, hasFinancialDetails, hasFinances } from './FinancesPanel.tsx'
 
 const FINANCES = { net_fixed_income: '9300', fixed_expenses: null }
 
@@ -61,12 +61,23 @@ test('a refused save shows the rejection and sends nothing', async () => {
 
 test('the panel shows the ceiling the figures give', () => {
   renderPanel({ ceiling: { amount: '1900', source: 'finances' } })
-  expect(screen.getByText('1,900 ₪').parentElement).toHaveTextContent('החזר חודשי מרבי')
+  expect(screen.getByText('1,900 ₪').closest('b')!.parentElement).toHaveTextContent(
+    'החזר חודשי מרבי',
+  )
 })
 
-test('a stated ceiling stays on the card, not in the panel', () => {
+test('a stated ceiling shows in the panel, saying the person stated it', () => {
   renderPanel({ ceiling: { amount: '1900', source: 'stated' } })
-  expect(screen.queryByText('1,900 ₪')).not.toBeInTheDocument()
+  expect(screen.getByText('1,900 ₪').closest('b')!.parentElement).toHaveTextContent(
+    'החזר חודשי מרבי 1,900 ₪ · לפי מה שאמרת',
+  )
+})
+
+test('the line has details to show once there is a ceiling or a figure', () => {
+  const none = { net_fixed_income: null, fixed_expenses: null }
+  expect(hasFinancialDetails(none, null)).toBe(false)
+  expect(hasFinancialDetails(none, '1000')).toBe(true)
+  expect(hasFinancialDetails(FINANCES, null)).toBe(true)
 })
 
 test('a read-only panel offers no edit', () => {

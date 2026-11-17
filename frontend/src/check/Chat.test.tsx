@@ -1,8 +1,10 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { expect, test, vi } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 import { Chat } from './Chat.tsx'
-import { checkArchived, cpiChart } from '../test/fixtures.ts'
+import { MARKET_SAMPLE } from './copy.ts'
+import { awaitingAvis, checkArchived, cpiChart, identifiedMax } from '../test/fixtures.ts'
+import { restoreScrollIntoView, stubScrollIntoView } from '../test/scrollIntoView.ts'
 import type { ChatEntry, ChatMessage, CheckState, QuestionEntry } from './events.ts'
 
 const exchange: ChatMessage[] = [
@@ -15,11 +17,19 @@ const noQuestion = {
   liveQuestionId: null,
   finances: null,
   ceiling: null,
+  ceilingFormula: null,
   onAnswer: vi.fn(),
   onSkip: vi.fn(),
   onClone: vi.fn(),
-    onOpenCheck: vi.fn(),
-  recommended: false,
+  onOpenCheck: vi.fn(),
+  onConfirmReading: vi.fn(() => Promise.resolve()),
+  onAnswerAmount: vi.fn(() => Promise.resolve()),
+  loanAmount: '45000',
+  onContinueOffers: vi.fn(() => Promise.resolve(true)),
+  opening: null,
+  offersOpen: false,
+  samplesOffered: false,
+  focusAwaiting: null,
 }
 
 interface Options {
@@ -29,7 +39,8 @@ interface Options {
   failure?: string | null
   notice?: string | null
   onSend?: (text: string) => Promise<boolean>
-  recommended?: boolean
+  offersOpen?: boolean
+  samplesOffered?: boolean
 }
 
 function renderChat({
@@ -39,7 +50,8 @@ function renderChat({
   failure = null,
   notice = null,
   onSend = vi.fn(() => Promise.resolve(true)),
-  recommended = false,
+  offersOpen = false,
+  samplesOffered = false,
 }: Options = {}) {
   const { unmount } = render(
     <Chat
@@ -50,37 +62,12 @@ function renderChat({
       failure={failure}
       notice={notice}
       onSend={onSend}
-      recommended={recommended}
+      offersOpen={offersOpen}
+      samplesOffered={samplesOffered}
     />,
   )
   return { onSend, unmount }
 }
-
-test('an empty chat opens with the opening line, on the agent side', () => {
-  renderChat({ messages: [] })
-  expect(screen.getByText(/כדי להמליץ על הלוואה שמתאימה לך/)).toHaveClass('bubble-assistant')
-})
-
-test('a fresh check sweeps the input, then the samples, and bolds where to write', () => {
-  renderChat({ messages: [] })
-  expect(screen.getByText('כתבו בתיבה למטה').tagName).toBe('STRONG')
-  expect(screen.getByRole('textbox').parentElement).toHaveClass('border-sweep')
-  for (const sample of document.querySelectorAll('.chat-samples button')) {
-    expect(sample).toHaveClass('border-sweep', 'sweep-after-input')
-  }
-})
-
-test('a check with messages sweeps nothing', () => {
-  renderChat()
-  expect(document.querySelector('.border-sweep')).toBeNull()
-})
-
-test('the opening line stays first once messages exist', () => {
-  renderChat()
-  const turns = screen.getAllByRole('listitem')
-  expect(turns[0]).toHaveTextContent(/כדי להמליץ על הלוואה שמתאימה לך/)
-  expect(turns[1]).toHaveTextContent('רוצה לקנות רכב')
-})
 
 test('user and assistant bubbles sit on opposite sides', () => {
   renderChat()
@@ -300,7 +287,7 @@ test('a question shows as its own turn, with a control only while it is live', (
       liveQuestionId="q-3"
     />,
   )
-  const turn = screen.getAllByRole('listitem')[3]
+  const turn = screen.getAllByRole('listitem')[2]
   expect(turn).toHaveClass('chat-turn')
   expect(turn.querySelector('.bubble-question')).toHaveTextContent('כמה צריך ללוות?')
   expect(screen.getByRole('button', { name: 'דילוג' })).toBeInTheDocument()
@@ -329,17 +316,6 @@ test('a chart shows its title, its source and a table of every month', () => {
   expect(rows[3]).toHaveTextContent('09/2026-0.5%')
 })
 
-test('a sample fills the input without sending, until the first question', async () => {
-  const { onSend } = renderChat({ messages: [] })
-  await userEvent.click(screen.getByRole('button', { name: 'הלוואה' }))
-
-  const input = screen.getByRole('textbox')
-  expect(input).toHaveValue('אני רוצה הלוואה בסך 60,000₪ ')
-  expect(input).toHaveFocus()
-  expect(onSend).not.toHaveBeenCalled()
-  expect(screen.getByRole('button', { name: 'שליחה' })).toBeEnabled()
-})
-
 test('a multi-line sample keeps its line breaks in the input', async () => {
   renderChat({ messages: [] })
   await userEvent.click(screen.getByRole('button', { name: 'פריים ומדדים' }))
@@ -360,18 +336,6 @@ test('the market sample stays after the first question and after a tap', async (
   renderChat({ messages: [...exchange, question], liveQuestionId: 'q-2' })
   await userEvent.click(screen.getByRole('button', { name: 'פריים ומדדים' }))
   expect(screen.getByRole('button', { name: 'פריים ומדדים' })).toBeInTheDocument()
-})
-
-test('the samples are gone once the model has asked a question', () => {
-  const question: QuestionEntry = {
-    id: 'q-2',
-    role: 'question',
-    question: { field: 'amount', text: null, choices: null },
-    leadIn: null,
-    answered: false,
-  }
-  renderChat({ messages: [...exchange, question], liveQuestionId: 'q-2' })
-  expect(screen.queryByRole('button', { name: 'הלוואה' })).not.toBeInTheDocument()
 })
 
 test('an archived check ends with the manual archive line and no input', () => {
@@ -411,26 +375,53 @@ test('a cloned check ends with the handoff note, whose button opens the copy', a
   expect(onOpenCheck).toHaveBeenCalledWith('copy')
 })
 
-test('once a check has a recommendation, the real-offer sample sends its sentence at once', async () => {
-  const { onSend } = renderChat({ recommended: true })
-  expect(screen.queryByRole('button', { name: 'הלוואה' })).not.toBeInTheDocument()
+/** The labels of the chips above the input, in their order. */
+function chipLabels(): string[] {
+  return [...document.querySelectorAll('.chat-samples button')].map((chip) => chip.textContent)
+}
+
+test('the samples chip shows with a loan and a term and no offer, and fills the input', async () => {
+  const { onSend } = renderChat({ offersOpen: true, samplesOffered: true })
+  expect(chipLabels()).toEqual(['דוגמאות', 'הצעה מגוף מלווה', 'פריים ומדדים'])
+  await userEvent.click(screen.getByRole('button', { name: 'דוגמאות' }))
+
+  expect(onSend).not.toHaveBeenCalled()
+  expect(screen.getByRole('textbox')).toHaveValue(
+    'אפשר לראות דוגמאות להלוואה כזו? פריים, ריבית קבועה לא צמודה, וריבית קבועה צמודה למדד כמו' +
+      ' בהלוואה מקרן פנסיה או השתלמות ',
+  )
+  expect(screen.getByRole('textbox')).toHaveFocus()
+})
+
+test('no samples chip once an offer is saved or awaits', () => {
+  renderChat({ offersOpen: true, samplesOffered: false })
+  expect(chipLabels()).toEqual(['הצעה מגוף מלווה', 'פריים ומדדים'])
+})
+
+test('the offer chip sends its sentence at once, which opens the empty offer form', async () => {
+  const { onSend } = renderChat({ offersOpen: true })
   await userEvent.click(screen.getByRole('button', { name: 'הצעה מגוף מלווה' }))
 
-  expect(onSend).toHaveBeenCalledWith('קיבלתי הצעה להלוואה מגוף מלווה')
+  expect(onSend).toHaveBeenCalledExactlyOnceWith('קיבלתי הצעה להלוואה מגוף מלווה')
   expect(screen.getByRole('textbox')).toHaveValue('')
 })
 
+test('the market chip stays at every stage', () => {
+  for (const stage of [{}, { offersOpen: true }, { offersOpen: true, samplesOffered: true }]) {
+    const { unmount } = renderChat(stage)
+    expect(chipLabels().at(-1)).toBe('פריים ומדדים')
+    unmount()
+  }
+  renderChat({ messages: [] })
+  expect(chipLabels()).toEqual(['פריים ומדדים'])
+})
+
 test('the market sample fills the input and waits for the person to send', async () => {
-  const { onSend } = renderChat({ recommended: true })
+  const { onSend } = renderChat({ offersOpen: true })
   await userEvent.click(screen.getByRole('button', { name: 'פריים ומדדים' }))
 
   expect(onSend).not.toHaveBeenCalled()
   expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toContain('ריבית הפריים')
-})
-
-test('no real-offer sample before a recommendation', () => {
-  renderChat()
-  expect(screen.queryByRole('button', { name: 'הצעה מגוף מלווה' })).not.toBeInTheDocument()
 })
 
 test('a message with ?? in it sends without asking', async () => {
@@ -461,4 +452,117 @@ test('a message and a question show when they were said; one without a time show
   expect(times).toHaveLength(2)
   expect(times[0]).toHaveTextContent('14.11.2026 09:30:05')
   expect(times[0]).toHaveAttribute('datetime', at)
+})
+
+test('a readings card stays answerable after later messages', () => {
+  renderChat({
+    messages: [
+      { id: 'r-a-1', role: 'readings', offer: awaitingAvis, settled: null, dropped: null },
+      ...exchange,
+    ],
+  })
+  const card = document.getElementById('awaiting-a-1')!
+  for (const radio of within(card).getAllByRole('radio')) expect(radio).toBeEnabled()
+  expect(within(card).getByRole('button', { name: 'אישור' })).toBeEnabled()
+})
+
+const IDENTIFIED =
+  'an identified offer shows its short reply with the market chip, which fills the input'
+
+test(IDENTIFIED, async () => {
+  renderChat({ messages: [{ id: 'i-1', role: 'identified', offer: identifiedMax }] })
+  const reply = screen.getByText(/זיהיתי שזו הלוואה/).closest('.bubble')!
+  expect(reply).toHaveTextContent(
+    'זיהיתי שזו הלוואה בריבית פריים + 6.45%. ריבית הפריים נכון ל-15.11.2026 היא 4.75%, כך' +
+      ' שהריבית הכוללת היום היא 11.2% (4.75 + 6.45). ההחזר שמסרת, 934 ₪, תואם לחישוב הזה.',
+  )
+  await userEvent.click(within(reply as HTMLElement).getByRole('button', { name: 'פריים ומדדים' }))
+  const input = screen.getByRole('textbox')
+  expect(input).toHaveValue(`${MARKET_SAMPLE.text} `)
+  expect(input).toHaveFocus()
+})
+
+test('an unrecognized offer shows what to ask the lender', () => {
+  renderChat({ messages: [{ id: 'n-1', role: 'unrecognized', lender: 'מקס' }] })
+  expect(
+    screen.getByText(
+      'לא זיהיתי את סוג ההלוואה. בקשו יותר פרטים - האם ההלוואה מבוססת פריים? ריבית קבועה צמודה' +
+        ' למדד?',
+    ),
+  ).toHaveClass('bubble-assistant')
+})
+
+describe('a card the checks list asks to focus', () => {
+  afterEach(restoreScrollIntoView)
+
+  const readings: ChatEntry = {
+    id: 'r-a-1',
+    role: 'readings',
+    offer: awaitingAvis,
+    settled: null,
+    dropped: null,
+  }
+  const message = (id: string): ChatMessage => ({ id, role: 'user', text: id, complete: true })
+  const props = {
+    ...noQuestion,
+    turn: 'idle' as const,
+    failure: null,
+    notice: null,
+    onSend: vi.fn(() => Promise.resolve(true)),
+  }
+  const entries = [...exchange, readings]
+  const focus = { id: 'a-1', request: 1 }
+
+  /** The log, sized so pinning it to the end sets its scrollTop to 1000. */
+  function sizedLog(): HTMLElement {
+    const log = document.querySelector<HTMLElement>('.chat-log')!
+    Object.defineProperty(log, 'scrollHeight', { configurable: true, value: 1000 })
+    Object.defineProperty(log, 'clientHeight', { configurable: true, value: 300 })
+    return log
+  }
+
+  test('is centred and highlighted once, and stays in view while later entries arrive', () => {
+    const scrolled = stubScrollIntoView()
+    const { rerender } = render(<Chat {...props} messages={entries} focusAwaiting={focus} />)
+    const card = document.getElementById('awaiting-a-1')!
+    expect(scrolled).toHaveBeenCalledExactlyOnceWith({ block: 'center' })
+    expect(scrolled.mock.contexts[0]).toBe(card)
+    expect(card).toHaveClass('card-focus')
+    expect(card).not.toHaveClass('attention-flash')
+
+    const log = sizedLog()
+    fireEvent.scroll(log)
+    const later = [...entries, message('u-2')]
+    rerender(<Chat {...props} messages={later} focusAwaiting={focus} />)
+    rerender(<Chat {...props} messages={[...later, message('u-3')]} focusAwaiting={focus} />)
+    expect(log.scrollTop).toBe(0)
+    expect(scrolled).toHaveBeenCalledOnce()
+  })
+
+  test('lets the log follow the end again once the person scrolls', () => {
+    stubScrollIntoView()
+    const { rerender } = render(<Chat {...props} messages={entries} focusAwaiting={focus} />)
+    const log = sizedLog()
+    log.scrollTop = 50
+    fireEvent.scroll(log)
+    rerender(<Chat {...props} messages={[...entries, message('u-2')]} focusAwaiting={focus} />)
+    expect(log.scrollTop).toBe(1000)
+  })
+
+  test('lets the log follow the end again once the person sends', async () => {
+    stubScrollIntoView()
+    const { rerender } = render(<Chat {...props} messages={entries} focusAwaiting={focus} />)
+    const log = sizedLog()
+    await userEvent.type(screen.getByRole('textbox'), 'שלום{Enter}')
+    rerender(<Chat {...props} messages={[...entries, message('שלום')]} focusAwaiting={focus} />)
+    expect(log.scrollTop).toBe(1000)
+  })
+
+  test('is focused again by a second request for the same card', () => {
+    const scrolled = stubScrollIntoView()
+    const { rerender } = render(<Chat {...props} messages={entries} focusAwaiting={focus} />)
+    rerender(<Chat {...props} messages={entries} focusAwaiting={{ id: 'a-1', request: 2 }} />)
+    expect(scrolled).toHaveBeenCalledTimes(2)
+    expect(document.getElementById('awaiting-a-1')).toHaveClass('card-focus')
+  })
 })

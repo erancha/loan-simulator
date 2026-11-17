@@ -9,6 +9,13 @@ Core building blocks:
   offer form, with no model call
 - CheckRunner.send_market_sample: records the page's market-data sample and answers it from the
   engine's data with no model call, as a turn the conversation keeps
+- CheckRunner.send_opening: saves the opening card's goal and amount as the check's loan, records
+  the card's line and shows the term card, with no model call
+- CheckRunner.send_term_confirmation: records the line of a term the person confirmed; a check
+  with no option and no awaiting offer gets the offer form with no model call, any other a model
+  turn
+- CheckRunner.send_offer_skip: records the offer form's skip and invites a description of the
+  offer in words, with no model call
 - CheckRunner.delete: removes an idle check, its conversation and all it produced
 - CheckRunner.clone: copies an idle check, its conversation and all it produced into a new check,
   and leaves the source a check.cloned event naming the copy
@@ -17,6 +24,11 @@ Core building blocks:
   the check runs a turn
 - CheckRunner.save_term: saves the term the person confirms on the term card, with a ceiling
   typed beside it, before the line that tells the model, refused while the check runs a turn
+- CheckRunner.confirm_reading: saves the reading the person confirms on an awaiting offer's card
+  as their offer, before the line that tells the model, refused while the check runs a turn
+- CheckRunner.answer_amount: the lender's answer to an offer quoted for less than the check's
+  loan, given on its card: saves the offer at the loan amount or drops it, before the line that
+  tells the model, refused while the check runs a turn
 - CheckRunner.fail_interrupted: at startup, ends the turns a stopped process left running
 - CheckRunner.drain and aclose: wait for or cancel the turns in flight
 
@@ -27,7 +39,8 @@ none of them back. Turns live in this process's memory, so the agent runs as one
 
 A model turn that leaves the check with a recommendation and no payment ceiling ends with the
 ceiling question, asked once per check by the runner rather than left to the model, so the
-person always meets it after the first recommendation.
+person meets it after the first recommendation; a turn that ends on a question of the model's or
+on an offer's reading leaves it to a later turn, since the person answers that first.
 
 A turn streams the model's text to open pages as live message.delta events, each carrying the
 whole text of its message so far, so a page that joins mid-reply catches up from the next one.
@@ -42,7 +55,7 @@ turn continues from there.
 
 import asyncio
 import uuid
-from collections.abc import Callable, Coroutine, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -61,7 +74,7 @@ from loan_agent.application.agent_graph import (
     people_said,
     record_exchange,
 )
-from loan_agent.application.check_tools import CheckTools, ToolDeps, english_words
+from loan_agent.application.check_tools import CheckTools, ToolDeps, ToolError, english_words
 from loan_agent.application.finances_saving import save_finances
 from loan_agent.application.market_answer import PRIME_MONTHS, market_answer
 from loan_agent.domain.errors import (
@@ -70,7 +83,7 @@ from loan_agent.domain.errors import (
     TurnConflictError,
     TurnLimitError,
 )
-from loan_agent.domain.models import Check, Finances, User
+from loan_agent.domain.models import Check, Finances, ReadingKind, User
 from loan_agent.ports.events import (
     CHART_SHOWN,
     CHECK_ARCHIVED,
@@ -80,6 +93,8 @@ from loan_agent.ports.events import (
     MESSAGE_DELTA,
     MESSAGE_RETRACTED,
     MESSAGE_USER,
+    OFFER_AWAITING,
+    OFFER_UNRECOGNIZED,
     QUESTION_ASKED,
     TURN_FAILED,
     TURN_STATUS,
@@ -91,6 +106,9 @@ log = structlog.get_logger(__name__)
 
 RUNNING = {"status": "running"}
 IDLE = {"status": "idle"}
+# The last events of a turn that leave the person something to answer first: a question, an
+# offer's readings card, or the request for an unrecognized offer's details.
+_ANSWERED_ON_SCREEN = frozenset({QUESTION_ASKED, OFFER_AWAITING, OFFER_UNRECOGNIZED})
 
 FAILURE_MESSAGE = "לא הצלחתי להשלים את התשובה. אפשר לנסות שוב."
 CEILING_FIELD = "payment_ceiling"
@@ -101,13 +119,23 @@ CEILING_QUESTION = {
 # What the model's conversation records of a ceiling typed on the term card.
 TERM_CARD_FOR_CEILING = (
     "The screen saved that payment ceiling as stated and showed a new term card for it: the "
-    "shortest term at which every example track's worst-case payment fits the ceiling, or 84 "
-    "months when none does. The person's answer to that card arrives as the next message."
+    "shortest term at which both unlinked example tracks' worst-case payments fit the ceiling, "
+    "or 84 months when none does. The person's answer to that card arrives as the next message."
 )
 # What the model's conversation records of the offer chip.
 OFFER_FORM_SHOWN = (
     "The screen showed the offer form with nothing filled in. The person's answer arrives as "
     "the next message: a complete offer in words, at equal monthly payments."
+)
+# What the model's conversation records of the opening card.
+OPENING_CARD_ANSWERED = (
+    "The screen's opening card saved the loan, its purpose and amount, and showed the term "
+    "card. The person's answer to that card arrives as the next message."
+)
+# The reply to the offer form's skip, which the conversation keeps as the model's own.
+DESCRIBE_THE_OFFER = (
+    "אפשר לתאר את ההצעה או ההצעות שקיבלת בתיבה למטה, במילים שלך: הסכום, מספר החודשים, הריבית "
+    "וההחזר החודשי, כמו שהגוף המלווה מסר."
 )
 # What the model's conversation records of the runner's question: the page words it itself.
 CEILING_ASKED = (
@@ -122,6 +150,10 @@ TOOL_CALL_OUTCOME_UNKNOWN = (
     "something (finances, a loan, an option), ask the person whether it already appears on "
     "their page."
 )
+
+
+# Runs a check's turn, given the person's id, the check's id and the message's text.
+_Answer = Callable[[str, str, str], Coroutine[None, None, None]]
 
 
 @dataclass
@@ -195,6 +227,49 @@ class CheckRunner:
         """The page sends the offer chip's sentence here; the offer form answers it with no model
         call. It counts as a message and raises as send does."""
         await self._start(user, check_id, text, self._answer_offer_sample)
+
+    async def send_opening(
+        self, user: User, check_id: str, text: str, purpose: str, amount: Decimal
+    ) -> None:
+        """The opening card's goal and amount: the loan is saved before the message is stored,
+        and the term card answers it with no model call. It counts as a message and raises as
+        send does, and ToolError for a check that already holds a loan or a loan set_loan
+        refuses; nothing is recorded then."""
+        tools = CheckTools(user.id, check_id, self._tool_deps)
+
+        async def save_loan() -> None:
+            if (await self._checks.get(user.id, check_id)).loan is not None:
+                raise ToolError("the check already holds a loan")
+            await tools.set_loan(purpose, str(amount))
+
+        await self._start(user, check_id, text, self._answer_opening, before=save_loan)
+
+    async def send_term_confirmation(self, user: User, check_id: str, text: str) -> None:
+        """The line of a term PUT /term saved. A check with no option, example or offer, and no
+        awaiting offer is answered with the offer form and no model call; any other runs a model
+        turn, since its options were priced again at the term and its recommendation is of the
+        previous one. It counts as a message and raises as send does."""
+        answer: _Answer = self._run
+
+        async def choose_answer() -> None:
+            nonlocal answer
+            if not await self._holds_option(check_id):
+                answer = self._answer_offer_sample
+
+        async def respond(user_id: str, check_id: str, text: str) -> None:
+            await answer(user_id, check_id, text)
+
+        await self._start(user, check_id, text, respond, before=choose_answer)
+
+    async def send_offer_skip(self, user: User, check_id: str, text: str) -> None:
+        """The offer form's skip: a reply invites the person to describe the offer in their own
+        words, with no model call. It counts as a message and raises as send does."""
+        await self._start(user, check_id, text, self._answer_offer_skip)
+
+    async def _holds_option(self, check_id: str) -> bool:
+        if await self._tool_deps.options.list(check_id):
+            return True
+        return bool(await self._tool_deps.awaiting.list(check_id))
 
     async def clone(self, user: User, check_id: str) -> Check:
         """Raises CheckNotFoundError for an unknown check or another person's, and
@@ -291,6 +366,32 @@ class CheckRunner:
             if payment_ceiling is not None:
                 await tools.set_ceiling(str(payment_ceiling))
 
+    async def confirm_reading(
+        self, user: User, check_id: str, awaiting_id: str, kind: ReadingKind
+    ) -> None:
+        """Saves the reading as the offer and settles the awaiting offer. Raises as save_term does
+        for an unknown, archived or busy check, AwaitingOfferNotFoundError for an offer the check
+        does not hold, and ToolError when the offer has no such reading or cannot be saved."""
+        async with self._send_lock:
+            await self._idle_open_check(user, check_id)
+            await CheckTools(user.id, check_id, self._tool_deps).confirm_reading(awaiting_id, kind)
+
+    async def answer_amount(
+        self,
+        user: User,
+        check_id: str,
+        awaiting_id: str,
+        covers: bool,
+        kind: ReadingKind | None,
+    ) -> None:
+        """Saves the offer at the check's loan amount when the lender covers it, and drops it
+        otherwise. Raises as confirm_reading does, and ToolError for an offer with no amount
+        question or a reading it lacks."""
+        async with self._send_lock:
+            await self._idle_open_check(user, check_id)
+            tools = CheckTools(user.id, check_id, self._tool_deps)
+            await tools.answer_amount(awaiting_id, covers, kind)
+
     async def _idle_open_check(self, user: User, check_id: str) -> Check:
         check = await self._checks.get(user.id, check_id)
         if check.archived_at is not None:
@@ -323,12 +424,17 @@ class CheckRunner:
         user: User,
         check_id: str,
         text: str,
-        answer: Callable[[str, str, str], Coroutine[None, None, None]],
+        answer: _Answer,
+        before: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
-        """Records the message and runs answer as the check's turn in the background."""
+        """Records the message and runs answer as the check's turn in the background. before runs
+        once the guards pass and before the message is stored, so a refusal of its records
+        nothing."""
         async with self._send_lock:
             await self._idle_open_check(user, check_id)
             await self._require_message_left(user)
+            if before is not None:
+                await before()
             await self._sink.emit(check_id, MESSAGE_USER, {"text": text})
             await self._sink.emit(check_id, TURN_STATUS, RUNNING)
             turn = asyncio.create_task(answer(user.id, check_id, text))
@@ -363,16 +469,17 @@ class CheckRunner:
         self, user_id: str, check_id: str, config: RunnableConfig
     ) -> None:
         """Asks for the payment ceiling once a check has a recommendation and no ceiling, unless
-        the check was asked before (a clone keeps its source's asking) or the turn already ends
-        with a question of the model's. The conversation records the question, so the model
-        reads the next message as its answer."""
+        the check was asked before (a clone keeps its source's asking), or the turn already ends
+        with a question of the model's or with an offer's reading the person answers first.
+        The conversation records the question, so the model reads the next message as its
+        answer."""
         check = await self._checks.get(user_id, check_id)
         if check.payment_ceiling is not None:
             return
         if await self._tool_deps.recommendations.latest(check_id) is None:
             return
         events = await self._events.list(check_id, 0)
-        if events[-1].type == QUESTION_ASKED:
+        if events[-1].type in _ANSWERED_ON_SCREEN:
             return
         if any(
             event.type == QUESTION_ASKED
@@ -386,51 +493,70 @@ class CheckRunner:
     async def _answer_term_ceiling(
         self, user_id: str, check_id: str, text: str, payment_ceiling: Decimal
     ) -> None:
-        config = check_config(user_id, check_id)
-        try:
-            unfinished = await self._close_unfinished_tool_calls(config)
-            tools = CheckTools(user_id, check_id, self._tool_deps)
+        async def reply(tools: CheckTools) -> AIMessage:
             await tools.set_ceiling(str(payment_ceiling))
             await tools.ask_term(None)
-            exchange = [*unfinished, HumanMessage(text), AIMessage(TERM_CARD_FOR_CEILING)]
-            await record_exchange(self._graph, config, exchange)
-        except Exception:
-            log.exception("term ceiling failed", check_id=check_id)
-            await self._report_failure(check_id)
-            return
-        await self._sink.emit(check_id, TURN_STATUS, IDLE)
+            return AIMessage(TERM_CARD_FOR_CEILING)
+
+        await self._answer_without_model(user_id, check_id, text, "term ceiling", reply)
+
+    async def _answer_opening(self, user_id: str, check_id: str, text: str) -> None:
+        async def reply(tools: CheckTools) -> AIMessage:
+            await tools.ask_term(None)
+            return AIMessage(OPENING_CARD_ANSWERED)
+
+        await self._answer_without_model(user_id, check_id, text, "opening", reply)
 
     async def _answer_offer_sample(self, user_id: str, check_id: str, text: str) -> None:
+        async def reply(tools: CheckTools) -> AIMessage:
+            await tools.ask_offer(None, [], None)
+            return AIMessage(OFFER_FORM_SHOWN)
+
+        await self._answer_without_model(user_id, check_id, text, "offer sample", reply)
+
+    async def _answer_offer_skip(self, user_id: str, check_id: str, text: str) -> None:
+        async def reply(tools: CheckTools) -> AIMessage:
+            return await self._say(check_id, DESCRIBE_THE_OFFER)
+
+        await self._answer_without_model(user_id, check_id, text, "offer skip", reply)
+
+    async def _answer_market(self, user_id: str, check_id: str, text: str) -> None:
+        async def reply(tools: CheckTools) -> AIMessage:
+            answer, charts = market_answer(await self._tool_deps.engine.market_series(PRIME_MONTHS))
+            said = await self._say(check_id, answer)
+            for chart in charts:
+                await self._sink.emit(check_id, CHART_SHOWN, chart)
+            return said
+
+        await self._answer_without_model(user_id, check_id, text, "market answer", reply)
+
+    async def _answer_without_model(
+        self,
+        user_id: str,
+        check_id: str,
+        text: str,
+        what: str,
+        reply: Callable[[CheckTools], Awaitable[AIMessage]],
+    ) -> None:
+        """Runs reply as the check's turn, then records the person's text and the message reply
+        returns in the conversation, so the model's next turn reads them."""
         config = check_config(user_id, check_id)
         try:
             unfinished = await self._close_unfinished_tool_calls(config)
-            await CheckTools(user_id, check_id, self._tool_deps).ask_offer(None, [], None)
-            exchange = [*unfinished, HumanMessage(text), AIMessage(OFFER_FORM_SHOWN)]
-            await record_exchange(self._graph, config, exchange)
+            said = await reply(CheckTools(user_id, check_id, self._tool_deps))
+            await record_exchange(self._graph, config, [*unfinished, HumanMessage(text), said])
         except Exception:
-            log.exception("offer sample failed", check_id=check_id)
+            log.exception(f"{what} failed", check_id=check_id)
             await self._report_failure(check_id)
             return
         await self._sink.emit(check_id, TURN_STATUS, IDLE)
 
-    async def _answer_market(self, user_id: str, check_id: str, text: str) -> None:
-        config = check_config(user_id, check_id)
-        try:
-            unfinished = await self._close_unfinished_tool_calls(config)
-            reply, charts = market_answer(await self._tool_deps.engine.market_series(PRIME_MONTHS))
-            message_id = str(uuid.uuid4())
-            await self._sink.emit(
-                check_id, MESSAGE_ASSISTANT, {"message_id": message_id, "text": reply}
-            )
-            for chart in charts:
-                await self._sink.emit(check_id, CHART_SHOWN, chart)
-            exchange = [*unfinished, HumanMessage(text), AIMessage(reply, id=message_id)]
-            await record_exchange(self._graph, config, exchange)
-        except Exception:
-            log.exception("market answer failed", check_id=check_id)
-            await self._report_failure(check_id)
-            return
-        await self._sink.emit(check_id, TURN_STATUS, IDLE)
+    async def _say(self, check_id: str, text: str) -> AIMessage:
+        """Shows the page a reply written without the model; the returned message is the one
+        the conversation keeps, under the same message id."""
+        message_id = str(uuid.uuid4())
+        await self._sink.emit(check_id, MESSAGE_ASSISTANT, {"message_id": message_id, "text": text})
+        return AIMessage(text, id=message_id)
 
     async def _report_failure(self, check_id: str) -> None:
         await self._sink.emit(check_id, TURN_FAILED, {"message": FAILURE_MESSAGE})

@@ -1,26 +1,44 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
+  answerAmount,
+  confirmReading,
   saveFinances,
   saveTerm,
   sendMarketSample,
-  sendOfferSample,
   sendMessage,
+  sendOfferSample,
+  sendOfferSkip,
+  sendOpening,
   sendTermCeiling,
+  sendTermConfirmation,
 } from '../api/checks.ts'
 import { ApiException, isRecord } from '../api/client.ts'
 import { buildCard } from './card.ts'
 import { CardBoundary } from './CardBoundary.tsx'
 import { CardResizer, useCardWidth } from './CardResizer.tsx'
 import { Chat } from './Chat.tsx'
-import { capNotice, sendFailed } from './copy.ts'
-import { FinancesPanel, hasFinances } from './FinancesPanel.tsx'
+import type { AwaitingFocus } from './Chat.tsx'
+import {
+  amountCoveredLine,
+  amountDeclinedLine,
+  capNotice,
+  ceilingFormula,
+  CONTINUE_TO_ANOTHER_OFFER,
+  confirmedReadingLine,
+  openingLine,
+  sendFailed,
+  SKIP,
+} from './copy.ts'
+import { FinancesPanel, hasFinancialDetails } from './FinancesPanel.tsx'
+import { OpeningCard } from './OpeningCard.tsx'
 import { termConfirmation, typedTerm } from './QuestionBubble.tsx'
+import { isRefusal } from './rejection.ts'
 import type { Answer } from './QuestionBubble.tsx'
 import { RecommendationCard } from './RecommendationCard.tsx'
-import { isArchived, liveQuestion } from './events.ts'
+import { holdsOption, isArchived, liveQuestion } from './events.ts'
 import type { CheckState } from './events.ts'
-import type { CheckSummary } from '../api/types.ts'
+import type { AwaitingOffer, CheckSummary, Reading } from '../api/types.ts'
 import { isMarketSample, isOfferSample } from './serverSamples.ts'
 import { useCheckEvents } from './useCheckEvents.ts'
 
@@ -46,16 +64,23 @@ function BuiltCard({ state }: { state: CheckState }) {
   return <RecommendationCard model={buildCard(state)} />
 }
 
+function ceilingAmountOf(state: CheckState): string | null {
+  return state.ceiling === null ? null : state.ceiling.amount
+}
+
 /**
- * Whether the checks list shows the check as its own events do: its loan, its term and whether it
- * has a recommendation. They differ after a turn this page did not start, such as the first turn
- * of a clone, which the page that cloned it sends.
+ * Whether the checks list shows the check as its own events do: its loan, its term, whether it
+ * has a recommendation or financial details, and how many offers await their lender. They differ
+ * after a turn this page did not start, such as the first turn of a clone, which the page that
+ * cloned it sends.
  */
 function listedAsShown(listed: CheckSummary, state: CheckState): boolean {
   return (
     listed.loan?.amount === state.loan?.amount &&
     listed.term_months === state.termMonths &&
-    (listed.recommendation === null) === (state.recommendation === null)
+    (listed.recommendation === null) === (state.recommendation === null) &&
+    listed.has_finances === hasFinancialDetails(state.finances, ceilingAmountOf(state)) &&
+    listed.awaiting_offers.length === state.awaiting.size
   )
 }
 
@@ -72,11 +97,20 @@ interface Props {
   onClone: (line: string) => Promise<void>
   /** Opens another of the person's checks. */
   onOpenCheck: (id: string) => void
+  /** The awaiting offer whose card to bring into view: the checks list's link that opened it. */
+  focusAwaiting: AwaitingFocus | null
+  /** The person asked for the finances line with the checks list's finances link. */
+  showFinances: boolean
+  /** Told whenever the term card starts or stops taking an answer. */
+  onTermCardLive: (live: boolean) => void
 }
 
 /**
  * One check: the checks list, the conversation, and the recommendation card, all fed by the
- * check's single event stream.
+ * check's single event stream. A check nobody has written to opens on its opening card alone. The
+ * finances line above the conversation shows the check's figures only while the person asks for
+ * it with the checks list's finances link, and never while the term card takes an answer: the
+ * card holds the ceiling then, and the line's edit would change it from a second place.
  */
 export function CheckPage({
   checkId,
@@ -86,6 +120,9 @@ export function CheckPage({
   onChecksChanged,
   onClone,
   onOpenCheck,
+  focusAwaiting,
+  showFinances,
+  onTermCardLive,
 }: Props) {
   const { state } = useCheckEvents(checkId)
   const [notice, setNotice] = useState<string | null>(null)
@@ -95,6 +132,10 @@ export function CheckPage({
   // Bumped on each accepted send, so the check below also runs for a turn that ended mid-POST.
   const [accepted, setAccepted] = useState(0)
   const live = liveQuestion(state)
+  const ceilingAmount = ceilingAmountOf(state)
+  const termCardLive = live !== null && live.question.kind === 'term'
+
+  useEffect(() => onTermCardLive(termCardLive), [termCardLive, onTermCardLive])
 
   useEffect(() => {
     const after = awaitedAfter.current
@@ -117,16 +158,25 @@ export function CheckPage({
       ? sendMarketSample
       : isOfferSample(text) && state.loan !== null
         ? sendOfferSample
-        : sendMessage
+        : text === SKIP && live?.question.kind === 'offer'
+          ? sendOfferSkip
+          : sendMessage
     return deliver(() => request(checkId, text))
   }
 
-  /** Runs a request that starts a turn, with a send's notices and its wait for the turn's end. */
-  async function deliver(request: () => Promise<void>): Promise<boolean> {
+  /**
+   * Runs a request that starts a turn, with a send's notices and its wait for the turn's end. An
+   * error `propagates` accepts is rethrown to the control that asked, with no notice.
+   */
+  async function deliver(
+    request: () => Promise<void>,
+    propagates: (error: unknown) => boolean = () => false,
+  ): Promise<boolean> {
     const turnsEndedBefore = state.turnsEnded
     try {
       await request()
     } catch (error) {
+      if (propagates(error)) throw error
       if (!(error instanceof ApiException && error.status === 409)) {
         setNotice(sendFailureText(error))
       }
@@ -147,6 +197,7 @@ export function CheckPage({
   async function answer(given: Answer): Promise<boolean> {
     if ('term' in given) {
       await saveTerm(checkId, given.term, given.ceiling)
+      return deliver(() => sendTermConfirmation(checkId, given.line))
     } else if ('ceiling' in given) {
       return deliver(() => sendTermCeiling(checkId, given.line, given.ceiling))
     } else if (given.update !== null) {
@@ -168,7 +219,45 @@ export function CheckPage({
     }
   }
 
+  /** A reading confirmed on an offer's card is saved, then sent as its line; a refused save
+   * propagates to the card. */
+  async function confirmOfferReading(awaitingId: string, reading: Reading): Promise<void> {
+    await confirmReading(checkId, awaitingId, reading.kind)
+    await deliver(() => sendMessage(checkId, confirmedReadingLine(reading)))
+  }
+
+  /** The lender's answer on the loan amount of an offer quoted for less: the offer is saved at
+   * the loan amount or dropped, then sent as its line; a refused answer propagates to the card. */
+  async function answerOfferAmount(
+    offer: AwaitingOffer,
+    covers: boolean,
+    reading: Reading | null,
+  ): Promise<void> {
+    if (state.loan === null) throw new Error('an offer awaits its lender on a check with no loan')
+    const loan = state.loan.amount
+    await answerAmount(checkId, offer.awaiting_id, covers, reading === null ? null : reading.kind)
+    const line =
+      reading === null
+        ? amountDeclinedLine(offer.lender, loan)
+        : amountCoveredLine(offer.lender, loan, reading)
+    await deliver(() => sendMessage(checkId, line))
+  }
+
+  /** The opening card's loan; resolves true when it was sent, and a refused one rejects to the
+   * card. */
+  function submitOpening(purpose: string, amount: string): Promise<boolean> {
+    const text = openingLine(purpose, amount)
+    return deliver(() => sendOpening(checkId, text, purpose, amount), isRefusal)
+  }
+
+  /** The server answers this line with the offer form, for another offer. */
+  function continueOffers(): Promise<boolean> {
+    return deliver(() => sendOfferSample(checkId, CONTINUE_TO_ANOTHER_OFFER))
+  }
+
   const cardWidth = useCardWidth()
+  const fresh = !listed.started && state.messages.length === 0
+  const offersOpen = state.loan !== null && state.termMonths !== null
 
   return (
     <div className="check-page" data-active-pane={activePane} style={cardWidth.style}>
@@ -176,7 +265,7 @@ export function CheckPage({
         {sidebar}
       </aside>
       <section className="pane-chat">
-        {hasFinances(state.finances) && (
+        {showFinances && !termCardLive && hasFinancialDetails(state.finances, ceilingAmount) && (
           <FinancesPanel
             finances={state.finances}
             ceiling={state.ceiling}
@@ -189,7 +278,12 @@ export function CheckPage({
             messages={state.messages}
             liveQuestionId={live === null ? null : live.id}
             finances={state.finances}
-            ceiling={state.ceiling === null ? null : state.ceiling.amount}
+            ceiling={ceilingAmount}
+            ceilingFormula={
+              state.ceiling === null || state.ceiling.basis === null
+                ? null
+                : ceilingFormula(state.ceiling.basis, state.finances)
+            }
             turn={state.turn}
             failure={state.failure}
             notice={notice}
@@ -198,7 +292,14 @@ export function CheckPage({
             onSkip={send}
             onClone={onClone}
             onOpenCheck={onOpenCheck}
-            recommended={state.recommendation !== null}
+            onConfirmReading={confirmOfferReading}
+            onAnswerAmount={answerOfferAmount}
+            loanAmount={state.loan === null ? null : state.loan.amount}
+            onContinueOffers={continueOffers}
+            opening={fresh ? <OpeningCard onSubmit={submitOpening} /> : null}
+            offersOpen={offersOpen}
+            samplesOffered={offersOpen && !holdsOption(state)}
+            focusAwaiting={focusAwaiting}
           />
         </div>
       </section>

@@ -1,11 +1,15 @@
 import type {
+  AwaitingSummary,
   CheckEvent,
   CheckSummary,
   Question,
   RecommendationPresented,
   User,
 } from '../api/types.ts'
+import { comparesOptions } from '../check/card.ts'
 import { answerLine, INPUT_LABEL, questionLabel } from '../check/copy.ts'
+import { initialState, reduce } from '../check/events.ts'
+import { hasFinancialDetails } from '../check/FinancesPanel.tsx'
 
 /**
  * Every event the server stores for a check; deltas and retractions are live only, so a recording
@@ -42,6 +46,15 @@ export interface Entry {
 export type ShowEntry = (entry: Entry) => () => void
 
 const DEMO_CHECK_ID = 'demo'
+// The check's POST routes that start a turn; the demo accepts each and answers nothing.
+const TURN_ROUTES = [
+  'messages',
+  'market-sample',
+  'offer-sample',
+  'opening',
+  'term-confirmation',
+  'offer-skip',
+]
 const SOURCE_CHECK_ID = 'demo-source'
 const DEMO_USER: User = { id: 'demo', email: 'demo@example.com', name: 'הדגמה' }
 // The checks list's created_at, which the list shows; the replay starts the check now, and a clone
@@ -76,11 +89,28 @@ function latestOf<Type extends StoredEvent['type']>(events: StoredEvent[], type:
   )
 }
 
+/** The offers still awaiting their lender, each in the place its first emit gave it. */
+function awaitingOf(events: StoredEvent[]): AwaitingSummary[] {
+  // Key: awaiting id. A Map keeps an id's first insertion place when it is set again.
+  const awaiting = new Map<string, AwaitingSummary>()
+  for (const event of events) {
+    if (event.type === 'offer.awaiting') {
+      const { awaiting_id: id, lender, monthly_payment } = event.data
+      awaiting.set(id, { id, lender, monthly_payment })
+    }
+    if (event.type === 'offer.settled' || event.type === 'offer.dropped') {
+      awaiting.delete(event.data.awaiting_id)
+    }
+  }
+  return [...awaiting.values()]
+}
+
 /** A check as the checks list shows it, from the events it holds so far. */
 function summaryOf(id: string, createdAt: string, events: StoredEvent[]): CheckSummary {
   const recommendation = latestOf(events, 'recommendation.presented')
   const loan = latestOf(events, 'loan.set')
   const term = latestOf(events, 'term.set')
+  const finances = latestOf(events, 'finances.updated')
   return {
     id,
     created_at: createdAt,
@@ -100,9 +130,16 @@ function summaryOf(id: string, createdAt: string, events: StoredEvent[]): CheckS
             created_at: createdAt,
           },
     recommends_examples_only: recommendation !== undefined && examplesOnly(recommendation.data),
+    compares_options:
+      recommendation !== undefined && comparesOptions(events.reduce(reduce, initialState)),
     term_months: term === undefined ? null : term.data.term_months,
     archived: false,
     started: true,
+    has_finances:
+      latestOf(events, 'ceiling.set') !== undefined ||
+      (finances !== undefined &&
+        hasFinancialDetails(finances.data.finances, finances.data.payment_ceiling)),
+    awaiting_offers: awaitingOf(events),
   }
 }
 
@@ -203,16 +240,20 @@ export function createDemoBackend(recording: Recording, pace: Pace, showEntry: S
     ]
   }
 
+  const accepted = () => new Response(null, { status: 202 })
   const routes: Record<string, () => Response> = {
     'GET /api/auth/me': () => json(DEMO_USER),
     'GET /api/checks': () => json(checks()),
-    [`POST /api/checks/${DEMO_CHECK_ID}/messages`]: () => new Response(null, { status: 202 }),
-    [`POST /api/checks/${DEMO_CHECK_ID}/market-sample`]: () => new Response(null, { status: 202 }),
-    [`POST /api/checks/${DEMO_CHECK_ID}/offer-sample`]: () => new Response(null, { status: 202 }),
+    ...Object.fromEntries(
+      TURN_ROUTES.map((route) => [`POST /api/checks/${DEMO_CHECK_ID}/${route}`, accepted]),
+    ),
   }
+  // A reading confirmed, or the lender's answer on the amount, on any awaiting offer's card.
+  const READING = new RegExp(`^PUT /api/checks/${DEMO_CHECK_ID}/awaiting-offers/[^/]+(/amount)?$`)
 
   async function fetch(path: string, init?: RequestInit): Promise<Response> {
     const key = `${init?.method ?? 'GET'} ${path}`
+    if (READING.test(key)) return new Response(null, { status: 204 })
     const route = routes[key]
     if (route === undefined) throw new Error(`the demo serves no ${key}`)
     return route()

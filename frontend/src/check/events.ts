@@ -5,18 +5,28 @@
  * stored events (with a seq) are applied once. `message.delta` has no seq and carries the whole
  * reply so far; its complete `message.assistant` may arrive later, or already have been applied.
  * `message.retracted`, also without a seq, removes a reply that is still being written.
+ *
+ * An offer the person described becomes an entry of the conversation: a readings card while its
+ * loan type, or the loan amount of an offer quoted for less, waits on the lender, or the reply
+ * for an offer identified or not recognized at all.
  */
 import type {
+  AwaitingOffer,
   ChartShown,
   CheckArchived,
+  CeilingBasis,
   CeilingSource,
   CheckEvent,
   Finances,
   LoanRequest,
+  OfferDropped,
+  OfferIdentified,
   OptionSaved,
   Question,
+  Reading,
   RecommendationPresented,
 } from '../api/types.ts'
+import { exceeds } from '../money.ts'
 
 export interface ChatMessage {
   id: string
@@ -59,7 +69,44 @@ export interface CloneEntry {
   cloneId: string
 }
 
-export type ChatEntry = ChatMessage | QuestionEntry | ChartEntry | ArchiveEntry | CloneEntry
+/** An offer whose loan type waits on the lender's answer: the card of its readings. */
+export interface ReadingsEntry {
+  /** `r-${awaiting_id}`, so a later emit of the same offer finds its card. */
+  id: string
+  role: 'readings'
+  offer: AwaitingOffer
+  /** The reading the offer was saved by; null while it still waits. */
+  settled: Reading | null
+  /** The lender's no to the loan amount of an offer quoted for less; null unless it said no. */
+  dropped: OfferDropped | null
+  at?: string
+}
+
+/** An offer whose reading the agent identified and saved, with its short reply. */
+export interface IdentifiedEntry {
+  id: string
+  role: 'identified'
+  offer: OfferIdentified
+  at?: string
+}
+
+/** An offer whose loan type the agent could not tell, with what to ask the lender. */
+export interface UnrecognizedEntry {
+  id: string
+  role: 'unrecognized'
+  lender: string | null
+  at?: string
+}
+
+export type ChatEntry =
+  | ChatMessage
+  | QuestionEntry
+  | ChartEntry
+  | ArchiveEntry
+  | CloneEntry
+  | ReadingsEntry
+  | IdentifiedEntry
+  | UnrecognizedEntry
 
 /** A user message or a reply; a question and a chart are entries of their own kinds. */
 export function isMessage(entry: ChatEntry): entry is ChatMessage {
@@ -76,14 +123,18 @@ export interface CheckState {
   messages: ChatEntry[]
   /** By option id; the last `option.saved` wins and the first save fixes the position. */
   options: Map<string, OptionSaved>
+  /** By awaiting id, in arrival order; an offer leaves once it is saved by a reading, or dropped
+   * when its lender does not lend the check's loan amount. */
+  awaiting: Map<string, AwaitingOffer>
   recommendation: RecommendationPresented | null
   /** Ids of options saved after the latest recommendation, excluding the ones it names. */
   optionsSinceRecommendation: string[]
   loan: LoanRequest | null
   /** The term the person confirmed, in months. */
   termMonths: number | null
-  /** The payment ceiling the check holds, with where it came from; null while it has none. */
-  ceiling: { amount: string; source: CeilingSource } | null
+  /** The payment ceiling the check holds, with where it came from and, when derived from the
+   * finances, the caps it was derived from; null while it has none. */
+  ceiling: { amount: string; source: CeilingSource; basis: CeilingBasis | null } | null
   finances: Finances
   turn: 'idle' | 'running'
   /** How many times a running turn has gone idle in this stream, replay included. */
@@ -97,6 +148,7 @@ export interface CheckState {
 export const initialState: CheckState = {
   messages: [],
   options: new Map(),
+  awaiting: new Map(),
   recommendation: null,
   optionsSinceRecommendation: [],
   loan: null,
@@ -175,14 +227,19 @@ function apply(state: CheckState, event: CheckEvent): CheckState {
     case 'ceiling.set':
       return {
         ...state,
-        ceiling: { amount: event.data.payment_ceiling, source: event.data.ceiling_source },
+        ceiling: {
+          amount: event.data.payment_ceiling,
+          source: event.data.ceiling_source,
+          basis: null,
+        },
       }
     case 'finances.updated': {
-      const { finances, payment_ceiling, ceiling_source } = event.data
+      const { finances, payment_ceiling, ceiling_source, ceiling_basis } = event.data
+      const basis = ceiling_basis === undefined ? null : ceiling_basis
       const ceiling =
         payment_ceiling === null || ceiling_source === null
           ? null
-          : { amount: payment_ceiling, source: ceiling_source }
+          : { amount: payment_ceiling, source: ceiling_source, basis }
       return { ...state, finances, ceiling }
     }
     case 'option.saved': {
@@ -270,12 +327,85 @@ function apply(state: CheckState, event: CheckEvent): CheckState {
       }
     case 'check.restored':
       return { ...state, messages: state.messages.filter((entry) => entry.role !== 'archived') }
+    case 'offer.awaiting': {
+      const offer = event.data
+      const id = `r-${offer.awaiting_id}`
+      const shown = state.messages.some((entry) => entry.id === id)
+      const messages: ChatEntry[] = shown
+        ? state.messages.map((entry) =>
+            entry.id === id && entry.role === 'readings' ? { ...entry, offer } : entry,
+          )
+        : [
+            ...state.messages,
+            { id, role: 'readings', offer, settled: null, dropped: null, at: event.at },
+          ]
+      return {
+        ...state,
+        messages,
+        awaiting: new Map(state.awaiting).set(offer.awaiting_id, offer),
+      }
+    }
+    case 'offer.settled':
+      return closeAwaiting(state, event.type, event.data.awaiting_id, {
+        settled: event.data.reading,
+      })
+    case 'offer.dropped':
+      return closeAwaiting(state, event.type, event.data.awaiting_id, { dropped: event.data })
+    case 'offer.identified':
+      return {
+        ...state,
+        messages: [
+          ...state.messages,
+          { id: `i-${event.seq}`, role: 'identified', offer: event.data, at: event.at },
+        ],
+      }
+    case 'offer.unrecognized':
+      return {
+        ...state,
+        messages: [
+          ...state.messages,
+          { id: `n-${event.seq}`, role: 'unrecognized', lender: event.data.lender, at: event.at },
+        ],
+      }
   }
+}
+
+/** An awaiting offer leaves the check, and its card shows how: settled or dropped. */
+function closeAwaiting(
+  state: CheckState,
+  type: 'offer.settled' | 'offer.dropped',
+  awaitingId: string,
+  closed: Pick<ReadingsEntry, 'settled'> | Pick<ReadingsEntry, 'dropped'>,
+): CheckState {
+  const id = `r-${awaitingId}`
+  if (!state.messages.some((entry) => entry.id === id)) {
+    throw new Error(`${type} for ${awaitingId}, which no offer.awaiting showed`)
+  }
+  const awaiting = new Map(state.awaiting)
+  awaiting.delete(awaitingId)
+  return {
+    ...state,
+    messages: state.messages.map((entry) =>
+      entry.id === id && entry.role === 'readings' ? { ...entry, ...closed } : entry,
+    ),
+    awaiting,
+  }
+}
+
+/** The offer was quoted for less than the check's loan, so it awaits the lender's answer on
+ * lending the loan amount on the same terms. */
+export function quotedBelowLoan(offer: AwaitingOffer, loanAmount: string): boolean {
+  return exceeds(loanAmount, offer.amount)
 }
 
 /** An archived check takes no more messages. */
 export function isArchived(state: Pick<CheckState, 'messages'>): boolean {
   return state.messages.some((entry) => entry.role === 'archived')
+}
+
+/** The check holds an option, example or offer, or an offer waiting on the lender's answer. */
+export function holdsOption(state: CheckState): boolean {
+  return state.options.size > 0 || state.awaiting.size > 0
 }
 
 // Last, unanswered and idle means no person's message follows the question: the backend stores

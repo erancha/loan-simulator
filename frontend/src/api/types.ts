@@ -37,6 +37,17 @@ export interface Track {
   monthly_fee?: string | number
 }
 
+/** A loan's rate today against the Bank of Israel average rate on new unlinked consumer loans. */
+export interface OptionPrice {
+  /** Annual percent charged in the first month; on top of the CPI for a CPI-linked loan. */
+  rate_today: string
+  /** Similar within the engine's band of percentage points; null for a CPI-linked loan, whose
+   * rate is not comparable with the unlinked average. */
+  against_market: 'above' | 'similar' | 'below' | null
+  market_rate: string
+  market_rate_month: string
+}
+
 export interface OptionFigures {
   first_payment: string
   peak_payment: string
@@ -47,6 +58,9 @@ export interface OptionFigures {
   total_paid: string
   rate_as_of: string
   cpi_as_of: string
+  /** Absent from an option.saved event stored before the engine reported the rates, and null
+   * for an option saved then; the card then shows no rate line. */
+  price?: OptionPrice | null
 }
 
 export interface OptionData {
@@ -122,6 +136,13 @@ export interface RecommendationView extends RecommendationSummary {
   reasoning: string
 }
 
+/** An offer the person described whose loan type is still unclear, as the checks list shows it. */
+export interface AwaitingSummary {
+  id: string
+  lender: string
+  monthly_payment: string | null
+}
+
 export interface CheckSummary {
   id: string
   created_at: string
@@ -129,12 +150,19 @@ export interface CheckSummary {
   recommendation: RecommendationSummary | null
   /** Every option the recommendation names is an example nobody can take. */
   recommends_examples_only: boolean
+  /** The recommendation's card shows more than one option, so it ranks them; one option alone
+   * is evaluated, not recommended. False without a recommendation. */
+  compares_options: boolean
   /** The term the person confirmed, in months; null until then. */
   term_months: number | null
   /** Closed by the person; the check is read-only until restored. */
   archived: boolean
-  /** The person has sent the check a message; before that it holds only the opening line. */
+  /** The person has sent the check a message; before that it shows only the opening card. */
   started: boolean
+  /** The check's finances hold at least one figure. */
+  has_finances: boolean
+  /** Offers waiting on the lender's answer, oldest first. */
+  awaiting_offers: AwaitingSummary[]
 }
 
 export interface CheckView {
@@ -171,6 +199,15 @@ export type QuestionField =
   | 'payment_ceiling'
 
 /**
+ * How the term card's term was chosen: the shortest term whose first payment stays under an
+ * assumed amount, or whose worst-case payment fits the check's ceiling, with fits false when even
+ * the longest term does not; or the term the person typed.
+ */
+export type TermBasis =
+  | { kind: 'first_payment_target' | 'ceiling'; amount: string; fits: boolean }
+  | { kind: 'typed' }
+
+/**
  * A field the page asks for, free text with optional choices, the offer to clone the check, which
  * the page words itself, the term to confirm with the first payment it gives, or a lender's offer
  * to fill in, with what the person already said about it. A stored
@@ -181,7 +218,13 @@ export type Question =
   | { kind?: undefined; field: QuestionField; text: null; choices: null; offer_clone?: false }
   | { kind?: undefined; field: null; text: string; choices: string[] | null; offer_clone?: false }
   | { kind?: undefined; field: null; text: null; choices: null; offer_clone: true }
-  | { kind: 'term'; term_months: number; first_payment: string }
+  | {
+      kind: 'term'
+      term_months: number
+      first_payment: string
+      /** Absent from a term card stored before the basis was sent; the card then states none. */
+      basis?: TermBasis
+    }
   | {
       kind: 'offer'
       lender: string | null
@@ -209,12 +252,90 @@ export interface CheckArchived {
   archived_at: string
 }
 
+/** The two caps behind a ceiling derived from the finances; the ceiling is the lower of them. */
+export interface CeilingBasis {
+  income_percent: string
+  ceiling_by_income_share: string
+  disposable_percent: string
+  ceiling_by_disposable_income: string
+}
+
 /** The check's finances after a save, what is still missing and the ceiling that follows. */
 export interface FinancesUpdated {
   finances: Finances
   missing: string[]
   payment_ceiling: string | null
   ceiling_source: CeilingSource | null
+  /** Set when this save derived the ceiling; absent from events stored before it was sent. */
+  ceiling_basis?: CeilingBasis | null
+}
+
+/** How an offer's interest could be priced, in the order a card lists the readings. */
+export type ReadingKind = 'prime_margin' | 'prime_total' | 'fixed_unlinked' | 'fixed_linked'
+
+/** A word of the lender's that hints at the loan type. */
+export type TypeWord = 'prime' | 'fixed' | 'linked'
+
+/** One way to read an offer: the engine track it prices as, its first payment and the annual
+ * percent charged today. `approximate` marks a rate derived from the payment alone. */
+export interface Reading {
+  kind: ReadingKind
+  track: Track
+  first_payment: string
+  total_rate: string
+  approximate: boolean
+}
+
+/** An offer whose loan type is unclear, with the readings the person can confirm one of. */
+export interface AwaitingOffer {
+  awaiting_id: string
+  lender: string
+  amount: string
+  term_months: number
+  monthly_payment: string | null
+  /** The fixed rate that gives `monthly_payment`; null when no payment was given. */
+  payment_rate: string | null
+  type_words: TypeWord[]
+  readings: Reading[]
+  likely: ReadingKind | null
+  /** Its quoted payment identified its one reading; only an offer quoted for less than the
+   * check's loan awaits with an identified reading, for the lender's answer on the amount. */
+  identified: boolean
+  prime: string
+  rate_as_of: string
+}
+
+/** An offer the agent priced from a reading it identified without asking. */
+export interface OfferIdentified {
+  option_id: string
+  lender: string
+  reading: Reading
+  prime: string
+  rate_as_of: string
+  monthly_payment: string
+  quoted_amount: string
+  loan_amount: string
+}
+
+export interface OfferUnrecognized {
+  lender: string | null
+}
+
+/** An awaiting offer became a saved offer, with the reading it was saved by, which its card may
+ * not hold when a later detail identified the offer. */
+export interface OfferSettled {
+  awaiting_id: string
+  kind: ReadingKind
+  reading: Reading
+}
+
+/** An awaiting offer quoted for less than the check's loan left the check: its lender does not
+ * lend the loan amount on the same terms. */
+export interface OfferDropped {
+  awaiting_id: string
+  lender: string
+  quoted_amount: string
+  loan_amount: string
 }
 
 export type TurnStatus = 'running' | 'idle'
@@ -238,6 +359,11 @@ export const CHECK_EVENT_TYPES = [
   'check.archived',
   'check.restored',
   'check.cloned',
+  'offer.awaiting',
+  'offer.identified',
+  'offer.unrecognized',
+  'offer.settled',
+  'offer.dropped',
 ] as const
 
 type EventTypeName = (typeof CHECK_EVENT_TYPES)[number]
@@ -280,6 +406,11 @@ export type CheckEvent =
   | Sequenced<'check.archived', CheckArchived>
   | Sequenced<'check.cloned', CheckCloned>
   | Sequenced<'check.restored', Record<string, never>>
+  | Sequenced<'offer.awaiting', AwaitingOffer>
+  | Sequenced<'offer.identified', OfferIdentified>
+  | Sequenced<'offer.unrecognized', OfferUnrecognized>
+  | Sequenced<'offer.settled', OfferSettled>
+  | Sequenced<'offer.dropped', OfferDropped>
 
 type SameEventTypes = [CheckEvent['type']] extends [EventTypeName]
   ? [EventTypeName] extends [CheckEvent['type']]

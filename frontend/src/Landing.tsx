@@ -44,7 +44,7 @@ export function Landing({ pitch = false, children }: { pitch?: boolean; children
               {LANDING_STEPS.map((step) => (
                 <li key={step.title}>
                   <span>
-                    <strong>{step.title}</strong> {withBold(step.text)}
+                    <strong>{step.title}</strong>: {withBold(step.text)}
                   </span>
                 </li>
               ))}

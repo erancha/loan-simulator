@@ -9,19 +9,14 @@ export const OFFER_SOURCES = 'בנקים, קרן השתלמות, קרן פנסי
 export const LANDING_LEAD =
   '**הסימולטור לא נותן הלוואות** ולא פונה לאף גוף מלווה.'
 /** The signed-out pitch as numbered steps, since visitors skim prose but follow steps. It leads
- * with the loan; the person's finances come up only if they choose to bring them. */
+ * with the loan, then the offers the person already holds, and ends on what each offer really
+ * is; the person's finances come up only if they choose to bring them. */
 export const LANDING_STEPS = [
+  { title: 'מתארים את ההלוואה המבוקשת', text: 'מטרה, סכום והחזר חודשי מרבי.' },
+  { title: 'מזינים את ההצעות שקיבלתם', text: 'בטופס, או במילים שלכם, כמו שהגוף המלווה מסר.' },
   {
-    title: 'מתארים את ההלוואה המבוקשת',
-    text: 'כמה צריך, החזר חודשי מקסימלי ומשך התקופה.',
-  },
-  {
-    title: 'רואים את ההחזרים',
-    text: 'שני מסלולים לדוגמה, עם ההחזר הראשון וההחזר במקרה הגרוע.',
-  },
-  {
-    title: 'מביאים הצעות אמיתיות',
-    text: 'והסימולטור משווה אותן לדוגמאות.',
+    title: 'רואים מה כל הצעה עולה באמת',
+    text: 'כמה ריבית תשלמו, איך היא ביחס לממוצע בבנקים, ואיזו הצעה זולה יותר.',
   },
 ]
 

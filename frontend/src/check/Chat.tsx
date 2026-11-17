@@ -1,13 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import type { FormEvent, KeyboardEvent } from 'react'
-import type { Finances } from '../api/types.ts'
+import type { FormEvent, KeyboardEvent, ReactNode } from 'react'
+import type { AwaitingOffer, Finances, Reading } from '../api/types.ts'
 import {
-  CHAT_WELCOME,
   INPUT_LABEL, INPUT_PLACEHOLDER,
   questionText,
   MARKET_SAMPLE,
   OFFER_SAMPLE,
-  SAMPLE_MESSAGES,
+  SAMPLES_CHIP,
   SEND_BUTTON,
   THINKING,
   cloneLine,
@@ -16,15 +15,34 @@ import {
 import { ArchiveNote } from './ArchiveNote.tsx'
 import { CloneNote } from './CloneNote.tsx'
 import { isArchived, isMessage } from './events.ts'
-import type { ChatEntry, ChatMessage, CheckState } from './events.ts'
+import type {
+  ChatEntry,
+  ChatMessage,
+  CheckState,
+  IdentifiedEntry,
+  ReadingsEntry,
+  UnrecognizedEntry,
+} from './events.ts'
 import { formatTimestamp } from '../money.ts'
-import { withBold, withValues } from './emphasis.tsx'
+import { withValues } from './emphasis.tsx'
 import { MarketChart } from './MarketChart.tsx'
+import { IdentifiedBubble, UnrecognizedBubble } from './OfferReplies.tsx'
 import { QuestionBubble } from './QuestionBubble.tsx'
 import type { Answer } from './QuestionBubble.tsx'
+import { ReadingsCard } from './ReadingsCard.tsx'
 
 /** How far from the end of the log (px) a reader still counts as following the conversation. */
 const FOLLOW_DISTANCE = 80
+
+/** The class that highlights a card for a few seconds each time it is added (global.css). */
+const CARD_FOCUS = 'card-focus'
+
+/** A request of the checks list to bring an awaiting offer's card into view. `request` counts the
+ * list's taps, so a second tap on the same link is a new request. */
+export interface AwaitingFocus {
+  id: string
+  request: number
+}
 
 interface Props {
   messages: ChatEntry[]
@@ -33,6 +51,8 @@ interface Props {
   finances: Finances | null
   /** The payment ceiling the check holds; null while it has none. */
   ceiling: string | null
+  /** How the ceiling was derived from the finances; null for a stated ceiling or none. */
+  ceilingFormula: string | null
   turn: CheckState['turn']
   failure: string | null
   /** Why the last send did not go through. */
@@ -45,8 +65,24 @@ interface Props {
   onClone: (line: string) => Promise<void>
   /** Opens another of the person's checks: the copy a handoff note names. */
   onOpenCheck: (id: string) => void
-  /** The check has a recommendation, so the next step is bringing real offers. */
-  recommended: boolean
+  /** Saves an awaiting offer by the reading the person confirmed on its card. */
+  onConfirmReading: (awaitingId: string, reading: Reading) => Promise<void>
+  /** The lender's answer to an offer quoted for less than the check's loan, given on its card. */
+  onAnswerAmount: (offer: AwaitingOffer, covers: boolean, reading: Reading | null) => Promise<void>
+  /** The check's loan amount, which an offer's card measures its quoted amount against. */
+  loanAmount: string | null
+  /** Asks for the offer form, to describe another offer while one waits on its lender. */
+  onContinueOffers: () => Promise<boolean>
+  /** The card a new check opens with; while it is given, the chat shows it alone, with no input
+   * and no chips. */
+  opening: ReactNode | null
+  /** The check has a loan and a term, so real offers can be brought. */
+  offersOpen: boolean
+  /** The check has a loan, a term, no option and no awaiting offer, so its examples can be
+   * asked for. */
+  samplesOffered: boolean
+  /** The awaiting offer whose card the checks list asked to bring into view. */
+  focusAwaiting: AwaitingFocus | null
 }
 
 /** The person's last message before the entry at index: the request a question answers. */
@@ -56,6 +92,12 @@ function requestBefore(entries: ChatEntry[], index: number): string {
     .findLast((entry): entry is ChatMessage => entry.role === 'user')
   if (request === undefined) throw new Error('a question is asked after a message of the person')
   return request.text
+}
+
+type OfferReply = ReadingsEntry | IdentifiedEntry | UnrecognizedEntry
+
+function isOfferReply(entry: ChatEntry): entry is OfferReply {
+  return entry.role === 'readings' || entry.role === 'identified' || entry.role === 'unrecognized'
 }
 
 /** When an entry was said, under its bubble on the bubble's side. */
@@ -69,14 +111,18 @@ function EntryTime({ at, side }: { at: string | undefined; side: 'user' | 'assis
 }
 
 /**
- * The conversation of a check: its bubbles and question bubbles, each with the time it was
- * said, and the message input, which an archived check does not have.
+ * The conversation of a check: its bubbles, question bubbles and the cards and replies of the
+ * offers the person described, each with the time it was said, and the chips and message input,
+ * which an archived check does not have. A new check shows its opening card alone until the card
+ * is sent. A request of the checks list scrolls an awaiting offer's card into view and holds it
+ * there until the person scrolls or sends.
  */
 export function Chat({
   messages: entries,
   liveQuestionId,
   finances,
   ceiling,
+  ceilingFormula,
   turn,
   failure,
   notice,
@@ -85,7 +131,14 @@ export function Chat({
   onSkip,
   onClone,
   onOpenCheck,
-  recommended,
+  onConfirmReading,
+  onAnswerAmount,
+  loanAmount,
+  onContinueOffers,
+  opening,
+  offersOpen,
+  samplesOffered,
+  focusAwaiting,
 }: Props) {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
@@ -106,24 +159,21 @@ export function Chat({
   }
   const locked = running || sending
   const archived = isArchived({ messages: entries })
-  // The opening samples help start a conversation, so they go once the model asks its first
-  // question; once there is a recommendation, the offer sample opens the form for a real offer.
-  // Market data is worth asking at any point and costs no model call, so that sample stays.
-  const opening = !recommended && !entries.some((entry) => entry.role === 'question')
+  // Market data is worth asking at any point and costs no model call, so that chip stays.
   const samples = [
-    ...(opening ? SAMPLE_MESSAGES : []),
-    ...(recommended ? [OFFER_SAMPLE] : []),
+    ...(samplesOffered ? [SAMPLES_CHIP] : []),
+    ...(offersOpen ? [OFFER_SAMPLE] : []),
     MARKET_SAMPLE,
   ]
-  // A check with no message yet leads the eye to where to start: the input's edge, then the
-  // samples' (the border-sweep classes in global.css).
-  const fresh = entries.length === 0
   const input = useRef<HTMLTextAreaElement>(null)
   const log = useRef<HTMLDivElement>(null)
   const following = useRef(true)
   // The log's scrollTop as last set by the code or seen in a scroll event. A scroll event arrives
   // after later renders have grown the log, so only a lower scrollTop means the person scrolled up.
   const lastTop = useRef(0)
+  // True while a card the checks list focused is held in view: a new entry then leaves the log
+  // where it is. The person's own scroll or send releases it.
+  const held = useRef(false)
   const lastLength = last?.text.length
 
   function pinToEnd() {
@@ -136,6 +186,7 @@ export function Chat({
   // A new entry is what the reader is waiting for, so it brings the end back into view even
   // after they scrolled up; text streaming into an entry leaves a reader who scrolled up in place.
   useEffect(() => {
+    if (held.current) return
     following.current = true
     pinToEnd()
   }, [entries.length])
@@ -158,9 +209,42 @@ export function Chat({
     return () => observer.disconnect()
   }, [])
 
+  // Each request of the checks list focuses its card once, as soon as the replay has drawn it,
+  // and holds it in view while the rest of the replay arrives.
+  const focused = useRef<AwaitingFocus | null>(null)
+  useEffect(() => {
+    if (focusAwaiting === null || focused.current === focusAwaiting) return
+    const card = document.getElementById(`awaiting-${focusAwaiting.id}`)
+    if (card === null) return
+    focused.current = focusAwaiting
+    held.current = true
+    following.current = false
+    card.scrollIntoView({ block: 'center' })
+    // Removing the class and reading the layout restarts the highlight for a second request.
+    card.classList.remove(CARD_FOCUS)
+    void card.offsetWidth
+    card.classList.add(CARD_FOCUS)
+    if (log.current !== null) lastTop.current = log.current.scrollTop
+  }, [focusAwaiting, entries.length])
+
+  /** Puts a sample in the input for the person to send or extend; the trailing space invites
+   * them to type on after it. */
+  function fillInput(text: string) {
+    setDraft(`${text} `)
+    if (input.current === null) throw new Error('the input renders with the samples')
+    input.current.focus()
+  }
+
+  const fillMarketSample = () => fillInput(MARKET_SAMPLE.text)
+  // A card or a reply takes no answer while a turn runs or once the check is archived.
+  const answerable = !running && !archived
+
   function trackFollowing() {
     const element = log.current
     if (element === null) return
+    // A scroll event that leaves scrollTop where the code put it is the code's own scroll.
+    if (held.current && element.scrollTop === lastTop.current) return
+    held.current = false
     const atEnd = element.scrollHeight - element.scrollTop - element.clientHeight <= FOLLOW_DISTANCE
     if (atEnd) following.current = true
     else if (element.scrollTop < lastTop.current) following.current = false
@@ -169,6 +253,7 @@ export function Chat({
 
   /** Resolves true when the text was sent. */
   async function deliver(text: string): Promise<boolean> {
+    held.current = false
     setSending(true)
     try {
       return await onSend(text)
@@ -198,9 +283,7 @@ export function Chat({
     <div className="chat">
       <div className="chat-log" ref={log} onScroll={trackFollowing}>
         <ol className="chat-messages">
-          <li className="chat-turn">
-            <p className="bubble bubble-assistant chat-welcome">{withBold(CHAT_WELCOME)}</p>
-          </li>
+          {opening !== null && <li className="chat-turn">{opening}</li>}
           {entries.map((entry, index) => (
             <li key={entry.id} className="chat-turn">
               {entry.role === 'question' ? (
@@ -209,6 +292,7 @@ export function Chat({
                   live={entry.id === liveQuestionId}
                   finances={finances}
                   ceiling={ceiling}
+                  ceilingFormula={ceilingFormula}
                   onAnswer={onAnswer}
                   onSkip={onSkip}
                   onClone={() => onClone(cloneLine(requestBefore(entries, index)))}
@@ -219,13 +303,33 @@ export function Chat({
                 <ArchiveNote archive={entry.archive} />
               ) : entry.role === 'cloned' ? (
                 <CloneNote cloneId={entry.cloneId} onOpenCheck={onOpenCheck} />
+              ) : entry.role === 'readings' ? (
+                <ReadingsCard
+                  entry={entry}
+                  loanAmount={loanAmount}
+                  live={answerable}
+                  onConfirm={(reading) => onConfirmReading(entry.offer.awaiting_id, reading)}
+                  onAnswerAmount={(covers, reading) => onAnswerAmount(entry.offer, covers, reading)}
+                  onContinue={onContinueOffers}
+                  onMarketChip={fillMarketSample}
+                />
+              ) : entry.role === 'identified' ? (
+                <IdentifiedBubble
+                  offer={entry.offer}
+                  live={answerable}
+                  onMarketChip={fillMarketSample}
+                />
+              ) : entry.role === 'unrecognized' ? (
+                <UnrecognizedBubble />
               ) : (
                 <p className={`bubble bubble-${entry.role}`}>
                   {entry.role === 'assistant' ? withValues(withLastMonth(entry.text, today)) : entry.text}
                   {!entry.complete && <span className="caret" aria-hidden="true" />}
                 </p>
               )}
-              {entry.role === 'question' && <EntryTime at={entry.at} side="assistant" />}
+              {(entry.role === 'question' || isOfferReply(entry)) && (
+                <EntryTime at={entry.at} side="assistant" />
+              )}
               {isMessage(entry) && <EntryTime at={entry.at} side={entry.role} />}
             </li>
           ))}
@@ -244,23 +348,17 @@ export function Chat({
           {failure}
         </p>
       )}
-      {!archived && samples.length > 0 && (
+      {!archived && opening === null && (
         <div className="chat-samples">
           {samples.map((sample) => (
             <button
               key={sample.label}
               type="button"
-              className={fresh ? 'border-sweep sweep-after-input' : undefined}
+              className="sample-chip"
               disabled={locked}
               onClick={() => {
-                if ('sendsAtOnce' in sample) {
-                  void deliver(sample.text)
-                  return
-                }
-                // The trailing space invites the person to type on after the sample.
-                setDraft(`${sample.text} `)
-                if (input.current === null) throw new Error('the input renders with the samples')
-                input.current.focus()
+                if ('sendsAtOnce' in sample) void deliver(sample.text)
+                else fillInput(sample.text)
               }}
             >
               {sample.label}
@@ -268,10 +366,9 @@ export function Chat({
           ))}
         </div>
       )}
-      {!archived && (
+      {!archived && opening === null && (
         <form className="chat-input" onSubmit={onSubmit}>
-          {/* A textarea draws no ::before, so the sweep runs on this wrapper of the same shape. */}
-          <div className={fresh ? 'chat-input-box border-sweep' : 'chat-input-box'}>
+          <div className="chat-input-box">
             <textarea
             ref={input}
             value={draft}

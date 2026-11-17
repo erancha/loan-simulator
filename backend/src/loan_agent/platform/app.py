@@ -41,6 +41,7 @@ from loan_agent.adapters.engine_mcp import McpLoanEngine
 from loan_agent.adapters.google_tokens import GoogleTokenVerifier, JwksKeys, StaticKey
 from loan_agent.adapters.memory_bus import InMemoryEventBus
 from loan_agent.adapters.postgres.repositories import (
+    PostgresAwaitingOfferRepository,
     PostgresCheckEventStore,
     PostgresCheckRepository,
     PostgresOptionRepository,
@@ -107,6 +108,7 @@ async def production_infrastructure(settings: Settings) -> AsyncIterator[Infrast
         yield Infrastructure(
             checks=PostgresCheckRepository(sessions),
             options=PostgresOptionRepository(sessions),
+            awaiting=PostgresAwaitingOfferRepository(sessions),
             recommendations=PostgresRecommendationRepository(sessions),
             events=PostgresCheckEventStore(sessions),
             engine=engine,
@@ -183,6 +185,7 @@ def create_app(
             tool_deps = ToolDeps(
                 checks=opened.checks,
                 options=opened.options,
+                awaiting=opened.awaiting,
                 recommendations=opened.recommendations,
                 engine=opened.engine,
                 sink=sink,
@@ -209,6 +212,7 @@ def create_app(
             app.state.deps = AppDeps(
                 checks=opened.checks,
                 options=opened.options,
+                awaiting=opened.awaiting,
                 recommendations=opened.recommendations,
                 events=opened.events,
                 sink=sink,

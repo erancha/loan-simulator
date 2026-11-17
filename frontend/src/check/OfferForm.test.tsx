@@ -1,10 +1,10 @@
-import { render, screen } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { expect, test, vi } from 'vitest'
 import type { Question } from '../api/types.ts'
 import {
+  CONTINUE,
   OFFER_ADD_TRACK,
-  OFFER_CONTINUE,
   OFFER_FIX_ABOVE,
   OFFER_LENDER_LABEL,
   OFFER_LENDER_MISSING,
@@ -18,6 +18,7 @@ import {
   offerLine,
   offerRateBox,
   offerRateInvalid,
+  SKIP,
 } from './copy.ts'
 import type { QuestionEntry } from './events.ts'
 import { QuestionBubble } from './QuestionBubble.tsx'
@@ -27,10 +28,10 @@ type OfferQuestion = Extract<Question, { kind: 'offer' }>
 const EMPTY: OfferQuestion = { kind: 'offer', lender: null, tracks: [], max_term_months: null }
 
 const PENSION_FUND_LINE =
-  'קיבלתי הצעה מגוף מלווה, קרן הפנסיה: (1) פריים פלוס 0.5%, לא צמוד למדד (2) ריבית קבועה 3.5%,' +
+  'קיבלתי הצעה. הגוף המלווה: קרן הפנסיה. (1) פריים פלוס 0.5%, לא צמוד למדד (2) ריבית קבועה 3.5%,' +
   ' צמוד למדד. לתקופה של עד 84 חודשים, בתשלומים חודשיים שווים.'
 
-function form(question: OfferQuestion, live = true) {
+function form(question: OfferQuestion, live = true, onSkip = vi.fn().mockResolvedValue(true)) {
   const entry: QuestionEntry = { id: 'q-1', role: 'question', question, leadIn: null, answered: !live }
   const onAnswer = vi.fn().mockResolvedValue(true)
   render(
@@ -39,8 +40,9 @@ function form(question: OfferQuestion, live = true) {
       live={live}
       finances={null}
       ceiling={null}
+      ceilingFormula={null}
       onAnswer={onAnswer}
-      onSkip={vi.fn()}
+      onSkip={onSkip}
       onClone={vi.fn()}
     />,
   )
@@ -51,7 +53,7 @@ const lenderBox = () => screen.getByRole('textbox', { name: OFFER_LENDER_LABEL }
 const monthsBox = () => screen.getByRole('textbox', { name: OFFER_MONTHS_LABEL })
 const rateBox = (row: number) => screen.getByRole('textbox', { name: offerRateBox(row) })
 const kindBox = (row: number) => screen.getByRole('combobox', { name: offerKindBox(row) })
-const proceed = () => screen.getByRole('button', { name: OFFER_CONTINUE })
+const proceed = () => screen.getByRole('button', { name: CONTINUE })
 
 test('the worded offer names the lender, every track with its linkage, and the period', () => {
   const line = offerLine(
@@ -66,6 +68,15 @@ test('the worded offer names the lender, every track with its linkage, and the p
   expect(offerLine('הבנק', [{ kind: 'prime_minus', rate: '0.25', linked: false }], 60)).toContain(
     '(1) פריים מינוס 0.25%, לא צמוד למדד.',
   )
+})
+
+test('a live form says what it is for, and a closed one keeps only its title', () => {
+  const intro = 'קיבלת הצעות להלוואה מגופים מלווים? אפשר לתאר אותן כאן, או בצ\'אט למטה'
+  form(EMPTY)
+  expect(screen.getByText(intro, { exact: false })).toBeInTheDocument()
+  cleanup()
+  form(EMPTY, false)
+  expect(screen.queryByText(intro, { exact: false })).not.toBeInTheDocument()
 })
 
 test('an empty form marks the missing boxes and sends nothing', async () => {
@@ -229,8 +240,19 @@ test('rows are added up to the limit and a single row has no remove button', asy
   expect(screen.getAllByRole('combobox')).toHaveLength(OFFER_MAX_TRACKS - 1)
 })
 
-test('an answered form takes no more input', () => {
+test('דילוג sends its line whatever the boxes hold', async () => {
+  const user = userEvent.setup()
+  const onSkip = vi.fn().mockResolvedValue(true)
+  const onAnswer = form(EMPTY, true, onSkip)
+  await user.click(screen.getByRole('button', { name: SKIP }))
+  expect(onSkip).toHaveBeenCalledWith('דילוג')
+  expect(screen.queryByText(OFFER_FIX_ABOVE)).toBeNull()
+  expect(onAnswer).not.toHaveBeenCalled()
+})
+
+test('an answered form shows neither button', () => {
   form({ ...EMPTY, lender: 'הבנק' }, false)
+  expect(screen.queryByRole('button', { name: SKIP })).toBeNull()
   expect(screen.queryByRole('textbox')).toBeNull()
-  expect(screen.queryByRole('button', { name: OFFER_CONTINUE })).toBeNull()
+  expect(screen.queryByRole('button', { name: CONTINUE })).toBeNull()
 })

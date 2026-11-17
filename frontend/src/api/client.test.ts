@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { saveFinances } from './checks.ts'
+import {
+  confirmReading,
+  saveFinances,
+  sendOfferSkip,
+  sendOpening,
+  sendTermConfirmation,
+} from './checks.ts'
 import { ApiException, SIGNED_OUT_EVENT, apiDelete, apiGet, apiPost, apiPut } from './client.ts'
 
 function respond(status: number, body: unknown) {
@@ -106,8 +112,8 @@ describe('saveFinances', () => {
   it("saveFinances puts decimal strings to the check's finances", async () => {
     const saved = { id: 'c1', finances: { net_fixed_income: '9300', fixed_expenses: '4500.50' } }
     respond(200, saved)
-    await expect(saveFinances('c1', { net_fixed_income: '9300', fixed_expenses: '4500.50' })).resolves
-      .toEqual(saved)
+    const update = { net_fixed_income: '9300', fixed_expenses: '4500.50' }
+    await expect(saveFinances('c1', update)).resolves.toEqual(saved)
     expect(fetch).toHaveBeenCalledWith(
       '/api/checks/c1/finances',
       expect.objectContaining({
@@ -123,6 +129,45 @@ describe('saveFinances', () => {
     expect(fetch).toHaveBeenCalledWith(
       '/api/checks/c1/finances',
       expect.objectContaining({ body: '{"fixed_expenses":"4000"}' }),
+    )
+  })
+})
+
+describe('the offers-first calls', () => {
+  it('each new call reaches its route with its body', async () => {
+    const reaches = async (
+      call: () => Promise<void>,
+      url: string,
+      method: string,
+      body: unknown,
+    ) => {
+      respond(202, undefined)
+      await call()
+      expect(fetch).toHaveBeenCalledWith(
+        url,
+        expect.objectContaining({ method, body: JSON.stringify(body) }),
+      )
+    }
+    await reaches(
+      () => sendOpening('c1', 'רכב', 'רכב', '45000'),
+      '/api/checks/c1/opening',
+      'POST',
+      { text: 'רכב', purpose: 'רכב', amount: '45000' },
+    )
+    await reaches(
+      () => sendTermConfirmation('c1', 'אישור'),
+      '/api/checks/c1/term-confirmation',
+      'POST',
+      { text: 'אישור' },
+    )
+    await reaches(() => sendOfferSkip('c1', 'דילוג'), '/api/checks/c1/offer-skip', 'POST', {
+      text: 'דילוג',
+    })
+    await reaches(
+      () => confirmReading('c1', 'a-1', 'fixed_unlinked'),
+      '/api/checks/c1/awaiting-offers/a-1',
+      'PUT',
+      { reading: 'fixed_unlinked' },
     )
   })
 })
