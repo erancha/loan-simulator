@@ -3,13 +3,14 @@
 The loan simulator is a Hebrew-only AI agent that helps a person in Israel decide on a short- or
 medium-term loan (a car, a renovation, a consumer purchase): for how long, and on which track (one
 part of a loan with its own rate: fixed or tied to the prime rate, linked to the consumer price
-index or not). The person states the loan they need and sees it simulated within the first turns;
-their household finances come up only if they ask for help with a monthly payment ceiling. The model
-leads the conversation and decides what to ask; code computes every number and sets the bounds the
-recommendation must respect. The engine prices each track at what it costs today and at what it
-would have cost had interest rates and inflation moved as in the worst stretch of the last ten
-years; the page shows both. Access is by invitation, and the stack runs on one machine under Docker
-Compose. This repo holds the loan engine, the agent and the page.
+index or not). The person states the loan they need, sets its term, and compares the offers they
+collected from lenders, which the simulator reads back on one footing however vaguely a lender
+worded them; their household finances come up only if they ask for help with a monthly payment
+ceiling. The model leads the conversation and decides what to ask; code computes every number and
+sets the bounds the recommendation must respect. The engine prices each track at what it costs
+today and at what it would have cost had interest rates and inflation moved as in the worst stretch
+of the last ten years; the page shows both. Access is by invitation, and the stack runs on one
+machine under Docker Compose. This repo holds the loan engine, the agent and the page.
 
 **Contents:** [Overview](#overview) · [Tech stack](#tech-stack) · [Architecture](#architecture) ·
 [Getting started](#getting-started) · [Scripts](#scripts) · [Details](#details) ·
@@ -20,13 +21,17 @@ Compose. This repo holds the loan engine, the agent and the page.
 - **Sign-in and chat**: a person signs in with a Google account and chats with the assistant in
   Hebrew, on a right-to-left page. Only the Google accounts the operator lists as test users of
   the app's Google client can sign in.
-- **The loan first**: the person writes the amount they need, or a price and the money they put
-  in, with a purpose if they like. The assistant proposes a term with its first payment (with
-  a stated monthly limit, the shortest term that fits it; otherwise 60 months for a car, or the
-  shortest term whose first payment is under 1,000 ₪, up to 84 months), which the person
-  confirms, changes, or replaces with a monthly limit, and then compares two example tracks, a fixed
-  and a prime one, until the person enters the real offers they collected in a short form; the
-  first offer replaces the examples, so offers are compared only with each other.
+- **Offers first**: a check opens with a card for the loan's goal (car, renovation or general)
+  and its amount, typed or worked out from a price less the money put in. A terms card proposes
+  a term with its first payment (with a stated monthly limit, the shortest term that fits it;
+  otherwise 60 months for a car, or the shortest term whose first payment is under 1,000 ₪, up
+  to 84 months), and the person confirms or changes it. The offer form follows. An offer entered
+  there is saved as it is; one described in words is read back in the simulator's terms
+  ("prime + 6.45%, which is 11.2% today"). When its words fit several loans and its payment
+  does not tell them apart, the person sees each and the exact question to ask the lender, and
+  the offer waits for that answer, out of the comparison, while other offers are entered. Three
+  example tracks, fixed and prime as most lenders offer and a pension fund's fixed loan linked to
+  the CPI, are priced only on request, before any offer exists.
 - **An optional payment ceiling**: the person may state the highest monthly payment that suits
   them, or ask for help, and the engine derives one from their net income and fixed expenses.
   These figures belong to the check and show as one line above its conversation once given. A
@@ -122,7 +127,7 @@ walk-through and the tests.
   bearer token and database password; `deploy.sh` runs it first
 - `test.sh` — the checks and tests of the engine, the agent and the page
 - `deploy.sh` — builds and starts Postgres, the engine and the agent in Docker; `--ec2` does it
-  on one EC2 instance behind CloudFront
+  on one EC2 instance behind CloudFront, and `--ec2 --preview` runs the working tree beside it
 - `docker-helper.sh` — stops the stack, follows its logs or shows its status
 
 Each script's header comment is its full documentation, and `--help` prints it.
@@ -141,7 +146,8 @@ Each script's header comment is its full documentation, and `--help` prints it.
   scripts, the addresses and MCP Inspector
 - [Testing](docs/testing.md) — what each test layer proves
 - [Decisions](docs/adr/) — one record per founding decision: the engine, the worst case, the
-  agent, storage, sign-in, the model setting, Compose, the page, EC2, and the loan-first flow
+  agent, storage, sign-in, the model setting, Compose, the page, EC2, the loan-first flow, and
+  reading a vague offer in code
 
 ## License
 

@@ -55,13 +55,19 @@ than the license contact (`PUBLISHED_SETTINGS` of `lib/settings-guard.sh`).
   blank, then builds and runs Postgres (with its schema migration), the engine and the agent in
   Docker Compose, and returns once the agent answers; `--ec2` does it on the stack's EC2
   instance behind CloudFront (`template-ec2.yaml`, `docker-compose.ec2.yml`), in the account of
-  the gitignored `lib/aws-config.sh`.
-- `docker-helper.sh [--ec2]` — `--stop [--volumes]`, `--logs [-e]`, `--ps`; `--ec2
-  --delete-stack` deletes the EC2 stack and leaves its disk.
+  the gitignored `lib/aws-config.sh`; `--ec2 --preview` runs the working tree beside it as the
+  guest stack `loan-simulator-preview` (its own address, database and ports; `DEPLOY_PREVIEW` of
+  `stack-params.sh` selects it).
+- `docker-helper.sh [--ec2 [--preview]]` — `--stop [--volumes] [--images]`, `--logs [-e]`,
+  `--ps`; `--ec2 --delete-stack` deletes the EC2 stack (a host's leaves its disk).
 - `lib/ec2.sh` — the EC2 target: the stack's deploy, SSH with an Instance Connect key, Compose
-  against the instance's daemon. `lib/settings-guard.sh` — the checks behind the pre-commit
-  hook.
+  against the instance's daemon. This repo's stack hosts the instance the other Docker Compose
+  repos deploy onto as guests; `template-ec2.yaml`, `lib/ec2.sh`, `lib/settings-guard.sh` and
+  the pre-commit hook are shared with them byte for byte, so change them in all four.
+- `lib/settings-guard.sh` — the checks behind the pre-commit hook.
 - `tools/sql-helper.sh [--ec2]` — psql on the stack's database; `--counts`, `--rows`,
-  `--backup <file>`, `--restore <file>`, `--people`, `--reset <account-id>`, `--reset-all`.
+  `--backup <file>`, `--restore <file>`, `--people`, `--reset <account-id>`, `--reset-all`,
+  `--clone <from> <to>` (refuses a target with records); `--ec2 --preview` acts on the preview,
+  and `--ec2 --preview --copy-live` copies production's database into it and migrates it.
 - `tools/lock.sh` — recompiles each component's `requirements.txt` inside its Dockerfile's
   Python image after editing a dependency list.

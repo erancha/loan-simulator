@@ -38,6 +38,9 @@ COMPOSE_ONLY_KEYS = {
 }
 # Read by scripts/lib/settings-guard.sh only: the address tracked files may show.
 GUARD_ONLY_KEYS = {"LICENSE_CONTACT"}
+# Read by scripts/lib/ec2.sh only, for deploy.sh --ec2.
+EC2_ONLY_KEYS = {"EC2_STACK", "EC2_HOST_STACK", "EC2_ORIGIN_PORT", "EC2_INSTANCE_TYPE"}
+NOT_THE_AGENTS_KEYS = COMPOSE_ONLY_KEYS | GUARD_ONLY_KEYS | EC2_ONLY_KEYS
 ENGINE_PREFIX = "ENGINE_"
 AGENT_ENGINE_KEYS = {"ENGINE_URL"}
 
@@ -86,7 +89,7 @@ def test_every_compose_only_key_is_documented() -> None:
 def test_no_agent_key_is_unknown() -> None:
     unknown = sorted(
         key
-        for key in _documented_keys() - _settings_keys() - COMPOSE_ONLY_KEYS - GUARD_ONLY_KEYS
+        for key in _documented_keys() - _settings_keys() - NOT_THE_AGENTS_KEYS
         if _owned_by_agent(key)
     )
     assert not unknown, f"The settings files document keys nothing reads: {unknown}"

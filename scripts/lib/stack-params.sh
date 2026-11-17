@@ -26,6 +26,39 @@ export AGENT_HOST_PORT="8101"
 # the host.
 export DB_HOST_PORT="8102"
 
+# ── EC2 ──────────────────────────────────────────────────────────────────────────
+# Read by scripts/lib/ec2.sh only, for deploy.sh --ec2. The stack's name on main; any other
+# branch deploys EC2_STACK-fb.
+export EC2_STACK="loan-simulator"
+# Blank: this repo's stack is the host, which owns the EC2 instance the other Docker Compose repos
+# deploy onto as guests; each of them names this stack here.
+export EC2_HOST_STACK=""
+# Host only: the instance's ARM type, sized for every stack it runs; a change stops and starts
+# the same instance.
+export EC2_INSTANCE_TYPE="t4g.small"
+
+# ── Preview ──────────────────────────────────────────────────────────────────────
+# DEPLOY_PREVIEW=1, which the scripts export for --ec2 --preview and clear otherwise, selects the
+# preview: the working tree run beside production on the same EC2 instance, as a guest stack of
+# production's with its own CloudFront address, Compose project (so its own database), image names
+# and ports. It comes before every value derived from the ports, so those follow.
+if [[ "${DEPLOY_PREVIEW:-}" == 1 ]]; then
+  export ENGINE_HOST_PORT="8110"
+  export AGENT_HOST_PORT="8111"
+  export DB_HOST_PORT="8112"
+  export STACK_NAME="$EC2_STACK-preview"
+  export HOST_STACK_NAME="$EC2_STACK"
+  export COMPOSE_PROJECT_NAME="$EC2_STACK-preview"
+  # Read by docker-compose.ec2.yml: appended to each built image's name.
+  export EC2_IMAGE_SUFFIX="-preview"
+else
+  export EC2_IMAGE_SUFFIX=""
+fi
+
+# The port CloudFront reaches this stack at on the instance; every stack on the instance has its
+# own.
+export EC2_ORIGIN_PORT="${AGENT_HOST_PORT}"
+
 # ── Engine access ────────────────────────────────────────────────────────────────
 # The Host header values the engine answers, comma separated, none empty: the address inside the
 # Compose network, plus localhost and 127.0.0.1 at ENGINE_HOST_PORT, for MCP Inspector on this

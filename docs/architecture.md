@@ -46,10 +46,11 @@ Inspector included, can call ([ADR 0001](adr/0001-loan-engine-is-a-standalone-mc
 One package, `loan_engine`, in layers whose imports point inwards only, enforced by
 import-linter:
 
-- `domain` holds the loan model, schedules, the historical replay and the term and loan searches
-  (`policy`) as pure calculations. The household ceiling formula sits apart in `affordability`,
-  and an import-linter contract keeps `policy`, `history` and `schedule` from importing it, so no
-  loan figure depends on the person's finances. Money is `Decimal`; values leave the server
+- `domain` holds the loan model, schedules, the historical replay, the term and loan searches
+  (`policy`) and the loans a vaguely worded offer may mean (`readings`) as pure calculations. The
+  household ceiling formula sits apart in `affordability`, and an import-linter contract keeps
+  `policy`, `history`, `schedule` and `readings` from importing it, so no loan figure depends on
+  the person's finances. Money is `Decimal`; values leave the server
   rounded to agorot.
 - `market` fetches the Bank of Israel rate, the consumer price index and the Bank of Israel average
   consumer-loan rate, aligns them into a monthly history and keeps the last good copy on disk.
@@ -60,7 +61,7 @@ The tools:
 | Tool | Returns |
 |---|---|
 | `simulate_loan` | A short text summary for the model; the full result, schedule included, as structured content. |
-| `suggest_tracks` | A fixed and a prime track priced from the published average bank rate. |
+| `suggest_tracks` | A fixed and a prime track priced from the published average bank rate, and a pension fund's fixed track linked to the CPI. |
 | `market_series` | Today's prime and, for the latest months, the prime and the CPI's monthly change. |
 | `propose_term` | The shortest term, in 6-month steps, at which both suggested tracks' first payment is below a limit, else 84 months, with that first payment. |
 | `propose_offer_term` | The same search for one real offer, up to the longest term it allows. |
@@ -68,9 +69,11 @@ The tools:
 | `shortest_comfortable_offer_term` | The same search for one real offer, up to the longest term it allows. |
 | `largest_comfortable_loan` | The largest loan, in whole thousands of shekels, on which at least one suggested track's worst-case payment fits a ceiling at a given term; null when none does. |
 | `assess_affordability` | The payment ceiling from net fixed income and fixed expenses, with the two caps it is the lower of and reason codes. |
+| `offer_readings` | The one-track loans an offer may mean, from the number it states or from its monthly payment alone, each with its first payment and today's total rate, and the fixed rate the payment amounts to. |
 
-The model calls the first three; the agent's own check code calls the rest, so the term card, the
-ceiling and the guardrail's remedies come from code rather than from the model's choice of tool
+The model calls the first three; the agent's own check code calls the rest, `offer_readings`
+among them, so the term card, the ceiling, the reading of a vague offer and the guardrail's
+remedies come from code rather than from the model's choice of tool
 ([architecture/agent.md](architecture/agent.md#tools)).
 
 **Resources:** `rates://boi/history`, `rates://cpi/history` and `rates://current`.
@@ -90,12 +93,13 @@ A FastAPI service in `backend/`, package `loan_agent`, in layers whose imports p
 enforced by import-linter: `platform → application → ports → domain`, with `adapters`
 implementing the ports and never importing `application` or `platform`.
 
-- `domain` holds the check (with its loan, term, ceiling and finances), option and recommendation
-  types and the errors; it imports no framework.
+- `domain` holds the check (with its loan, term, ceiling and finances), option, awaiting offer,
+  reading and recommendation types and the errors; it imports no framework.
 - `ports` are the protocols the inner layers call: the engine, the repositories, the event sink
   and bus, token verification.
 - `application` holds the agent graph (the only inner-layer module that imports `langgraph`
-  and `langchain_core`), the check tools with the guardrail, and the event sink.
+  and `langchain_core`), the check tools with the guardrail, the choice between the readings of
+  an offer described in words (`application/offer_reading.py`), and the event sink.
 - `adapters` implement the ports: the engine client over MCP, Google token verification, Postgres
   repositories, the in-memory event bus and the chat model.
 - `platform` is the HTTP API, configuration, logging, the checkpointer, the check runner and the
@@ -109,8 +113,10 @@ resumes after a restart and a failed turn leaves the conversation where it was. 
 the conversation instead of following a scripted flow, at a higher cost per conversation
 ([ADR 0003](adr/0003-model-led-agent-with-a-code-guardrail.md)). A check starts from the loan the
 person states, and the payment ceiling, the only household figure, is optional
-([ADR 0010](adr/0010-loan-first-with-an-optional-ceiling.md)). The chat model is whichever
-provider `LLM_MODEL` names, so the model changes without a code change
+([ADR 0010](adr/0010-loan-first-with-an-optional-ceiling.md)). An offer described in words is
+read in code: the model extracts its figures, the engine prices each loan they may mean, and the
+quoted payment decides between them ([ADR 0011](adr/0011-a-vague-offer-is-read-in-code.md)).
+The chat model is whichever provider `LLM_MODEL` names, so the model changes without a code change
 ([ADR 0006](adr/0006-model-provider-is-a-setting.md)). People sign in with a Google ID token that
 the agent verifies on every request and never passes on
 ([ADR 0005](adr/0005-google-id-token-sign-in.md)).
@@ -180,10 +186,16 @@ machine, and no secret store is involved: each container's own settings, secrets
 reach the instance as part of its configuration, which Docker keeps on the instance's encrypted
 disk. That disk holds the database and outlives the instance.
 
+A preview of the working tree runs beside production on the same instance
+(`deploy.sh --ec2 --preview`): a guest stack of production's, like the other repos' stacks,
+with its own CloudFront address, Compose project and database, so a change is tried on the real
+host, and production's next schema migration rehearsed on a copy of its data, before production
+runs it ([ADR 0013](adr/0013-a-preview-runs-beside-production.md)).
+
 ## Storage
 
 - **Postgres** (the `db` service, volume `db-data`) holds the agent's tables, `checks`,
-  `options`, `recommendations`, `check_events` and `deleted_event_times`, beside
+  `options`, `awaiting_offers`, `recommendations`, `check_events` and `deleted_event_times`, beside
   LangGraph's checkpoint tables. Alembic migrates the agent's tables, and the same `migrate` run
   brings the checkpoint tables to the installed library's version
   ([ADR 0004](adr/0004-one-postgres-for-records-and-checkpoints.md)). What each table holds is in

@@ -4,8 +4,14 @@
 # Docker Compose, then return once the agent answers.
 #
 #   ./scripts/deploy.sh          on this machine's Docker
-#   ./scripts/deploy.sh --ec2    on an EC2 instance deployed by the stack (created on the first
+#   ./scripts/deploy.sh --ec2    on the EC2 instance this repo's stack owns (created on the first
 #                                run, reused afterwards), behind CloudFront
+#   ./scripts/deploy.sh --ec2 --preview
+#                                the working tree beside production on the same instance: stack
+#                                loan-simulator-preview, its own CloudFront address, database and
+#                                ports (DEPLOY_PREVIEW of stack-params.sh); production's containers,
+#                                images and database are untouched, and like any guest deploy it
+#                                may point the host stack's SSH rule at this machine's address
 #   -h, --help                   show this help
 #
 # Before the agent starts, a one-shot container (the migrate service) brings the agent's Postgres
@@ -29,22 +35,31 @@
 # It creates or updates the CloudFormation stack of scripts/template-ec2.yaml (the git branch
 # selects it: loan-simulator on main, loan-simulator-fb on any other branch): one ARM instance
 # with Docker, a fixed address, and a CloudFront distribution whose https address is the only way
-# in. It then builds the images here for ARM, loads them into the instance's Docker daemon over
-# SSH, and runs Compose against that daemon. The settings files stay on this machine; each
-# container's own settings, secrets included, reach the instance as part of the container's
-# configuration, which Docker keeps on the instance's encrypted disk. The instance type is
-# t4g.small unless EC2_INSTANCE_TYPE names another; a change stops and starts the same instance.
-# Register the printed address with Google once (docs/sign-in.md).
+# in. This repo's stack is the host of the instance; the other Docker Compose repos deploy onto it
+# as guests (EC2_HOST_STACK of their stack-params.sh). It then builds the images here for ARM,
+# loads them into the instance's Docker daemon over SSH, and runs Compose against that daemon. The
+# settings files stay on this machine; each container's own settings, secrets included, reach the
+# instance as part of the container's configuration, which Docker keeps on the instance's
+# encrypted disk. The instance type is EC2_INSTANCE_TYPE of stack-params.sh; a change stops and
+# starts the same instance. Register the printed address with Google once (docs/sign-in.md).
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
 
 TARGET=local
+# Only --preview selects the preview, never a value left in the calling shell.
+unset DEPLOY_PREVIEW
 case "${1:-}" in
   -h|--help) print_help; exit 0 ;;
   --ec2)     TARGET=ec2 ;;
   "")        ;;
+  *)         print_help >&2; exit 2 ;;
+esac
+case "${2:-}" in
+  --preview) [[ "$TARGET" == ec2 && $# -eq 2 ]] || { print_help >&2; exit 2; }
+             export DEPLOY_PREVIEW=1 ;;
+  "")        [[ $# -le 1 ]] || { print_help >&2; exit 2; } ;;
   *)         print_help >&2; exit 2 ;;
 esac
 
@@ -82,21 +97,23 @@ deploy_ec2() {
   compose build
   wait_for_ec2_docker
   echo "Loading the images into the instance's Docker daemon..."
-  docker save "${EC2_IMAGES[@]}" | gzip | ssh_ec2 "$EC2_HOST_USER@$EC2_HOST" 'gunzip | docker load'
+  # shellcheck disable=SC2046  # one image name per word, none with spaces
+  docker save $(ec2_built_images) | gzip | ssh_ec2 "$EC2_HOST_USER@$EC2_HOST" 'gunzip | docker load'
 
   open_ec2_docker
   echo "Starting the database, the engine and the agent on the instance..."
   compose up -d --no-build --remove-orphans
   # A deploy leaves the previous build's layers behind; the instance's disk is small.
   docker image prune -f >/dev/null
+  local helper="./scripts/docker-helper.sh --ec2"
+  if [[ "${DEPLOY_PREVIEW:-}" == 1 ]]; then helper+=" --preview"; fi
   wait_for_http "$EC2_URL/health" \
-    || { echo "the agent did not answer on $EC2_URL/health;" \
-              "see ./scripts/docker-helper.sh --ec2 --logs" >&2
+    || { echo "the agent did not answer on $EC2_URL/health; see $helper --logs" >&2
          exit 1; }
   echo "The agent answers at $EC2_URL (health: /health, ready: /ready)."
   echo "  Register it with Google once: $EC2_URL as an authorized JavaScript origin and"
   echo "  $EC2_URL/ as an authorized redirect URI of the OAuth client (docs/sign-in.md)."
-  echo "  stop it or tail logs:  ./scripts/docker-helper.sh --ec2 --stop | --logs"
+  echo "  stop it or tail logs:  $helper --stop | --logs"
 }
 
 "deploy_$TARGET"

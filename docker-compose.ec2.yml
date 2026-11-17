@@ -1,12 +1,13 @@
 # What changes when the stack runs on the EC2 instance; scripts/deploy.sh --ec2 passes this file
 # after docker-compose.yml. The images are built on the deployer's machine for the instance's ARM
-# processor, under their own tags so the local stack's images stay as they are. The agent is
-# published on the instance's address, where the security group admits only CloudFront; the
-# engine and Postgres stay on the instance's loopback interface. The services start again after
-# the instance stops and starts.
+# processor, under their own tags so the local stack's images stay as they are. The images of a
+# preview (deploy.sh --ec2 --preview) carry EC2_IMAGE_SUFFIX in their names, so loading them
+# never retags production's. The agent is published on the instance's address, where the security
+# group admits only CloudFront; the engine and Postgres stay on the instance's loopback interface.
+# The services start again after the instance stops and starts.
 services:
   engine:
-    image: loan-engine:ec2
+    image: loan-engine${EC2_IMAGE_SUFFIX?set in stack-params.sh}:ec2
     platform: linux/arm64
     restart: unless-stopped
 
@@ -14,11 +15,11 @@ services:
     restart: unless-stopped
 
   migrate:
-    image: loan-agent:ec2
+    image: loan-agent${EC2_IMAGE_SUFFIX?set in stack-params.sh}:ec2
     platform: linux/arm64
 
   agent:
-    image: loan-agent:ec2
+    image: loan-agent${EC2_IMAGE_SUFFIX?set in stack-params.sh}:ec2
     platform: linux/arm64
     restart: unless-stopped
     # People reach the agent through CloudFront, over HTTPS that ends there, so the sign-in

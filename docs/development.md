@@ -7,7 +7,8 @@ describes what the scripts run. Each script's header comment is its full documen
 
 **Contents:** [Working copy location](#working-copy-location) · [Frontend](#frontend) ·
 [Configuration](#configuration) · [Backend tests](#backend-tests) ·
-[Deployment scripts (scripts/)](#deployment-scripts-scripts) · [Addresses](#addresses) ·
+[Deployment scripts (scripts/)](#deployment-scripts-scripts) ·
+[The preview on EC2](#the-preview-on-ec2) · [Addresses](#addresses) ·
 [Try the engine with MCP Inspector](#try-the-engine-with-mcp-inspector)
 
 ## Working copy location
@@ -84,9 +85,14 @@ Docker runs the stack; `deploy.sh` and `docker-helper.sh` stop when it is not re
   into the instance's Docker daemon over SSH and starts the stack there, and prints the
   CloudFront address to open and to register with Google
   ([Sign-in](sign-in.md#setting-up-google)). The git branch selects the stack: `main` deploys
-  `loan-simulator`, any other branch `loan-simulator-fb`; an exported `STACK_NAME` wins. The
-  instance is a t4g.small unless `EC2_INSTANCE_TYPE` names another ARM type; a change stops
-  and starts the same instance, which keeps its disk and its address.
+  `loan-simulator`, any other branch `loan-simulator-fb`; an exported `STACK_NAME` wins. This
+  repo's stack is the instance's host: the other Docker Compose repos deploy onto the same
+  instance as guests, each with its own port and CloudFront distribution
+  ([ADR 0012](adr/0012-the-instance-hosts-the-other-docker-repos.md)). The `EC2` block of
+  `stack-params.sh` names the stack, its port and the instance type, t4g.small; a change of the
+  type stops and starts the same instance, which keeps its disk and its address.
+- `deploy.sh --ec2 --preview` — runs the working tree beside production on the same instance;
+  [The preview on EC2](#the-preview-on-ec2) covers it, from the first deploy to its removal.
 - [`docker-helper.sh`](../scripts/docker-helper.sh) — `--stop [--volumes]`, `--logs [-e]` or
   `--ps` for the stack; `--volumes` also removes the stored market data and the database. With
   `--ec2` as its first argument it acts on the instance, and `--ec2 --delete-stack` deletes
@@ -98,7 +104,9 @@ Docker runs the stack; `deploy.sh` and `docker-helper.sh` stop when it is not re
   stack's database: a shell, `-c`, a SQL file, row counts and rows of every table,
   `--backup <file>` and `--restore <file>` of the whole database, and `--people` with
   `--reset <account-id>` or `--reset-all`, which delete a person's records so their next
-  sign-in is a first visit; `--ec2` first acts on the instance) and
+  sign-in is a first visit, and `--clone <from> <to>`, which copies one account's checks to
+  another with no records; `--ec2` first acts on the instance, `--ec2 --preview` on the
+  preview, and `--ec2 --preview --copy-live` copies production's database into it) and
   [`lock.sh`](../scripts/tools/lock.sh) (recompiles `mcp-server/requirements.txt` and
   `backend/requirements.txt` inside each Dockerfile's Python image; run it after editing a
   dependency list). [`tools/README.md`](../scripts/tools/README.md) lists them.
@@ -107,17 +115,63 @@ Docker runs the stack; `deploy.sh` and `docker-helper.sh` stop when it is not re
 of the settings files, Compose access, and the virtualenv setup for the engine and the agent.
 `lib/settings-guard.sh` keeps the gitignored files' values out of git, and `lib/ec2.sh` holds
 the EC2 target: the stack's deploy, the SSH connection with an EC2 Instance Connect key, and
-Compose pointed at the instance's Docker daemon.
+Compose pointed at the instance's Docker daemon. `template-ec2.yaml`, `lib/ec2.sh`,
+`lib/settings-guard.sh` and `.githooks/pre-commit` are the same files in every Docker Compose
+repo.
 
-`docker-helper.sh --ec2 --delete-stack` deletes the EC2 stack after asking for its name. The
-instance's disk stays in the account, since it holds the database; the command prints its
-volume id and the command that deletes it.
+`docker-helper.sh --ec2 --delete-stack` deletes the EC2 stack after asking for its name; it fails
+while a guest stack runs on the instance. The instance's disk stays in the account, since it
+holds the databases; the command prints its volume id and the command that deletes it.
 
 The IAM user of `aws-config.sh` needs to create and delete the stack's resources
 (CloudFormation, EC2 instances, addresses and security groups, CloudFront distributions), to
 read the public SSM parameter that names the Amazon Linux image, and
 `ec2-instance-connect:SendSSHPublicKey` for the SSH connection. No IAM user has these by
 default; an administrator has them all.
+
+## The preview on EC2
+
+The preview runs the working tree, committed or not, beside production on production's instance,
+so a change is tried on the real host before production gets it
+([ADR 0013](adr/0013-a-preview-runs-beside-production.md)). It is the guest stack
+`loan-simulator-preview`: its own CloudFront address, its own Compose project and so its own
+database, its own image names (`loan-engine-preview:ec2`, `loan-agent-preview:ec2`) and ports
+(8110 to 8112), all selected by `DEPLOY_PREVIEW` in `stack-params.sh`, which `--ec2 --preview`
+sets. Production's containers, images and database are not touched. It uses the same settings
+files as production, so the same model key and Google client.
+
+The account needs, once:
+
+- **Production's stack on the current template**, which publishes the instance's address and
+  offers four empty security groups attached to the instance: slots that name no guest. A rule
+  that admits CloudFront's servers counts as 55 of a group's 60, the size of AWS's list of their
+  addresses, so every stack's rule needs a group of its own. A guest's deploy claims a free slot
+  (`ec2_guest_slot` in `lib/ec2.sh`), keeps it on later deploys, and frees it when its stack is
+  deleted; with every slot held it stops and names the stacks holding them. A host stack
+  deployed before the slots existed is brought up to date without a production deploy by a
+  CloudFormation change set of `template-ec2.yaml` with every parameter at its previous value:
+  it adds the four groups to the running instance, which keeps its id, disk and containers.
+
+Then:
+
+1. `./scripts/deploy.sh --ec2 --preview` creates the stack on its first run (the CloudFront
+   distribution takes several minutes), builds and starts the preview, and prints its address.
+2. Register that address with Google once, as an authorized JavaScript origin and, with a
+   trailing `/`, an authorized redirect URI ([Sign-in](sign-in.md#setting-up-google)).
+3. `./scripts/tools/sql-helper.sh --ec2 --preview --copy-live`, when the preview should hold
+   production's data: after the database's name is typed, production's database is dumped
+   (read only) straight into the preview's, the preview's schema is dropped first, and the
+   preview's migration runs on the copy. The revisions it prints are production's and the one
+   after the migration, so the run rehearses production's next upgrade; a failed migration
+   leaves the copy at production's revision for inspection.
+
+`docker-helper.sh --ec2 --preview` (`--logs`, `--ps`, `--stop`) and
+`sql-helper.sh --ec2 --preview` act on the preview as they do on production.
+
+`./scripts/docker-helper.sh --ec2 --preview --delete-stack` removes the preview, after its
+stack's name is typed: its containers, database, market data and images on the instance, then its
+stack, with its port rule and CloudFront distribution. Production is not touched. Its address is
+then removed from the Google OAuth client by hand.
 
 ## Addresses
 
