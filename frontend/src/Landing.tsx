@@ -70,7 +70,9 @@ export function Landing({ pitch = false, children }: { pitch?: boolean; children
       </div>
       {pitch && (
         <footer className="landing-links">
-          <a href={DEMO_PATH} target="_blank" rel="noreferrer" title={DEMO_HINT}>
+          {/* The demo is this site's own page: its tab keeps the tie to this one, so the demo's
+              link into the simulator can return here. */}
+          <a href={DEMO_PATH} target="_blank" rel="opener" title={DEMO_HINT}>
             {DEMO_LINK}
           </a>
           <a href={whatsAppInviteUrl()} target="_blank" rel="noreferrer">

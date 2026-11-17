@@ -380,18 +380,25 @@ export function termLine(termMonths: number, firstPayment: string): string {
 
 const LONGEST_TERM = `גם ב-${termText(TERM_MAX_MONTHS)}, התקופה הארוכה ביותר שהסימולטור מחשב,`
 const CHANGE_TERM_OR_CEILING = 'אפשר לשנות כאן את מספר החודשים, או לכתוב החזר חודשי מרבי אחר.'
+const SHORTEN_TERM_OR_NAME_CEILING = 'אפשר לקצר כאן את מספר החודשים, או לכתוב החזר חודשי מרבי.'
 const CHANGE_PARAMETERS = 'אפשר לשנות כאן את הפרמטרים.'
 
-/** The term card's line under its title: the assumption the term was worked out from. */
-export function termBasisLine(basis: TermBasis): string {
+/**
+ * The term card's line under its title: what the term was worked out from. The first payment the
+ * simulator aims at before the person named one is its own starting point, so a loan that cannot
+ * meet it even at the longest term is told what that term gives, the lowest payment the loan
+ * allows, with no word of an amount nobody chose.
+ */
+export function termBasisLine(basis: TermBasis, firstPayment: string): string {
   if (basis.kind === 'typed') return `זה החישוב למספר החודשים שבחרת. ${CHANGE_PARAMETERS}`
   const amount = formatShekels(basis.amount)
   if (basis.kind === 'first_payment_target') {
     return basis.fits
       ? `בהנחה ראשונית שההחזר החודשי יהיה עד כ-${amount}, זה מספר החודשים המתאים, לפי` +
           ` הריבית הממוצעת בבנקים. ${CHANGE_TERM_OR_CEILING}`
-      : `${LONGEST_TERM} ההחזר הראשון לפי הריבית הממוצעת בבנקים עולה על כ-${amount}, ההחזר` +
-          ` שהנחנו בתחילה. ${CHANGE_TERM_OR_CEILING}`
+      : `${termText(TERM_MAX_MONTHS)} היא התקופה הארוכה ביותר שהסימולטור מחשב. בתקופה כזו` +
+          ` ההחזר החודשי הנמוך ביותר הוא כ-${formatShekels(firstPayment)} בהתחלה, לפי הריבית` +
+          ` הממוצעת בבנקים. ${SHORTEN_TERM_OR_NAME_CEILING}`
   }
   return basis.fits
     ? `לפי ההחזר החודשי המרבי שלך, ${amount}, זה מספר החודשים המתאים, גם אם הריבית תעלה כמו` +
@@ -422,6 +429,10 @@ export function questionHint(question: Question): string | null {
   if (question.kind === 'term' || question.kind === 'offer' || question.field === null) return null
   return FIELD_COPY[question.field].hint
 }
+
+/** Under the reply that presents a recommendation, on a screen that shows one pane at a time: the
+ * way to the pane with every track, named by its tab. */
+export const TO_CARD = 'לפירוט כל המסלולים: מעבר ללשונית "המלצה"'
 
 export const OFFER_FORM_TITLE = 'פרטי ההצעה'
 export const OFFER_FORM_INTRO =

@@ -118,6 +118,20 @@ export function isSettled(entry: ChatEntry): boolean {
   return !isMessage(entry) || entry.complete
 }
 
+/**
+ * The reply that presented the check's recommendation: the first finished reply after it, before
+ * the person wrote again. Null when the check has no recommendation, or its turn ended with no
+ * reply.
+ */
+export function recommendationReplyId(state: CheckState): string | null {
+  if (state.recommendationAt === null) return null
+  for (const entry of state.messages.slice(state.recommendationAt)) {
+    if (entry.role === 'user') return null
+    if (entry.role === 'assistant') return entry.complete ? entry.id : null
+  }
+  return null
+}
+
 export interface CheckState {
   /** In arrival order; a user message's id is `u-${seq}` and a question's is `q-${seq}`. */
   messages: ChatEntry[]
@@ -127,6 +141,9 @@ export interface CheckState {
    * when its lender does not lend the check's loan amount. */
   awaiting: Map<string, AwaitingOffer>
   recommendation: RecommendationPresented | null
+  /** How many settled entries the conversation held when the recommendation was presented, so
+   * the reply that followed it can be found; null while the check has no recommendation. */
+  recommendationAt: number | null
   /** Ids of options saved after the latest recommendation, excluding the ones it names. */
   optionsSinceRecommendation: string[]
   loan: LoanRequest | null
@@ -150,6 +167,7 @@ export const initialState: CheckState = {
   options: new Map(),
   awaiting: new Map(),
   recommendation: null,
+  recommendationAt: null,
   optionsSinceRecommendation: [],
   loan: null,
   termMonths: null,
@@ -263,6 +281,7 @@ function apply(state: CheckState, event: CheckEvent): CheckState {
         ...state,
         options,
         recommendation: recommendation_removed ? null : state.recommendation,
+        recommendationAt: recommendation_removed ? null : state.recommendationAt,
         optionsSinceRecommendation: state.optionsSinceRecommendation.filter(
           (id) => !removed.includes(id),
         ),
@@ -272,6 +291,7 @@ function apply(state: CheckState, event: CheckEvent): CheckState {
       return {
         ...state,
         recommendation: event.data,
+        recommendationAt: state.messages.filter(isSettled).length,
         optionsSinceRecommendation: [],
       }
     case 'turn.status': {

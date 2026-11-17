@@ -27,7 +27,7 @@ import {
 import { restoreScrollIntoView, stubScrollIntoView } from '../test/scrollIntoView.ts'
 import type { AwaitingFocus } from './Chat.tsx'
 import { CheckPage } from './CheckPage.tsx'
-import { CONTINUE_TO_ANOTHER_OFFER } from './copy.ts'
+import { CONTINUE_TO_ANOTHER_OFFER, TO_CARD } from './copy.ts'
 import { wholeText } from '../test/wholeText.ts'
 
 const MESSAGES = '/api/checks/c1/messages'
@@ -117,6 +117,7 @@ function renderPage(
   focusAwaiting: AwaitingFocus | null = null,
   showFinances = false,
   onTermCardLive = vi.fn(),
+  onShowCard = vi.fn(),
 ) {
   render(
     <CheckPage
@@ -130,9 +131,10 @@ function renderPage(
       focusAwaiting={focusAwaiting}
       showFinances={showFinances}
       onTermCardLive={onTermCardLive}
+      onShowCard={onShowCard}
     />,
   )
-  return { onChecksChanged, onClone, onTermCardLive }
+  return { onChecksChanged, onClone, onTermCardLive, onShowCard }
 }
 
 /** The page with its finances line asked for, as the checks list's finances link does. */
@@ -181,6 +183,16 @@ test('replaying the reference events fills the panes', () => {
   expect(page.querySelector('.pane-chat')).toHaveTextContent('הנה ההמלצה')
   expect(screen.getByText(wholeText(REFERENCE_DECISION))).toBeInTheDocument()
   expect(screen.getByText('מועדפת')).toBeInTheDocument()
+})
+
+test('the reply that presents the recommendation leads to the recommendation pane', async () => {
+  const { onShowCard } = renderPage()
+  emit(userMessage(1, 'אפשר לראות דוגמאות?'), turnStatus(2, 'running'), withSeq(optionPrime36, 3))
+  expect(screen.queryByRole('button', { name: TO_CARD })).toBeNull()
+
+  emit(withSeq(recommendationPrime, 4), assistantMessage(5, 'a1', 'הנה ההמלצה'), turnStatus(6, 'idle'))
+  await userEvent.setup().click(screen.getByRole('button', { name: TO_CARD }))
+  expect(onShowCard).toHaveBeenCalledTimes(1)
 })
 
 test('sending posts the text to the check and clears the input', async () => {

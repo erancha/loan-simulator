@@ -293,6 +293,7 @@ export function Shell({ user, onSignOut }: Props) {
             focusAwaiting={focusAwaiting}
             showFinances={showFinances}
             onTermCardLive={setTermCardLive}
+            onShowCard={() => setPane('card')}
           />
         </main>
       )}

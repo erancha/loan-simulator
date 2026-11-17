@@ -318,7 +318,13 @@ into the page, lists the check with the loan and term the replay has set so far,
 recommendation compares options, lists a recorded clone's source once the replay passes the clone
 and streams its whole history, lists the offers still awaiting their lender, answers the opening,
 term confirmation, skip and reading routes, refuses a source that ends at an event the recording
-lacks, and refuses a request the page is not known to make.
+lacks, refuses a read the page is not known to make, reports every action of the visitor as
+unavailable, leaves an action it has no answer for unsettled, and reports the replay's end.
+`demo/DemoBanner.test.tsx` proves the notice and its link, that the link closes the demo's tab only
+when the tab it was opened from still shows the simulator, and that the new-check button is held
+until the replay ends; `demo/holdButtons.test.tsx` covers the hold itself, and
+`demo/length.test.ts` holds the minutes the landing page's demo link promises to the recording's
+replay length.
 
 **By hand.** jsdom has no layout, so the three columns and the tabs are checked in a browser after
 `./scripts/deploy.sh`, at laptop and at phone width.

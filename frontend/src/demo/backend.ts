@@ -45,6 +45,9 @@ export interface Entry {
 /** Shows an entry in its box; the returned call empties the box again. */
 export type ShowEntry = (entry: Entry) => () => void
 
+/** Fired on window when the visitor does something only a server could carry out. */
+export const DEMO_UNAVAILABLE_EVENT = 'ls:demo-unavailable'
+
 const DEMO_CHECK_ID = 'demo'
 // The check's POST routes that start a turn; the demo accepts each and answers nothing.
 const TURN_ROUTES = [
@@ -186,8 +189,10 @@ function entryOf(text: string, live: Question | null): Entry | null {
  * - Before a message the person typed, showEntry puts the typed value in its box for a moment.
  * - The checks list answers what the events played so far imply. A recorded clone's source joins
  *   it once the replay passes the clone, whole, with its own stream.
- * - A message sent from the page is accepted and answered by nothing; a request the page is not
- *   known to make is refused, so a new call surfaces instead of hanging the demo.
+ * - A message sent from the page is accepted and answered by nothing. Every action of the visitor,
+ *   accepted or not, fires DEMO_UNAVAILABLE_EVENT; a read the page is not known to make is
+ *   refused, so a new call surfaces instead of hanging the demo.
+ * - finished resolves when the timeline has played its last event.
  */
 export function createDemoBackend(recording: Recording, pace: Pace, showEntry: ShowEntry) {
   const played: StoredEvent[] = []
@@ -223,7 +228,7 @@ export function createDemoBackend(recording: Recording, pace: Pace, showEntry: S
       broadcast(event)
     }
   }
-  void play()
+  const finished = play()
 
   const source = sourceEvents(recording)
 
@@ -251,12 +256,20 @@ export function createDemoBackend(recording: Recording, pace: Pace, showEntry: S
   // A reading confirmed, or the lender's answer on the amount, on any awaiting offer's card.
   const READING = new RegExp(`^PUT /api/checks/${DEMO_CHECK_ID}/awaiting-offers/[^/]+(/amount)?$`)
 
+  /**
+   * The page only reads on its own, so every request but a GET is the visitor's action, which no
+   * server is there to carry out: the demo says so. An action it has no answer for never settles,
+   * so the page shows neither a result nor a failure of its own beside the notice.
+   */
   async function fetch(path: string, init?: RequestInit): Promise<Response> {
-    const key = `${init?.method ?? 'GET'} ${path}`
+    const method = init?.method ?? 'GET'
+    const key = `${method} ${path}`
+    if (method !== 'GET') window.dispatchEvent(new Event(DEMO_UNAVAILABLE_EVENT))
     if (READING.test(key)) return new Response(null, { status: 204 })
     const route = routes[key]
-    if (route === undefined) throw new Error(`the demo serves no ${key}`)
-    return route()
+    if (route !== undefined) return route()
+    if (method === 'GET') throw new Error(`the demo serves no ${key}`)
+    return new Promise<Response>(() => {})
   }
 
   /** The check's event stream as the page's useCheckEvents hook reads it. */
@@ -311,5 +324,5 @@ export function createDemoBackend(recording: Recording, pace: Pace, showEntry: S
     }
   }
 
-  return { fetch, EventSource: DemoEventSource }
+  return { fetch, EventSource: DemoEventSource, finished }
 }

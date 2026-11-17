@@ -22,8 +22,9 @@ fragment ([sign-in.md](../sign-in.md)). Under the name a line gives the build: i
 version, which is the release tag the checkout descends from (`vMAJOR.MINOR`) and the commits since
 it, and its last commit's date. `scripts/lib/build-info.sh` reads both from git and the image
 build receives them as build arguments, since its context has no `.git`. Under the card, one
-line of links opens the demo, whose tooltip says it is a recorded check best seen on a computer; a
-WhatsApp invite carrying the page's own address; and the GitHub source.
+line of links opens the demo, whose label states its length in minutes and whose tooltip says it
+is a recorded check best seen on a computer; a WhatsApp invite carrying the page's own address; and
+the GitHub source.
 
 A signed-in person sees a header whose account menu (`shell/AccountMenu.tsx`) names the account and
 holds sign-out, and one open check. The open check is kept in the URL hash as `#check=<id>`; a hash
@@ -39,6 +40,14 @@ demo rebuilds the source from those shared events and its clone note: once the r
 clone, the list shows both, and the source opens on its whole conversation.
 `sql-helper.sh --demo-check <id>` writes the recording from the stack's database.
 
+A visitor may click anything in the demo, and no server is there to carry an action out. Every
+request but a read counts as the visitor's action: the demo's banner (`demo/DemoBanner.tsx`) then
+shows a notice that the action is unavailable in the demo, with a link into the simulator, and an
+action the demo has no answer for never settles, so the page shows no failure of its own. The link
+closes the demo's tab when the tab it was opened from still shows the simulator, which returns the
+visitor there; otherwise it loads the simulator in the demo's tab. Until the replay ends, the
+button that opens a new check is disabled, so a visitor is not led out of the recording midway.
+
 From 900px wide the open check is three columns: the side column (the checks list), the
 conversation, and the recommendation card. A check that holds a payment ceiling, stated or derived,
 or a finances figure (its income or fixed expenses; the list's `has_finances` flag) has a "פרטים
@@ -53,7 +62,9 @@ title fits its first line and its term its second. The card starts at 470px; dra
 between it and the conversation, or the arrow keys on that border, narrows it to 380px or widens it
 up to what leaves the conversation 360px (`check/CardResizer.tsx`), and the browser keeps the width.
 The conversation takes the rest. Below 900px a tab bar ("בדיקות", "שיחה", "המלצה") shows one of the
-three at a time (`frontend/src/styles/global.css`).
+three at a time (`frontend/src/styles/global.css`). There, the reply that presents the check's
+recommendation carries a link under its bubble that switches to the "המלצה" pane, where every
+track is listed; the reply is the first finished one after the recommendation, in its own turn.
 
 ## Data flow
 
@@ -154,8 +165,11 @@ shows only the text.
 The term card is a question of its own kind, a first calculation the person tunes: one line,
 "חישוב ראשוני", with the term in months and its first payment; a line on the assumption the term
 was worked out from, which the question's `basis` carries: the assumed first payment of 1,000 ₪
-when the check has no ceiling, or the check's ceiling, each with the amount, and a plain
-statement when even 84 months does not keep the payment under it, or the term the person typed.
+when the check has no ceiling, or the check's ceiling, each with the amount, or the term the
+person typed. When even 84 months does not keep the payment under the check's ceiling, the line
+says so plainly. When the person named no ceiling and 84 months cannot meet the assumed payment,
+the line names no assumed amount, since the person never chose one: it states that 84 months is
+the longest term and gives the lowest payment the loan allows, the card's first payment.
 A card stored before the basis was sent shows the title alone. Then one form with two boxes and
 one "אישור" button. The term box starts at the proposed term; the ceiling box starts at the
 check's payment ceiling, or empty when it has none, and may stay empty. A

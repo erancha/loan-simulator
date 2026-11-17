@@ -55,30 +55,36 @@ test('a question is labelled from the field copy, the term card or the model', (
 })
 
 test('the term card states the assumption its term was worked out from', () => {
-  expect(termBasisLine({ kind: 'first_payment_target', amount: '1000', fits: true })).toBe(
+  expect(termBasisLine({ kind: 'first_payment_target', amount: '1000', fits: true }, '992.9')).toBe(
     'בהנחה ראשונית שההחזר החודשי יהיה עד כ-1,000 ₪, זה מספר החודשים המתאים, לפי הריבית' +
       ' הממוצעת בבנקים. אפשר לשנות כאן את מספר החודשים, או לכתוב החזר חודשי מרבי אחר.',
   )
-  expect(termBasisLine({ kind: 'ceiling', amount: '1750.00', fits: true })).toBe(
+  expect(termBasisLine({ kind: 'ceiling', amount: '1750.00', fits: true }, '1096.4')).toBe(
     'לפי ההחזר החודשי המרבי שלך, 1,750 ₪, זה מספר החודשים המתאים, גם אם הריבית תעלה כמו בעבר.' +
       ' אפשר לשנות כאן את הפרמטרים.',
   )
 })
 
 test('a term that fits nothing is not called a fit', () => {
-  const assumed = termBasisLine({ kind: 'first_payment_target', amount: '1000', fits: false })
-  const stated = termBasisLine({ kind: 'ceiling', amount: '700', fits: false })
-  for (const line of [assumed, stated]) {
-    expect(line).toContain('גם ב-84 חודשים')
-    expect(line).not.toContain('המתאים')
-    expect(line).toContain('אפשר לשנות כאן')
-  }
-  expect(assumed).toContain('1,000 ₪')
+  const stated = termBasisLine({ kind: 'ceiling', amount: '700', fits: false }, '1553.64')
+  expect(stated).toContain('גם ב-84 חודשים')
+  expect(stated).not.toContain('המתאים')
+  expect(stated).toContain('אפשר לשנות כאן')
   expect(stated).toContain('700 ₪')
 })
 
+test('with no payment from the person, the longest term states the lowest payment the loan allows', () => {
+  // The first payment the simulator aims at is its own starting point, never the person's, so
+  // the card that cannot meet it says what the longest term gives and names no assumed amount.
+  expect(termBasisLine({ kind: 'first_payment_target', amount: '1000', fits: false }, '1553.64')).toBe(
+    '84 חודשים היא התקופה הארוכה ביותר שהסימולטור מחשב. בתקופה כזו ההחזר החודשי הנמוך ביותר הוא' +
+      ' כ-1,554 ₪ בהתחלה, לפי הריבית הממוצעת בבנקים. אפשר לקצר כאן את מספר החודשים, או לכתוב החזר' +
+      ' חודשי מרבי.',
+  )
+})
+
 test('a term the person typed is said to be theirs', () => {
-  expect(termBasisLine({ kind: 'typed' })).toContain('שבחרת')
+  expect(termBasisLine({ kind: 'typed' }, '812.4')).toContain('שבחרת')
 })
 
 test('a skipped question names its label', () => {

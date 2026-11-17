@@ -104,8 +104,8 @@ body {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 8px 24px;
-  margin-block-start: 16px;
+  gap: 14px 24px;
+  margin-block-start: 28px;
   font-size: 0.9rem;
 }
 
@@ -593,6 +593,15 @@ fieldset.field.changed {
   align-self: flex-start;
 }
 
+/* The form's two buttons are equally wide, each as wide as the wider label: skipping it is as
+   expected an answer as sending it, since many people have no offer yet. */
+.offer-form .question-actions {
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  align-self: flex-start;
+}
+
 .readings-card,
 .offer-identified {
   white-space: normal;
@@ -770,17 +779,34 @@ fieldset.field.changed {
   resize: vertical;
 }
 
+/* The send button and a card's buttons share one shape. The send button and a card's primary
+   one are filled; every other button of a card is outlined. */
 .chat-input button,
-button.primary {
+button.primary,
+.question-actions button {
   padding: 8px 16px;
-  border: 0;
   border-radius: 8px;
-  background: var(--accent);
-  color: #ffffff;
   font: inherit;
   cursor: pointer;
 }
 
+.chat-input button,
+button.primary {
+  border: 0;
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.question-actions button:not(.primary) {
+  border: 1px solid var(--mute);
+  background: var(--panel);
+  color: var(--ink);
+}
+
+/* A button that cannot be pressed looks it: the send button while a turn runs, a card's buttons
+   while its answer is sent, the new-check button while the demo replays. */
+button.primary:disabled,
+.question-actions button:disabled,
 .chat-input button:disabled {
   opacity: 0.5;
   cursor: default;
@@ -1198,6 +1224,15 @@ button.primary {
   color: var(--accent);
 }
 
+/* The link from a recommendation's reply to its pane, under the bubble. A wide screen shows the
+   pane beside the chat, so the link is hidden there. */
+.to-card {
+  display: block;
+  margin-block-start: 6px;
+  color: var(--accent);
+  font-size: 0.9rem;
+}
+
 .finances-fields {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 220px));
@@ -1426,7 +1461,8 @@ button.primary {
 }
 
 @media (min-width: 900px) {
-  .tab-bar {
+  .tab-bar,
+  .to-card {
     display: none;
   }
 
@@ -1531,6 +1567,31 @@ button.primary {
 
 .demo-banner a {
   color: inherit;
+}
+
+/* The demo's notice floats near the page's foot, above the chat box. */
+.demo-notice {
+  position: fixed;
+  bottom: 96px;
+  inset-inline: 16px;
+  z-index: 20;
+  width: fit-content;
+  max-width: calc(100% - 32px);
+  margin: 0 auto;
+  padding: 8px 14px;
+  background: var(--ink);
+  color: var(--panel);
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.demo-notice a,
+.demo-notice button {
+  color: inherit;
+}
+
+.demo-notice button {
+  margin-inline-start: 12px;
 }
 
 /* A narrow phone's title leaves the banner little room before the menu button. */

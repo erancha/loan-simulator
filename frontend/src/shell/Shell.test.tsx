@@ -3,18 +3,23 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import type { CheckSummary, User } from '../api/types.ts'
 import { FakeEventSource } from '../test/fakeEventSource.ts'
-import { checkTitle } from '../check/copy.ts'
+import { checkTitle, TO_CARD } from '../check/copy.ts'
 import {
+  assistantMessage,
   awaitingAvis,
   financesUpdated,
   loan,
   loanSet,
   offerAwaiting,
+  optionPrime36,
   questionAsked,
+  recommendationPrime,
   turnStatus,
   userMessage,
+  withSeq,
 } from '../test/fixtures.ts'
 import { restoreScrollIntoView, stubScrollIntoView } from '../test/scrollIntoView.ts'
+import { TABS } from './copy.ts'
 import { Shell } from './Shell.tsx'
 import { wholeText } from '../test/wholeText.ts'
 
@@ -246,6 +251,37 @@ test('a hash naming an unknown check falls back to the newest and rewrites the h
 
   await waitFor(() => expect(openedStreams()).toEqual(['/api/checks/b/events']))
   expect(window.location.hash).toBe('#check=b')
+})
+
+test('the link under the reply that presents a recommendation shows the recommendation pane', async () => {
+  stubApi([[summary('a', '2026-01-01T00:00:00Z')]])
+  const user = userEvent.setup()
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  await waitFor(() => expect(openedStreams()).toEqual(['/api/checks/a/events']))
+  const stream = FakeEventSource.last()
+  const events = [
+    userMessage(1, 'אפשר לראות דוגמאות?'),
+    withSeq(optionPrime36, 2),
+    withSeq(recommendationPrime, 3),
+    assistantMessage(4, 'a1', 'הנה ההמלצה'),
+    turnStatus(5, 'idle'),
+  ]
+  act(() => {
+    for (const event of events) {
+      stream.emit(event.type, JSON.stringify(event.data), String(event.seq))
+    }
+  })
+  const page = document.querySelector('.check-page')!
+  expect(page).toHaveAttribute('data-active-pane', 'chat')
+
+  await user.click(screen.getByRole('button', { name: TO_CARD }))
+
+  expect(page).toHaveAttribute('data-active-pane', 'card')
+  expect(screen.getByRole('tab', { name: 'המלצה' })).toHaveAttribute('aria-selected', 'true')
+})
+
+test('the link under a recommendation names the tab it leads to', () => {
+  expect(TO_CARD).toContain(`"${TABS.find((tab) => tab.pane === 'card')!.label}"`)
 })
 
 test('the tab bar switches the active pane', async () => {

@@ -70,7 +70,7 @@ test('signed out shows our own Google button and the product name', async () => 
   expect(steps.map((step) => step.querySelector('strong')?.textContent)).toEqual([
     'מתארים את ההלוואה המבוקשת',
     'מזינים את ההצעות שקיבלתם',
-    'רואים מה כל הצעה עולה באמת',
+    'רואים את המחיר האמיתי של כל הצעה',
   ])
   expect(steps[0]).toHaveTextContent(/^\d*מתארים את ההלוואה המבוקשת: מטרה, סכום והחזר חודשי מרבי\.$/)
   expect(steps.map((step) => step.textContent).join(' ')).not.toMatch(/הכנסה|הוצאות/)
@@ -222,8 +222,11 @@ test('signed out links to the demo, the WhatsApp invite and the source', async (
   render(<App />)
   await screen.findByRole('button', { name: SIGN_IN })
 
-  expect(screen.getByRole('link', { name: 'הדגמה' })).toHaveAttribute('href', '/demo.html')
-  expect(screen.getByRole('link', { name: 'הדגמה' })).toHaveAttribute(
+  const demo = screen.getByRole('link', { name: 'הדגמה (2 דקות)' })
+  expect(demo).toHaveAttribute('href', '/demo.html')
+  // The demo's tab keeps its tie to this one, so its link into the simulator can return here.
+  expect(demo).toHaveAttribute('rel', 'opener')
+  expect(demo).toHaveAttribute(
     'title',
     'שיחה מוקלטת, מהשאלה הראשונה ועד ההמלצה; מומלץ לראות במסך מחשב',
   )

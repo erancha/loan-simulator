@@ -38,6 +38,7 @@ import {
   isArchived,
   liveQuestion,
   quotedBelowLoan,
+  recommendationReplyId,
   reduce,
 } from './events.ts'
 
@@ -106,6 +107,55 @@ test('a new recommendation clears optionsSinceRecommendation', () => {
     withSeq(recommendationPrime, 20),
   ])
   expect(state.optionsSinceRecommendation).toEqual([])
+})
+
+test('the reply that presents a recommendation is the first one after it, in its turn', () => {
+  const presented: CheckEvent[] = [
+    userMessage(1, 'אפשר לראות דוגמאות?'),
+    turnStatus(2, 'running'),
+    withSeq(optionPrime36, 3),
+    withSeq(recommendationPrime, 4),
+  ]
+  expect(recommendationReplyId(play(presented))).toBeNull()
+  const draft: CheckEvent = {
+    type: 'message.delta',
+    data: { message_id: 'm1', text: 'ההמ' },
+    seq: null,
+  }
+  expect(recommendationReplyId(play([...presented, draft]))).toBeNull()
+
+  const replied = [...presented, assistantMessage(5, 'm1', 'ההמלצה שלי'), turnStatus(6, 'idle')]
+  expect(recommendationReplyId(play(replied))).toBe('m1')
+  const later = [
+    ...replied,
+    userMessage(7, 'מהי ריבית הפריים?'),
+    turnStatus(8, 'running'),
+    assistantMessage(9, 'm2', 'ריבית הפריים היא 4.75%'),
+  ]
+  expect(recommendationReplyId(play(later))).toBe('m1')
+})
+
+test('a recommendation whose turn ended with no reply has no presenting reply', () => {
+  const state = play([
+    userMessage(1, 'אפשר לראות דוגמאות?'),
+    turnStatus(2, 'running'),
+    withSeq(optionPrime36, 3),
+    withSeq(recommendationPrime, 4),
+    turnStatus(5, 'idle'),
+    userMessage(6, 'מהי ריבית הפריים?'),
+    assistantMessage(7, 'm2', 'ריבית הפריים היא 4.75%'),
+  ])
+  expect(recommendationReplyId(state)).toBeNull()
+})
+
+test('a removed recommendation has no presenting reply', () => {
+  const state = play([
+    withSeq(optionPrime36, 1),
+    withSeq(recommendationPrime, 2),
+    assistantMessage(3, 'm1', 'ההמלצה שלי'),
+    examplesRemoved(4, ['prime-36'], true),
+  ])
+  expect(recommendationReplyId(state)).toBeNull()
 })
 
 test('a real offer removes the examples and the recommendation that named one', () => {

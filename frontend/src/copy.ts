@@ -15,7 +15,7 @@ export const LANDING_STEPS = [
   { title: 'מתארים את ההלוואה המבוקשת', text: 'מטרה, סכום והחזר חודשי מרבי.' },
   { title: 'מזינים את ההצעות שקיבלתם', text: 'בטופס, או במילים שלכם, כמו שהגוף המלווה מסר.' },
   {
-    title: 'רואים מה כל הצעה עולה באמת',
+    title: 'רואים את המחיר האמיתי של כל הצעה',
     text: 'כמה ריבית תשלמו, איך היא ביחס לממוצע בבנקים, ואיזו הצעה זולה יותר.',
   },
 ]
@@ -37,12 +37,22 @@ export const LANDING_DETAILS = [
 export const versionLine = (version: string, commitDate: string) =>
   `גירסה ${version}, ${commitDate}`
 
-export const DEMO_LINK = 'הדגמה'
+/** How long the recorded check on demo.html replays, to the nearest minute; a test holds it to
+ * the recording. */
+export const DEMO_MINUTES = 2
+/** The landing page's link to the demo, with its length, so a visitor knows what a click costs;
+ * the wording suits two minutes or more. */
+export const DEMO_LINK = `הדגמה (${DEMO_MINUTES} דקות)`
 /** The demo link's tooltip: the desktop shows the chat and the card side by side. */
 export const DEMO_HINT = 'שיחה מוקלטת, מהשאלה הראשונה ועד ההמלצה; מומלץ לראות במסך מחשב'
 /** The banner over the replayed check on demo.html. */
 export const DEMO_BANNER = 'הדגמה מוקלטת'
 export const DEMO_RESTART = 'מההתחלה'
+/** The notice on demo.html when the visitor's action needs a server: the sentence, then its link
+ * into the simulator, which ends it. */
+export const DEMO_UNAVAILABLE = 'הפעולה הזאת לא זמינה בהדגמה. כדי לנסות בעצמך,'
+export const DEMO_ENTER = 'נכנסים לסימולטור'
+export const DEMO_NOTICE_CLOSE = 'סגירת ההודעה'
 export const INVITE_LINK = 'הזמנת חברים ב-WhatsApp'
 /** The invite message, before the page's own address, which closes it on a line of its own. */
 export const INVITE_MESSAGE = [

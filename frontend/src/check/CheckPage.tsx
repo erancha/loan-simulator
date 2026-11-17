@@ -36,7 +36,7 @@ import { termConfirmation, typedTerm } from './QuestionBubble.tsx'
 import { isRefusal } from './rejection.ts'
 import type { Answer } from './QuestionBubble.tsx'
 import { RecommendationCard } from './RecommendationCard.tsx'
-import { holdsOption, isArchived, liveQuestion } from './events.ts'
+import { holdsOption, isArchived, liveQuestion, recommendationReplyId } from './events.ts'
 import type { CheckState } from './events.ts'
 import type { AwaitingOffer, CheckSummary, Reading } from '../api/types.ts'
 import { isMarketSample, isOfferSample } from './serverSamples.ts'
@@ -103,6 +103,8 @@ interface Props {
   showFinances: boolean
   /** Told whenever the term card starts or stops taking an answer. */
   onTermCardLive: (live: boolean) => void
+  /** Shows the recommendation's pane; the reply that presents a recommendation links to it. */
+  onShowCard: () => void
 }
 
 /**
@@ -123,6 +125,7 @@ export function CheckPage({
   focusAwaiting,
   showFinances,
   onTermCardLive,
+  onShowCard,
 }: Props) {
   const { state } = useCheckEvents(checkId)
   const [notice, setNotice] = useState<string | null>(null)
@@ -296,6 +299,8 @@ export function CheckPage({
             onAnswerAmount={answerOfferAmount}
             loanAmount={state.loan === null ? null : state.loan.amount}
             onContinueOffers={continueOffers}
+            cardReplyId={recommendationReplyId(state)}
+            onShowCard={onShowCard}
             opening={fresh ? <OpeningCard onSubmit={submitOpening} /> : null}
             offersOpen={offersOpen}
             samplesOffered={offersOpen && !holdsOption(state)}

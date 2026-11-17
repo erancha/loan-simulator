@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { Chat } from './Chat.tsx'
-import { MARKET_SAMPLE } from './copy.ts'
+import { MARKET_SAMPLE, TO_CARD } from './copy.ts'
 import { awaitingAvis, checkArchived, cpiChart, identifiedMax } from '../test/fixtures.ts'
 import { restoreScrollIntoView, stubScrollIntoView } from '../test/scrollIntoView.ts'
 import type { ChatEntry, ChatMessage, CheckState, QuestionEntry } from './events.ts'
@@ -30,6 +30,8 @@ const noQuestion = {
   offersOpen: false,
   samplesOffered: false,
   focusAwaiting: null,
+  cardReplyId: null,
+  onShowCard: vi.fn(),
 }
 
 interface Options {
@@ -75,6 +77,17 @@ test('user and assistant bubbles sit on opposite sides', () => {
   expect(screen.getByText('בשמחה, כמה הוא עולה?', { selector: '.bubble' })).toHaveClass(
     'bubble-assistant',
   )
+})
+
+test('the reply that presents the recommendation links to the recommendation pane', async () => {
+  const onShowCard = vi.fn()
+  const props = { ...noQuestion, turn: 'idle' as const, failure: null, notice: null, onSend: vi.fn() }
+  const { rerender } = render(<Chat {...props} messages={exchange} onShowCard={onShowCard} />)
+  expect(screen.queryByRole('button', { name: TO_CARD })).toBeNull()
+
+  rerender(<Chat {...props} messages={exchange} cardReplyId="a1" onShowCard={onShowCard} />)
+  await userEvent.setup().click(screen.getByRole('button', { name: TO_CARD }))
+  expect(onShowCard).toHaveBeenCalledTimes(1)
 })
 
 test('a running turn shows the thinking bubble until the reply streams', () => {

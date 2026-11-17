@@ -19,7 +19,7 @@ import {
   userMessage,
   withSeq,
 } from '../test/fixtures.ts'
-import { createDemoBackend } from './backend.ts'
+import { createDemoBackend, DEMO_UNAVAILABLE_EVENT } from './backend.ts'
 import type { Entry, Recording } from './backend.ts'
 import { wholeText } from '../test/wholeText.ts'
 
@@ -54,8 +54,10 @@ afterEach(() => {
   history.replaceState(null, '', '/')
 })
 
-test('the demo signs in and replays the recorded check into the page', async () => {
+test('the demo signs in and replays the recorded check into the page, which asks for no action', async () => {
   installDemo()
+  const unavailable = vi.fn()
+  window.addEventListener(DEMO_UNAVAILABLE_EVENT, unavailable)
   render(<App />)
 
   // The chat also announces the reply in a hidden live region; the bubble is the one shown. The
@@ -65,6 +67,8 @@ test('the demo signs in and replays the recorded check into the page', async () 
   expect(screen.getByText('אני רוצה לקנות רכב ב-55,000 ₪', shown)).toBeInTheDocument()
   expect(screen.getByText(wholeText(REFERENCE_DECISION))).toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'תפריט חשבון' })).toBeInTheDocument()
+  window.removeEventListener(DEMO_UNAVAILABLE_EVENT, unavailable)
+  expect(unavailable).not.toHaveBeenCalled()
 })
 
 test('the demo lists the check with the loan and term the replay has set so far', async () => {
@@ -149,6 +153,50 @@ test('the demo lists the offers still awaiting their lender, each in its first p
       { id: 'a-3', lender: 'בנק', monthly_payment: null },
     ])
   })
+})
+
+test('the demo reports the end of its replay once every recorded event was played', async () => {
+  const backend = createDemoBackend(recording, PACE, noEntry)
+  await backend.finished
+  const [summary] = await (await backend.fetch('/api/checks')).json()
+  expect(summary.recommendation).toMatchObject({ preferred_option_id: 'prime-36' })
+})
+
+/** Counts the times the demo says an action is unavailable while the given calls run. */
+async function unavailableCount(run: () => Promise<void>): Promise<number> {
+  const heard = vi.fn()
+  window.addEventListener(DEMO_UNAVAILABLE_EVENT, heard)
+  try {
+    await run()
+  } finally {
+    window.removeEventListener(DEMO_UNAVAILABLE_EVENT, heard)
+  }
+  return heard.mock.calls.length
+}
+
+test('an action the demo has no answer for says so and never settles, so the page shows no failure', async () => {
+  const backend = createDemoBackend(recording, PACE, noEntry)
+  const settled = vi.fn()
+  const count = await unavailableCount(async () => {
+    void backend.fetch('/api/checks', { method: 'POST' }).then(settled, settled)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+  expect(count).toBe(1)
+  expect(settled).not.toHaveBeenCalled()
+})
+
+test('an action the demo accepts says it is unavailable too; reading the page says nothing', async () => {
+  const backend = createDemoBackend(recording, PACE, noEntry)
+  const sent = await unavailableCount(async () => {
+    await backend.fetch('/api/checks/demo/messages', { method: 'POST' })
+    await backend.fetch('/api/checks/demo/awaiting-offers/a-1', { method: 'PUT' })
+  })
+  expect(sent).toBe(2)
+  const read = await unavailableCount(async () => {
+    await backend.fetch('/api/checks')
+    await backend.fetch('/api/auth/me')
+  })
+  expect(read).toBe(0)
 })
 
 test('the demo refuses a profile request, which the page never makes', async () => {

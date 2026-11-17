@@ -5,6 +5,7 @@ import { ApiException } from '../api/client.ts'
 import type { Finances, Question } from '../api/types.ts'
 import { PAYMENT_PLANNING, termBasisLine } from './copy.ts'
 import { finances } from '../test/fixtures.ts'
+import { wholeText } from '../test/wholeText.ts'
 import type { QuestionEntry } from './events.ts'
 import { QuestionBubble } from './QuestionBubble.tsx'
 
@@ -371,14 +372,20 @@ it('a term question shows its proposed term and first payment', () => {
       onClone={vi.fn()}
     />,
   )
-  expect(screen.getByText('חישוב ראשוני: 60 חודשים · החזר ראשון כ-812 ₪')).toBeInTheDocument()
+  expect(screen.getByText(wholeText(TERM_TITLE))).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'דילוג' })).not.toBeInTheDocument()
 })
 
 it('the term card is a first calculation that states its assumption', () => {
   renderTerm()
-  expect(screen.getByText('חישוב ראשוני: 60 חודשים · החזר ראשון כ-812 ₪')).toBeInTheDocument()
-  expect(screen.getByText(termBasisLine(termBasis))).toBeInTheDocument()
+  expect(screen.getByText(wholeText(TERM_TITLE))).toBeInTheDocument()
+  expect(screen.getByText(wholeText(termBasisLine(termBasis, '812.4')))).toBeInTheDocument()
+})
+
+it('the term card colours its values as a reply does', () => {
+  renderTerm()
+  const values = [...document.querySelectorAll('.bubble-question .reply-value')]
+  expect(values.map((value) => value.textContent)).toEqual(['60', '812 ₪', '1,000 ₪'])
 })
 
 it('a term card stored without its basis shows the title alone', () => {
@@ -437,6 +444,7 @@ it('the term card offers payment planning while a finances figure is missing', (
 })
 
 const termBasis = { kind: 'first_payment_target', amount: '1000', fits: true } as const
+const TERM_TITLE = 'חישוב ראשוני: 60 חודשים · החזר ראשון כ-812 ₪'
 const termQuestion: Question = {
   kind: 'term',
   term_months: 60,

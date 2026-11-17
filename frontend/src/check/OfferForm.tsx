@@ -152,8 +152,13 @@ export function OfferForm({ entry, question, live, onAnswer, onSkip }: Props) {
     setRows(rows.map((row) => (row.key === key ? { ...row, ...update } : row)))
   }
 
+  /**
+   * A lender's tracks tend to share a kind, so a new row starts as the last row's kind and
+   * linkage, with its percentage left to type.
+   */
   function addRow() {
-    setRows([...rows, { ...EMPTY_ROW, key: nextKey }])
+    const last = rows[rows.length - 1]
+    setRows([...rows, { ...last, rate: '', key: nextKey }])
     setNextKey(nextKey + 1)
   }
 

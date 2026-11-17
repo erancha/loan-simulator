@@ -119,6 +119,20 @@ test('a minus typed on a prime row turns it into prime minus; a fixed rate keeps
   expect(onAnswer).not.toHaveBeenCalled()
 })
 
+test('an added track starts as the kind of the track before it, with an empty percentage', async () => {
+  const user = userEvent.setup()
+  form({ ...EMPTY, lender: 'הבנק', max_term_months: 60 })
+  await user.click(screen.getByRole('button', { name: OFFER_ADD_TRACK }))
+  expect(kindBox(2)).toHaveValue('prime_plus')
+  await user.selectOptions(kindBox(2), 'fixed')
+  await user.type(rateBox(2), '3.5')
+  await user.click(screen.getByRole('checkbox', { name: OFFER_LINKED }))
+  await user.click(screen.getByRole('button', { name: OFFER_ADD_TRACK }))
+  expect(kindBox(3)).toHaveValue('fixed')
+  expect(rateBox(3)).toHaveValue('')
+  expect(screen.getAllByRole('checkbox', { name: OFFER_LINKED })[1]).toBeChecked()
+})
+
 test('boxes arrive filled with what the assistant passed', () => {
   form({
     kind: 'offer',

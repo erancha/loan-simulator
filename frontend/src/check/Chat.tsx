@@ -9,6 +9,7 @@ import {
   SAMPLES_CHIP,
   SEND_BUTTON,
   THINKING,
+  TO_CARD,
   cloneLine,
   withLastMonth,
 } from './copy.ts'
@@ -73,6 +74,11 @@ interface Props {
   loanAmount: string | null
   /** Asks for the offer form, to describe another offer while one waits on its lender. */
   onContinueOffers: () => Promise<boolean>
+  /** The reply that presented the check's recommendation, which leads to its pane; null when
+   * there is none. */
+  cardReplyId: string | null
+  /** Shows the recommendation's pane, on a screen that shows one pane at a time. */
+  onShowCard: () => void
   /** The card a new check opens with; while it is given, the chat shows it alone, with no input
    * and no chips. */
   opening: ReactNode | null
@@ -113,9 +119,10 @@ function EntryTime({ at, side }: { at: string | undefined; side: 'user' | 'assis
 /**
  * The conversation of a check: its bubbles, question bubbles and the cards and replies of the
  * offers the person described, each with the time it was said, and the chips and message input,
- * which an archived check does not have. A new check shows its opening card alone until the card
- * is sent. A request of the checks list scrolls an awaiting offer's card into view and holds it
- * there until the person scrolls or sends.
+ * which an archived check does not have. Under the reply that presented the check's
+ * recommendation a link leads to the recommendation's pane. A new check shows its opening card
+ * alone until the card is sent. A request of the checks list scrolls an awaiting offer's card
+ * into view and holds it there until the person scrolls or sends.
  */
 export function Chat({
   messages: entries,
@@ -139,6 +146,8 @@ export function Chat({
   offersOpen,
   samplesOffered,
   focusAwaiting,
+  cardReplyId,
+  onShowCard,
 }: Props) {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
@@ -326,6 +335,11 @@ export function Chat({
                   {entry.role === 'assistant' ? withValues(withLastMonth(entry.text, today)) : entry.text}
                   {!entry.complete && <span className="caret" aria-hidden="true" />}
                 </p>
+              )}
+              {entry.id === cardReplyId && (
+                <button type="button" className="underline-link to-card" onClick={onShowCard}>
+                  {TO_CARD}
+                </button>
               )}
               {(entry.role === 'question' || isOfferReply(entry)) && (
                 <EntryTime at={entry.at} side="assistant" />

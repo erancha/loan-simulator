@@ -26,6 +26,7 @@ import {
   TERM_MIN_MONTHS,
   TERM_OUT_OF_RANGE,
 } from './copy.ts'
+import { withValues } from './emphasis.tsx'
 import type { QuestionEntry } from './events.ts'
 import { FieldHint } from './FieldHint.tsx'
 import { hasBothFinances } from './FinancesPanel.tsx'
@@ -138,7 +139,14 @@ function MoneyBox(props: {
 export function QuestionBubble(props: Props) {
   const { question } = props.entry
   if (question.kind === 'term') {
-    return <TermBubble {...props} termMonths={question.term_months} basis={question.basis} />
+    return (
+      <TermBubble
+        {...props}
+        termMonths={question.term_months}
+        firstPayment={question.first_payment}
+        basis={question.basis}
+      />
+    )
   }
   if (question.kind === 'offer') {
     return (
@@ -161,8 +169,9 @@ function ceilingDraft(ceiling: string | null): string {
 
 /**
  * The term card: a first calculation of a term with its first payment, the assumption it was
- * worked out from when the stored question carries one, and one form with the term and the
- * payment ceiling, each starting at the check's value, and one confirm button. Beside the ceiling
+ * worked out from when the stored question carries one, both with their amounts and months in the
+ * colour of a value as a reply shows them, and one form with the term and the payment ceiling,
+ * each starting at the check's value, and one confirm button. Beside the ceiling
  * box a link sends that the person wants to plan the monthly payment first; nothing is saved. Once
  * the check holds both finances figures that planning is done, so the link is not offered. A new
  * ceiling with the term left as calculated asks for a card worked out from that ceiling; anything
@@ -177,8 +186,9 @@ function TermBubble({
   onAnswer,
   onSkip,
   termMonths,
+  firstPayment,
   basis,
-}: Props & { termMonths: number; basis: TermBasis | undefined }) {
+}: Props & { termMonths: number; firstPayment: string; basis: TermBasis | undefined }) {
   const [termDraft, setTermDraft] = useState(String(termMonths))
   const [ceilingText, setCeilingText] = useState(() => ceilingDraft(ceiling))
   const [error, setError] = useState<string | null>(null)
@@ -238,8 +248,10 @@ function TermBubble({
   return (
     <div className="bubble bubble-assistant bubble-question">
       {entry.leadIn !== null && <p className="question-lead-in">{entry.leadIn}</p>}
-      <p className="question-label">{questionText(entry.question)}</p>
-      {live && basis !== undefined && <p className="card-note">{termBasisLine(basis)}</p>}
+      <p className="question-label">{withValues(questionText(entry.question))}</p>
+      {live && basis !== undefined && (
+        <p className="card-note">{withValues(termBasisLine(basis, firstPayment))}</p>
+      )}
       {live && (
         <form className="term-form" onSubmit={(event) => void submit(event)}>
           <label htmlFor={termId}>{TERM_BOX_LABEL}</label>
