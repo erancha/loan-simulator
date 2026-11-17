@@ -588,9 +588,11 @@ class RecordingSink:
 
 class ScriptedChatModel(BaseChatModel):
     """replies are answered in order, one per model call; received holds the messages of each call
-    and tools the tools of the last bind_tools."""
+    and tools the tools of the last bind_tools. A call raises the next of errors, while any is
+    left, in place of answering."""
 
     replies: list[AIMessage]
+    errors: list[Exception] = Field(default_factory=list)
     received: list[list[BaseMessage]] = Field(default_factory=list)
     tools: list[Any] = Field(default_factory=list)
 
@@ -610,6 +612,8 @@ class ScriptedChatModel(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         self.received.append(list(messages))
+        if self.errors:
+            raise self.errors.pop(0)
         return ChatResult(generations=[ChatGeneration(message=self.replies.pop(0))])
 
     async def _agenerate(
@@ -629,6 +633,8 @@ class ScriptedChatModel(BaseChatModel):
         **kwargs: Any,
     ) -> AsyncIterator[ChatGenerationChunk]:
         self.received.append(list(messages))
+        if self.errors:
+            raise self.errors.pop(0)
         reply = self.replies.pop(0)
         chunks = [AIMessageChunk(content=piece, id=reply.id) for piece in _fragments(reply.text)]
         chunks.append(

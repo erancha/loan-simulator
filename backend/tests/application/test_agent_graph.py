@@ -3,7 +3,7 @@ conversation in checkpoints keyed by that check, and shows the model tool summar
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, get_args
@@ -44,7 +44,6 @@ from loan_agent.application.agent_graph import (
     PresentRecommendationArgs,
     QuestionField,
     ReadOfferArgs,
-    SaveOptionArgs,
     SetCeilingArgs,
     SetLoanArgs,
     SetTermArgs,
@@ -84,7 +83,7 @@ CHECK_TOOL_NAMES = {
     "set_term",
     "set_ceiling",
     "update_finances",
-    "save_option",
+    "save_examples",
     "save_offer",
     "read_offer",
     "answer_offer_amount",
@@ -210,15 +209,20 @@ async def test_tool_call_runs_and_model_sees_summary_only(world: World) -> None:
 
 async def test_guardrail_refusal_reaches_model_which_retries(world: World) -> None:
     await world.checks.set_loan(CHECK, LoanRequest("רכב", Decimal(80000)))
+    await world.checks.set_term(CHECK, 48)
     await world.checks.set_ceiling(CHECK, Decimal(1500), "stated")
-    # The third prices the accepted option at the shorter term the engine's search finds.
-    world.engine.simulations = [PRIME_SIMULATION, BALLOON_SIMULATION, BALLOON_SIMULATION]
+    # The three examples, the third above the ceiling like the first; the last prices the
+    # accepted option at the shorter term the engine's search finds.
+    above = replace(PRIME_SIMULATION.figures, worst_peak_payment=Decimal(2100))
+    world.engine.simulations = [
+        PRIME_SIMULATION,
+        BALLOON_SIMULATION,
+        replace(PRIME_SIMULATION, figures=above),
+        BALLOON_SIMULATION,
+    ]
     model = ScriptedChatModel(
         replies=[
-            calls(
-                ("save_option", {"loan": {"tracks": [PRIME_TRACK]}}),
-                ("save_option", {"loan": {"tracks": [PRIME_TRACK]}}),
-            ),
+            calls(("save_examples", {})),
             calls(
                 (
                     "present_recommendation",
@@ -238,7 +242,7 @@ async def test_guardrail_refusal_reaches_model_which_retries(world: World) -> No
 
     state = await graph.ainvoke(said("מה ההמלצה?"), check_config(PERSON, CHECK))
 
-    refusal, accepted = tool_messages(state["messages"])[2:]
+    refusal, accepted = tool_messages(state["messages"])[1:]
     assert refusal.status == "error"
     assert "above the payment_ceiling of 1500" in str(refusal.content)
     assert "option option-2 fits" in str(refusal.content)
@@ -298,6 +302,36 @@ async def test_model_cannot_choose_user_or_check(world: World) -> None:
     assert (await world.checks.get(PERSON, CHECK)).loan == LoanRequest("רכב", Decimal(55000))
     assert (await world.checks.get(OTHER_PERSON, OTHER_CHECK)).loan is None
     assert [event.check_id for event in world.sink.events] == [CHECK]
+
+
+FLAGGED = RuntimeError(
+    "Invalid prompt: your prompt was flagged as potentially violating our usage policy."
+)
+
+
+async def test_a_prompt_the_provider_flags_is_sent_once_more(world: World) -> None:
+    model = ScriptedChatModel(replies=[AIMessage("שלום")], errors=[FLAGGED])
+
+    result = await run(world, model).ainvoke(said("שלום"), check_config(PERSON, CHECK))
+
+    assert result["messages"][-1].content == "שלום"
+    first, second = model.received
+    assert first == second
+
+
+async def test_a_prompt_flagged_twice_fails_the_turn(world: World) -> None:
+    model = ScriptedChatModel(replies=[AIMessage("שלום")], errors=[FLAGGED, FLAGGED])
+
+    with pytest.raises(RuntimeError, match="flagged"):
+        await run(world, model).ainvoke(said("שלום"), check_config(PERSON, CHECK))
+
+
+async def test_another_provider_error_is_not_retried(world: World) -> None:
+    model = ScriptedChatModel(replies=[AIMessage("שלום")], errors=[RuntimeError("rate limited")])
+
+    with pytest.raises(RuntimeError, match="rate limited"):
+        await run(world, model).ainvoke(said("שלום"), check_config(PERSON, CHECK))
+    assert len(model.received) == 1
 
 
 async def test_system_prompt_is_hebrew_and_first(world: World) -> None:
@@ -420,7 +454,6 @@ async def test_every_tool_the_system_prompt_names_is_bound(world: World) -> None
         *SetTermArgs.model_fields,
         *SetCeilingArgs.model_fields,
         *UpdateFinancesArgs.model_fields,
-        *SaveOptionArgs.model_fields,
         *TrackArgs.model_fields,
         *AskQuestion.model_fields,
         *AskArgs.model_fields,
@@ -432,7 +465,9 @@ async def test_every_tool_the_system_prompt_names_is_bound(world: World) -> None
     }
     # Keys of a tool's result that the prompt tells the model how to use.
     result_keys = {
-        "ceiling_margin",
+        "preferred_ceiling_margin",
+        "alternative_ceiling_margin",
+        "payment_changes",
         "preferred_figures",
         "alternative_figures",
         "preferred_price",
@@ -755,6 +790,16 @@ def test_the_recommendation_heading_is_the_one_the_system_prompt_asks_for() -> N
     assert f"**{EVALUATION_HEADING}**" in SYSTEM_PROMPT
 
 
+def test_the_prompt_orders_a_track_as_payment_then_price_then_history() -> None:
+    """A track's lines open with what the person pays: today's payment, then the interest ahead
+    of the total it adds up to, and the historical period last."""
+    flat = " ".join(SYSTEM_PROMPT.split())
+    payment = flat.index('בשורה הראשונה "החזר היום: X ₪"')
+    price = flat.index('"ריבית של כ-4,988 ₪; סכום כולל להחזר: 49,988 ₪ (45,000 + 4,988)"')
+    history = flat.index("ובשורה האחרונה ההחזר בתקופה ההיסטורית הגרועה")
+    assert payment < price < history
+
+
 def test_the_prompt_names_examples_only_by_the_counts_and_prices_every_offer() -> None:
     assert "option_counts" in SYSTEM_PROMPT
     for key in ("interest_cost", "rate_today", "preferred_price", "only_option"):
@@ -870,11 +915,42 @@ async def test_ask_term_and_ask_in_one_message_are_both_refused(world: World) ->
     assert len(model.received) == 2
 
 
-def test_the_prompt_saves_three_examples_one_of_them_a_pension_funds() -> None:
-    assert "save_option לשניים" not in SYSTEM_PROMPT
-    assert "שתי הדוגמאות" not in SYSTEM_PROMPT
-    assert SYSTEM_PROMPT.count("save_option לשלושתם") == 3
+def test_the_prompt_saves_the_three_examples_in_one_call_one_of_them_a_pension_funds() -> None:
+    """The model cannot save part of the examples: the prompt names only the call that saves
+    all three, never one that saves a single example or lists the tracks to save."""
+    for single in ("save_option", "suggest_tracks", "שתי הדוגמאות"):
+        assert single not in SYSTEM_PROMPT, single
+    assert SYSTEM_PROMPT.count("save_examples") >= 4
     assert "קרן פנסיה" in SYSTEM_PROMPT
+
+
+def test_the_prompt_gives_one_form_for_a_tracks_price_and_places_the_ceiling_on_its_line() -> None:
+    """The price is the interest ahead of the total it adds up to, in every example the prompt
+    gives; a track whose payment never changes has no historical line, so its distance from
+    the ceiling ends its line of today's payment."""
+    flat = " ".join(SYSTEM_PROMPT.split())
+    assert "₪ על 45,000 ₪" not in flat
+    assert '"ריבית של כ-13,368 ₪; סכום כולל להחזר: 58,368 ₪ (45,000 + 13,368)"' in flat
+    assert '"החזר היום: 969 ₪, 19% מתחת לתקרה שלך של 1,200 ₪"' in flat
+    assert "אל תכתוב שההחזר לא השתנה" in flat
+
+
+def test_the_prompt_words_the_historical_payment_as_what_would_have_happened() -> None:
+    """The worst period is a scenario, what the payment would have reached had the loan run
+    through it, never something that happened to the person."""
+    flat = " ".join(SYSTEM_PROMPT.split())
+    for happened in ("ההחזר הגיע", "הפריים הגיע", "ההחזר עלה"):
+        assert happened not in flat, happened
+    assert "ההחזר היה מגיע עד 1,125 ₪" in flat
+    assert 'לעולם לא "הגיע"' in flat
+
+
+def test_the_prompt_calls_the_second_track_an_alternative_and_nothing_more() -> None:
+    """The reply names the second track as the card does, "חלופה": an adjective such as
+    "suitable" says nothing the person can check, so the prompt neither uses nor allows one."""
+    flat = " ".join(SYSTEM_PROMPT.split())
+    assert "הכי מתאימה" not in flat
+    assert 'בכותרת "חלופה:" בלבד' in flat
 
 
 def test_the_prompt_no_longer_names_removed_tools() -> None:

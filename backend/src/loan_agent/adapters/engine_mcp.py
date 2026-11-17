@@ -30,9 +30,10 @@ from loan_agent.ports.engine import (
 )
 
 _SERVER = "engine"
-# The loan-side tools. The ceiling, the term proposals and the searches for a term or a loan are
-# called by the check tools, so the model never builds a profile, a ceiling or a term rule.
-MODEL_ENGINE_TOOLS = frozenset({"simulate_loan", "suggest_tracks", "market_series"})
+# The engine tools the model calls itself. The ceiling, the term proposals, the searches for a
+# term or a loan and the example tracks are called by the check tools, so the model never builds
+# a profile, a ceiling or a term rule, and never chooses which examples to save.
+MODEL_ENGINE_TOOLS = frozenset({"simulate_loan", "market_series"})
 
 
 class McpLoanEngine:

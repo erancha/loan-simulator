@@ -36,9 +36,11 @@ does an identified offer, which the model compares and recommends on. A reply wh
 hold a NUL character in an argument never reaches the tool node: every call of it is answered
 with a refusal and the model sends them again, because Postgres stores no NUL and a tool that
 saved one would end the turn. A reply with a NUL in its text is discarded and written again once,
-for the same reason. The system prompt fixes the agent's manner (Hebrew only, plain terms, a calm
-tone, every question through `ask`, `ask_term` or `ask_offer`) and the arc of the conversation,
-which starts from the loan and goes to the offers:
+for the same reason. A prompt the provider's usage filter flags, which it does to ordinary loan
+conversations now and then, is sent once more before the turn fails. The system prompt fixes
+the agent's manner (Hebrew only, plain terms, a calm tone, every question through `ask`,
+`ask_term` or `ask_offer`) and the arc of the conversation, which starts from the loan and goes
+to the offers:
 
 1. The opening card on the page gives the loan's purpose and amount. The runner saves them as the
    loan and shows the term card, with no model call. A loan the person writes in the chat, as an
@@ -112,7 +114,6 @@ The model sees two sets of tools. An agent tool's result is a compact `key: valu
 | Source | Tool | Does |
 |---|---|---|
 | Engine | `simulate_loan` | Cost and worst-case figures of a loan. |
-| Engine | `suggest_tracks` | A fixed and a prime track priced from the published average rate, and a pension fund's fixed track linked to the CPI. |
 | Engine | `market_series` | Today's prime and the latest months of the prime and of the CPI's monthly change. |
 | Agent | `set_loan` | Saves the loan: its amount and an optional purpose, and a payment ceiling the person named in the same message, saved as stated before the term card proposes a term. Refuses an empty purpose, a ceiling of 0 or less, an amount of 0 or less, and an amount outside the principal limits the engine prices, naming them. When the check's recommendation is for another amount, its result tells the model to save options of the new amount and recommend again. |
 | Agent | `ask_term` | Puts the term card on the person's screen. Without a term it proposes one (below); with the number of months the person typed, it shows that term's first payment. Refuses a term outside 6 to 84 months, a check with no loan, and the term the last card already showed, which the person's answer confirms, so the model calls `set_term` instead of showing the same card again. |
@@ -130,8 +131,8 @@ The model sees two sets of tools. An agent tool's result is a compact `key: valu
 | Agent | `set_ceiling` | Saves the monthly payment the person stated as the ceiling, replacing any ceiling the check held. Refuses 0 or less. |
 | Agent | `update_finances` | Saves net fixed income or fixed expenses on this check; once both are known, the engine's `assess_affordability` derives the ceiling, which replaces any ceiling the check held. |
 | Agent | `ask` | Puts one question on the person's screen: a loan, ceiling or finances field, the offer to clone the check, or free text with two or more optional choices, under an optional Hebrew lead-in. Refuses a field the check already holds, the clone offer while the check has no recommendation, an English word in the text the person would see, and every question of a model message that asks more than one. |
-| Agent | `save_option` | Simulates an example track from `suggest_tracks` through the engine and saves it as an option. Refuses a loan whose principal is not the check's loan amount, an option already saved with the same source and figures, naming it, and any example once the check holds a real offer of its loan amount or an offer awaiting its lender. Its result compares the option with each saved option of the same term and classes each gap: a first-payment gap under 2% of the larger is "זניח" and not mentioned; a total-cost gap under 3% is "במקצת" and worded so, since the total still decides; anything larger is "ברור". The classes are Hebrew because the model quotes them. |
-| Agent | `save_offer` | Saves a real offer with every track it names in one call, refusing a track listed twice. A lender's tracks are alternatives for the whole loan amount, so each is simulated and saved as an option of its own; every track is priced before any is saved, so a refusal of one, which names the track, saves none. It refuses what `save_option` refuses, with the lender, date and maximum in the comparison of a repeated option, and a track saved with `max_term_months` at any term but the check's confirmed term, or the maximum when that is shorter; before a term is confirmed, the one the engine's offer search gives for that track (below). The maximum is stored with each option, so a later term change can price it again. Its result gives each track's option and comparisons as `save_option` does, and tells the model to recommend again. |
+| Agent | `save_examples` | Saves the example tracks for the check's loan amount and term in one call: it asks the engine's `suggest_tracks` for them (a fixed and a prime track priced from the published average rate, and a pension fund's fixed track linked to the CPI), simulates each and saves all of them as options, or none. The model takes no part in choosing them, so the check never holds some of the examples. An example already saved with the same figures is kept in place of saving it again. Refuses a check with no confirmed term, and any example once the check holds a real offer of its loan amount or an offer awaiting its lender. Its result names each example's track and compares it with each saved option of the same term, classing each gap: a first-payment gap under 2% of the larger is "זניח" and not mentioned; a total-cost gap under 3% is "במקצת" and worded so, since the total still decides; anything larger is "ברור". The classes are Hebrew because the model quotes them. |
+| Agent | `save_offer` | Saves a real offer with every track it names in one call, refusing a track listed twice. A lender's tracks are alternatives for the whole loan amount, so each is simulated and saved as an option of its own; every track is priced before any is saved, so a refusal of one, which names the track, saves none. It refuses a track whose principal is not the check's loan amount, an offer already saved with the same lender, date, maximum and figures, naming it, and a track saved with `max_term_months` at any term but the check's confirmed term, or the maximum when that is shorter; before a term is confirmed, the one the engine's offer search gives for that track (below). The maximum is stored with each option, so a later term change can price it again. Its result gives each track's option and comparisons as `save_examples` does, and tells the model to recommend again. |
 | Agent | `show_chart` | Fetches the prime or the CPI's monthly change for the latest months from the engine and puts it in the conversation as a chart. |
 | Agent | `present_recommendation` | Saves a preferred option and an optional alternative as the recommendation, through the guardrail. |
 
@@ -225,9 +226,12 @@ standing.
 
 A presented recommendation's result gives the preferred and the alternative option's term and
 figures as they stand, `preferred_figures` and `alternative_figures`, and the reply quotes only
-those, so it never repeats figures from before a term change. With a ceiling, it also gives
-`ceiling_margin`: how far the preferred option's worst-case payment is below the ceiling, in
-shekels and as a share of it, so the reply states the distance in numbers. When the preferred
+those, so it never repeats figures from before a term change. An option whose payment never
+changes has no worst period in history: its figures say `payment_changes never` in place of the
+three historical figures, so the model has no period to describe. With a ceiling, it also gives
+`preferred_ceiling_margin` and `alternative_ceiling_margin`: how far each option's worst-case
+payment is below the ceiling, in shekels and as a share of it, so the reply states the distance
+beside that payment, in numbers the model did not compute. When the preferred
 option's term may move (an example, or an offer that leaves its term open), the engine's offer
 search finds the shortest term at which its track still fits; a shorter one comes back as a
 `next_step` with its worst-case payment and the interest it saves, telling the model to end the

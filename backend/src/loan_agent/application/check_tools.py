@@ -3,9 +3,10 @@ payment ceiling and the person's finances, to ask the person a question and to p
 recommendation, with the guardrail that keeps a recommendation honest.
 
 - ToolDeps: the ports, the clock and the id generator the tools act through
-- CheckTools: set_loan, set_term, set_ceiling, update_finances, save_option (an example, refused
-  once the check holds a real offer of its loan amount or an awaiting offer), save_offer (each
-  track of a real offer as an option of its own, removing the check's examples) and
+- CheckTools: set_loan, set_term, set_ceiling, update_finances, save_examples (the engine's
+  example tracks for the check's term, all in one step, refused once the check holds a real offer
+  of its loan amount or an awaiting offer), save_offer (each track of a real offer as an option
+  of its own, removing the check's examples) and
   present_recommendation, each returning a compact key: value summary for the model and
   emitting an event for the page; ask, ask_term and ask_offer, emitting a question for the page
   and returning ASKED_RESULT, after which the turn ends; show_chart, emitting a market series
@@ -259,7 +260,7 @@ class CheckTools:
     ) -> str:
         """Shows the offer form with whatever the person already said filled in. The values are
         a starting point for the boxes: the form validates what the person submits, and
-        save_option what the model saves from it."""
+        save_offer what the model saves from it."""
         _require_loan(await self._check(), "ask_offer")
         _require_named_lender(lender)
         question = {
@@ -394,18 +395,35 @@ class CheckTools:
             return summary(data)
         return await self._with_recheck(data)
 
-    async def save_option(self, loan: Mapping[str, object]) -> str:
-        """Saves an example from the engine's suggested tracks. Once the check holds a real offer
-        of its loan amount, or an offer awaiting its lender, an example illustrates nothing the
-        person is deciding, so it is refused."""
-        amount = _require_loan(await self._check(), "save_option").amount
+    async def save_examples(self) -> str:
+        """Saves every example track the engine suggests for the check's loan amount and term, in
+        one step and all or none, so the check never holds part of the set and the model cannot
+        leave one out. An example the check already holds is kept in place of saving it again.
+        Once the check holds a real offer of its loan amount, or an offer awaiting its lender, an
+        example illustrates nothing the person is deciding, so they are refused."""
+        check = await self._check()
+        amount = _require_loan(check, "save_examples").amount
+        if check.term_months is None:
+            raise ToolError(
+                "the check has no term yet, and the examples are priced for its term; show the "
+                "term card with ask_term and save the examples once the person confirms it"
+            )
         if any(
             option.source == "offer" and option.principal == amount
             for option in await self._deps.options.list(self._check_id)
         ) or await self._deps.awaiting.list(self._check_id):
             raise ToolError(_EXAMPLES_REFUSED)
-        (saved,) = await self._save_options([loan], "example", None, None, None)
-        return summary(saved)
+        try:
+            tracks = await self._deps.engine.suggest(amount, check.term_months)
+        except EngineError as error:
+            raise ToolError(
+                f"The engine refused to suggest the examples: {error}; no example was saved"
+            ) from None
+        loans = [{"tracks": [track]} for track in tracks]
+        saved = await self._save_options(loans, "example", None, None, None)
+        return summary(
+            {f"example {number}": _inline(option) for number, option in enumerate(saved, start=1)}
+        )
 
     async def save_offer(
         self,
@@ -664,10 +682,11 @@ class CheckTools:
     ) -> list[dict[str, object]]:
         """Prices every loan before saving any, so a refusal of one saves none of them. Each is
         refused when it borrows other than the check's loan amount, when an offer that leaves
-        its term open is not at the term _offer_term gives, and when an option of the same terms
-        and figures is already saved. Returns each saved option's id, figures and comparisons
-        with the options of its term."""
-        tool = "save_offer" if source == "offer" else "save_option"
+        its term open is not at the term _offer_term gives, and, for an offer, when an option of
+        the same terms and figures is already saved; an example already saved is kept in place
+        of the new one, since the model does not choose the examples. Returns each option's id,
+        figures and comparisons with the options of its term, an example's after its track."""
+        tool = "save_offer" if source == "offer" else "save_examples"
         _require_named_lender(lender)
         offered = None if offer_date is None else _offer_date(offer_date)
         check = await self._check()
@@ -675,13 +694,16 @@ class CheckTools:
         kept = await self._deps.options.list(self._check_id)
         priced: list[tuple[Option, Simulation]] = []
         for index, loan in enumerate(loans):
-            where = f"tracks[{index}]: " if source == "offer" else ""
+            where = f"tracks[{index}]: " if source == "offer" else f"example {index + 1}: "
             try:
                 simulation = await self._deps.engine.simulate(loan)
             except EngineError as error:
-                raise ToolError(
-                    f"{where}The engine refused the loan: {error}; correct it and call {tool} again"
-                ) from None
+                remedy = (
+                    f"correct it and call {tool} again"
+                    if source == "offer"
+                    else "no example was saved"
+                )
+                raise ToolError(f"{where}The engine refused the loan: {error}; {remedy}") from None
             principal = _principal(loan)
             if principal != requested.amount:
                 raise ToolError(
@@ -709,14 +731,16 @@ class CheckTools:
                 summary=simulation.figures,
                 created_at=self._deps.clock(),
             )
-            for existing in kept:
-                if _same_option(existing, option):
-                    raise ToolError(
-                        f"{where}this option is already saved as option {existing.id}, with the "
-                        "same figures; use that option rather than saving it again"
-                    )
-            priced.append((option, simulation))
+            same = next((existing for existing in kept if _same_option(existing, option)), None)
+            if same is not None and source == "offer":
+                raise ToolError(
+                    f"{where}this option is already saved as option {same.id}, with the "
+                    "same figures; use that option rather than saving it again"
+                )
+            priced.append((option if same is None else same, simulation))
         for option, simulation in priced:
+            if option in kept:
+                continue
             await self._deps.options.add(option)
             await self._deps.sink.emit(
                 self._check_id,
@@ -729,6 +753,7 @@ class CheckTools:
         saved = []
         for option, _ in priced:
             figures = {
+                **({"track": track_text(option)} if source == "example" else {}),
                 "option_id": option.id,
                 **_money_figures(option),
                 "price": price_text(option),
@@ -793,7 +818,7 @@ class CheckTools:
                 term = (await engine.offer_term(longest, ceiling)).term_months
         except EngineError as error:
             raise ToolError(
-                f"The engine refused the offer: {error}; correct it and call save_option again"
+                f"The engine refused the offer: {error}; correct it and call save_offer again"
             ) from None
         return term
 
@@ -883,7 +908,7 @@ class CheckTools:
                 raise ToolError(
                     f"option {option.id} borrows {principal}, not the check's loan amount of "
                     f"{loan.amount}; recommend options of the loan amount, saving them with "
-                    "save_option first"
+                    "save_examples or save_offer first"
                 )
         for option in named:
             if not option.for_term(check.term_months):
@@ -955,7 +980,9 @@ class CheckTools:
         if not compares_options(all_options, [option.id for option in named], check.term_months):
             data["only_option"] = _ONLY_OPTION
         if ceiling is not None and above_ceiling is None:
-            data["ceiling_margin"] = _margin(preferred, ceiling)
+            data["preferred_ceiling_margin"] = _margin(preferred, ceiling)
+            if alternative is not None:
+                data["alternative_ceiling_margin"] = _margin(alternative, ceiling)
         if above_ceiling is not None:
             data["next_step"] = above_ceiling
         elif shorter is not None:
@@ -1119,8 +1146,8 @@ class CheckTools:
             return await self._deps.options.get(self._check_id, option_id)
         except KeyError:
             raise ToolError(
-                f"{argument}: this check has no option {option_id!r}; save it with save_option "
-                "first and use the option_id it returns"
+                f"{argument}: this check has no option {option_id!r}; use an option_id that "
+                "save_examples or save_offer returned, or one of the state message's offers"
             ) from None
 
 
@@ -1258,6 +1285,16 @@ _AGAINST_MARKET: dict[RateAgainstMarket, str] = {
     "similar": "similar to",
     "below": "below",
 }
+
+
+def track_text(option: Option) -> str:
+    """The option's single track in the words the model reads: its rate and its linkage."""
+    (track,) = cast(list[Mapping[str, object]], option.loan["tracks"])
+    if track["rate_kind"] == "prime":
+        rate = f"prime + {track['prime_spread']}"
+    else:
+        rate = f"fixed {track['annual_rate']}"
+    return f"{rate}, {'linked' if track['cpi_linked'] else 'not linked'}"
 
 
 def price_text(option: Option) -> str:
@@ -1445,15 +1482,25 @@ def _option_data(option: Option) -> dict[str, object]:
     }
 
 
+# The figures of the worst period history holds for a loan whose payment moves.
+_WORST_CASE_FIGURES = ("worst_peak_payment", "worst_start", "worst_end")
+
+
 def _money_figures(option: Option) -> dict[str, object]:
     """The option's figures but its price, with every amount rounded to the shekel, as the person
-    reads them; those figures' amounts are all money, while the price holds rates."""
+    reads them; those figures' amounts are all money, while the price holds rates. A payment
+    that never changes has no worst period in history: in place of its three empty figures the
+    result says so, so the model has no period to write about."""
     figures = asdict(option.summary)
     del figures["price"]
-    return {
-        key: shekels(value) if isinstance(value, Decimal) else value
-        for key, value in figures.items()
-    }
+    steady = option.summary.worst_peak_payment is None
+    told: dict[str, object] = {}
+    for key, value in figures.items():
+        if steady and key in _WORST_CASE_FIGURES:
+            told["payment_changes"] = "never"
+        else:
+            told[key] = shekels(value) if isinstance(value, Decimal) else value
+    return told
 
 
 def shekels(amount: Decimal) -> Decimal:

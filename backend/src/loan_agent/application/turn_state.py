@@ -19,6 +19,7 @@ from loan_agent.application.check_tools import (
     price_text,
     shekels,
     summary,
+    track_text,
 )
 from loan_agent.domain.models import (
     AwaitingOffer,
@@ -76,14 +77,9 @@ def _one_line(values: Mapping[str, object]) -> str:
 def _option_clause(option: Option) -> str:
     """The option's single track, with its first payment and total to the shekel."""
     (track,) = cast(list[Mapping[str, object]], option.loan["tracks"])
-    if track["rate_kind"] == "prime":
-        rate = f"prime + {track['prime_spread']}"
-    else:
-        rate = f"fixed {track['annual_rate']}"
-    linkage = "linked" if track["cpi_linked"] else "not linked"
     return (
-        f"{option.id}: source {option.source}, lender {_or_none(option.lender)}, rate {rate}, "
-        f"{linkage}, term_months {track['term_months']}, "
+        f"{option.id}: source {option.source}, lender {_or_none(option.lender)}, "
+        f"rate {track_text(option)}, term_months {track['term_months']}, "
         f"first_payment {shekels(option.summary.first_payment)}, "
         f"total_paid {shekels(option.summary.total_paid)}, price ({price_text(option)})"
     )

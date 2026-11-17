@@ -5,7 +5,7 @@ conversation is one checkpoint thread.
 
 - build_agent_graph: the model node and the tool node over the thread's messages, as an
   AgentGraph; a reply's tool calls skip the tool node and are refused when an argument holds a
-  NUL character
+  NUL character, and a prompt the provider's usage filter flags is sent once more
 - check_config: the run configuration naming the person and the check, with the turn's step
   limit
 - delete_conversation, copy_conversation: remove a check's saved conversation, or start
@@ -219,12 +219,8 @@ class TrackArgs(_Args):
     monthly_fee: str | None = _optional_money("Fee added to every payment, ₪ per month")
 
 
-class LoanArgs(_Args):
-    tracks: list[TrackArgs] = Field(min_length=1, description="The loan's tracks")
-
-
-class SaveOptionArgs(_Args):
-    loan: LoanArgs
+class SaveExamplesArgs(_Args):
+    """save_examples takes no argument: the check holds the loan amount and the term."""
 
 
 class SaveOfferArgs(_Args):
@@ -285,7 +281,7 @@ class AnswerOfferAmountArgs(_Args):
 
 
 class PresentRecommendationArgs(_Args):
-    preferred_option_id: str = Field(description="option_id from save_option or save_offer")
+    preferred_option_id: str = Field(description="option_id from save_examples or save_offer")
     reasoning: str = Field(description="Why this option fits the person, in Hebrew")
     alternative_option_id: str | None = Field(
         default=None, description="option_id of a second choice, if any"
@@ -441,8 +437,8 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
         told = {name: value for name, value in fields.items() if value is not None}
         return await _tools_for(config, deps).update_finances(**told)
 
-    async def save_option(loan: LoanArgs, config: RunnableConfig) -> str:
-        return await _tools_for(config, deps).save_option(loan.model_dump(exclude_none=True))
+    async def save_examples(config: RunnableConfig) -> str:
+        return await _tools_for(config, deps).save_examples()
 
     async def save_offer(
         tracks: list[TrackArgs],
@@ -525,7 +521,9 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
             coroutine=ask_offer,
             name="ask_offer",
             description="Call this when the person says they received a real offer and the "
-            "message does not hold the lender, every track's interest and the number of months. "
+            "message holds no monthly payment and lacks the lender, a track's interest or the "
+            "number of months; an offer that states a monthly payment goes to read_offer, which "
+            "derives the interest from it. "
             "Opens a form on the person's screen with what they said filled in, and the turn "
             "ends; the answer arrives as the person's next message. Do not call it for an offer "
             "that mentions a balloon, a fee, a fixed number of months or an amount cap.",
@@ -554,13 +552,17 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
             args_schema=UpdateFinancesArgs,
         ),
         StructuredTool.from_function(
-            coroutine=save_option,
-            name="save_option",
-            description="Price an example track from suggest_tracks, for the check's loan "
-            "amount, with the engine and keep it as an option of this check. Returns its "
-            "option_id and figures. A real offer is saved with save_offer. Refused once the "
-            "check holds a real offer of its loan amount.",
-            args_schema=SaveOptionArgs,
+            coroutine=save_examples,
+            name="save_examples",
+            description="Save the three example tracks for the check's loan amount and "
+            "confirmed term in one call: a fixed and a prime track, both unlinked, at the Bank "
+            "of Israel's published average rate, and a fixed track linked to the CPI on the "
+            "terms a pension fund publishes. The engine prices each and all three are kept as "
+            "options of this check, or none; an example already saved is kept. Returns each "
+            "example's track, option_id and figures. A real offer is saved with save_offer. "
+            "Refused before the term is confirmed, and once the check holds a real offer of its "
+            "loan amount.",
+            args_schema=SaveExamplesArgs,
         ),
         StructuredTool.from_function(
             coroutine=save_offer,
@@ -780,6 +782,28 @@ def _refuse_nul(state: MessagesState) -> MessagesState:
     }
 
 
+# The words by which OpenAI refuses a prompt its usage filter flags; the error is a plain
+# APIError, told apart from the provider's other failures only by its message. The filter
+# misfires on ordinary loan conversations, and the same prompt usually passes when sent again.
+_PROMPT_FLAGGED = "flagged as potentially violating"
+
+
+async def _reply_of(
+    bound: Any, conversation: Sequence[BaseMessage], config: RunnableConfig
+) -> AIMessage:
+    """The model's reply to the conversation, asked once more when the provider flags the
+    prompt; a second refusal, like every other failure, fails the turn."""
+    try:
+        reply = await bound.ainvoke(conversation, config)
+    except Exception as error:
+        if _PROMPT_FLAGGED not in str(error):
+            raise
+        log.warning("the provider flagged the prompt; sending it once more")
+        reply = await bound.ainvoke(conversation, config)
+    assert isinstance(reply, AIMessage), "a chat model answers with an AI message"
+    return reply
+
+
 def build_agent_graph(
     model: BaseChatModel,
     engine_tools: Sequence[BaseTool],
@@ -794,10 +818,10 @@ def build_agent_graph(
         block = await turn_state(configurable[_USER_ID], configurable[_CHECK_ID], tool_deps)
         prefix = [SystemMessage(SYSTEM_PROMPT), SystemMessage(block)]
         conversation = [*prefix, *state["messages"]]
-        reply = await bound.ainvoke(conversation, config)
+        reply = await _reply_of(bound, conversation, config)
         correction = _correction_for(reply, state["messages"], configurable[_CHECK_ID])
         if correction is not None:
-            reply = await bound.ainvoke([*conversation, reply, HumanMessage(correction)], config)
+            reply = await _reply_of(bound, [*conversation, reply, HumanMessage(correction)], config)
         _require_new_calls(reply, state["messages"])
         return {"messages": [reply]}
 

@@ -90,18 +90,20 @@ refusal naming a saved option that fits, else a recommendation presented above t
 remedy, a longer term, the largest loan when 84 months do not fit, and none for a ceiling too low
 for any loan; for a check with offers, the longer term an open offer allows or the turn to the
 lenders, with no example search; and a balloon is judged on its recurring payment. A saved offer
-deletes the check's examples with a recommendation that names one, and an example is refused once
-the check holds an offer. The ask tool's tests prove the emitted question and its fixed result, and
-its refusals: a field the check already holds, named with its value, and English in the text. The
-offer form's tool tests prove the question it emits, with what the person said or with nothing, and
-its refusal of a check with no loan. The price tests prove that a recommendation gives each named
-option's interest cost and rate against the market, a linked one's rate on top of the CPI, an option
-saved before the engine priced rates its interest cost alone, and a saved offer its price with its
-figures; and that a recommendation of one real offer alone tells the model to evaluate it, never to
-call it preferred or recommended. The state block's tests prove the loan, term, ceiling and
-recommendation states, a recommendation of one option alone marked so, the previous check's
-finances, the counts of real offers and examples, and the lines of the saved offers with their price
-and the awaiting ones.
+deletes the check's examples with a recommendation that names one, and the examples are refused once
+the check holds an offer. The examples' tests prove that one call saves every track the engine
+suggests, that an engine refusal of one saves none, that an example already saved is kept while the
+missing ones are added, and that the call waits for a confirmed term. The ask tool's tests prove the
+emitted question and its fixed result, and its refusals: a field the check already holds, named with
+its value, and English in the text. The offer form's tool tests prove the question it emits, with
+what the person said or with nothing, and its refusal of a check with no loan. The price tests prove
+that a recommendation gives each named option's interest cost and rate against the market, a linked
+one's rate on top of the CPI, an option saved before the engine priced rates its interest cost
+alone, and a saved offer its price with its figures; and that a recommendation of one real offer
+alone tells the model to evaluate it, never to call it preferred or recommended. The state block's
+tests prove the loan, term, ceiling and recommendation states, a recommendation of one option alone
+marked so, the previous check's finances, the counts of real offers and examples, and the lines of
+the saved offers with their price and the awaiting ones.
 
 The decision between an offer's readings (`test_offer_reading.py`) proves that one fitting reading
 is identified, that the payment decides over type words that contradict it, that several fits, no

@@ -4,6 +4,7 @@ option borrows the loan amount, and with a ceiling every one fits it. read_offer
 that one of the engine's readings fits, and keeps an offer that several readings fit, or that is
 quoted for less than the loan, awaiting the person's answer."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import timedelta
 from decimal import Decimal
@@ -35,7 +36,7 @@ from loan_agent.application.check_tools import (
     ToolError,
 )
 from loan_agent.domain.errors import AwaitingOfferNotFoundError
-from loan_agent.domain.models import Check, Finances, LoanRequest
+from loan_agent.domain.models import Check, Finances, LoanRequest, Option
 from loan_agent.ports.engine import (
     EngineError,
     OfferTerm,
@@ -53,6 +54,7 @@ from loan_agent.ports.events import (
     OFFER_IDENTIFIED,
     OFFER_SETTLED,
     OFFER_UNRECOGNIZED,
+    OPTION_SAVED,
     QUESTION_ASKED,
     RECOMMENDATION_PRESENTED,
     TERM_SET,
@@ -95,6 +97,7 @@ class World:
     recommendations: InMemoryRecommendationRepository
     engine: FakeLoanEngine
     sink: RecordingSink
+    new_id: Ids
     tools: CheckTools
 
     async def check(self) -> Check:
@@ -114,6 +117,7 @@ async def world() -> World:
     engine = FakeLoanEngine()
     sink = RecordingSink()
     await checks.add(Check(CHECK, PERSON, NOW, None, None, None, None, Finances()))
+    new_id = Ids("option")
     deps = ToolDeps(
         checks=checks,
         options=options,
@@ -122,7 +126,7 @@ async def world() -> World:
         engine=engine,
         sink=sink,
         clock=clock,
-        new_id=Ids("option"),
+        new_id=new_id,
     )
     return World(
         clock,
@@ -132,7 +136,28 @@ async def world() -> World:
         recommendations,
         engine,
         sink,
+        new_id,
         CheckTools(PERSON, CHECK, deps),
+    )
+
+
+async def add_example(world: World, track: Mapping[str, object]) -> None:
+    """Puts an example of the track among the check's options, with the figures of the engine's
+    next simulation, as save_examples leaves each of its own; for a test that needs examples of
+    tracks it chooses."""
+    simulation = world.engine.simulations.pop(0)
+    await world.options.add(
+        Option(
+            id=world.new_id(),
+            check_id=CHECK,
+            loan={"tracks": [track]},
+            source="example",
+            lender=None,
+            offer_date=None,
+            max_term_months=None,
+            summary=simulation.figures,
+            created_at=world.clock.value,
+        )
     )
 
 
@@ -142,8 +167,8 @@ async def ready_for_recommendation(world: World) -> None:
     await world.tools.set_loan(None, "80000")
     await world.tools.set_term(48)
     world.engine.simulations = [PRIME_SIMULATION, BALLOON_SIMULATION]
-    await world.tools.save_option({"tracks": [PRIME_TRACK]})
-    await world.tools.save_option({"tracks": [BALLOON_TRACK]})
+    await add_example(world, PRIME_TRACK)
+    await add_example(world, BALLOON_TRACK)
     world.sink.events.clear()
     world.engine.calls.clear()
     world.clock.value = NOW + timedelta(minutes=5)
@@ -540,15 +565,89 @@ async def test_save_offer_refuses_a_track_listed_twice_naming_both(world: World)
     assert await world.options.list(CHECK) == []
 
 
-async def test_save_option_needs_no_finances(world: World) -> None:
+THIRD_SIMULATION = worst_case(PRIME_SIMULATION, "2100")
+
+
+async def examples_ready(world: World) -> None:
+    """A loan of 80,000 at 48 months with no option yet, and the engine's three simulations."""
     await world.tools.set_loan(None, "80000")
-    world.engine.simulations = [PRIME_SIMULATION]
+    await world.tools.set_term(48)
+    world.engine.simulations = [PRIME_SIMULATION, BALLOON_SIMULATION, THIRD_SIMULATION]
+    world.sink.events.clear()
 
-    summary = await world.tools.save_option({"tracks": [PRIME_TRACK]})
 
-    assert [option.source for option in await world.options.list(CHECK)] == ["example"]
-    assert "present_recommendation" not in summary
+async def test_save_examples_saves_every_track_the_engine_suggests_in_one_call(
+    world: World,
+) -> None:
+    await examples_ready(world)
+
+    summary = await world.tools.save_examples()
+
+    options = await world.options.list(CHECK)
+    assert [option.source for option in options] == ["example"] * 3
+    suggested = await world.engine.suggest(Decimal(80000), 48)
+    assert [option.loan for option in options] == [{"tracks": [track]} for track in suggested]
+    assert len(world.events_of(OPTION_SAVED)) == 3
+    first, second, third = summary.splitlines()
+    assert first.startswith("example 1: track fixed 7.9, not linked, option_id option-1, ")
+    assert second.startswith("example 2: track prime + 2.9, not linked, option_id option-2, ")
+    assert third.startswith("example 3: track fixed 4, linked, option_id option-3, ")
     assert "assess" not in [name for name, _ in world.engine.calls]
+
+
+async def test_save_examples_saves_none_when_the_engine_refuses_one(world: World) -> None:
+    await examples_ready(world)
+    priced = world.engine.simulate
+
+    async def third_refused(loan: Mapping[str, object]) -> Simulation:
+        if len(world.engine.simulations) == 1:
+            raise EngineError("no rate is published")
+        return await priced(loan)
+
+    world.engine.simulate = third_refused  # type: ignore[method-assign]
+
+    with pytest.raises(ToolError, match="example 3: .*no rate is published.*no example"):
+        await world.tools.save_examples()
+
+    assert await world.options.list(CHECK) == []
+    assert world.events_of(OPTION_SAVED) == []
+
+
+async def test_save_examples_keeps_an_example_already_saved_and_adds_the_missing(
+    world: World,
+) -> None:
+    await examples_ready(world)
+    (fixed, _, _) = await world.engine.suggest(Decimal(80000), 48)
+    world.engine.simulations.insert(0, PRIME_SIMULATION)
+    await add_example(world, fixed)
+
+    summary = await world.tools.save_examples()
+
+    assert [option.id for option in await world.options.list(CHECK)] == [
+        "option-1",
+        "option-3",
+        "option-4",
+    ]
+    assert len(world.events_of(OPTION_SAVED)) == 2
+    assert summary.splitlines()[0].startswith("example 1: track fixed 7.9, not linked, option_id ")
+    assert "option_id option-1, " in summary.splitlines()[0]
+
+
+async def test_save_examples_needs_a_confirmed_term(world: World) -> None:
+    await world.tools.set_loan(None, "80000")
+
+    with pytest.raises(ToolError, match="ask_term"):
+        await world.tools.save_examples()
+
+    assert await world.options.list(CHECK) == []
+
+
+async def test_save_examples_passes_on_the_engines_refusal_to_suggest(world: World) -> None:
+    await examples_ready(world)
+    world.engine.suggest_error = EngineError("no rate is published")
+
+    with pytest.raises(ToolError, match="no rate is published"):
+        await world.tools.save_examples()
 
 
 async def test_a_real_offer_removes_the_examples_and_a_recommendation_naming_one(
@@ -583,8 +682,10 @@ async def test_an_example_is_refused_once_the_check_holds_an_offer(world: World)
     world.engine.simulations = [PRIME_SIMULATION]
     await world.tools.save_offer([PRIME_TRACK], "Bank")
 
+    await world.tools.set_term(48)
+
     with pytest.raises(ToolError, match="examples are no longer saved"):
-        await world.tools.save_option({"tracks": [BALLOON_TRACK]})
+        await world.tools.save_examples()
 
     assert len(await world.options.list(CHECK)) == 1
 
@@ -746,13 +847,12 @@ async def test_a_saved_option_is_compared_with_the_others_of_its_term(world: Wor
     await world.tools.set_loan(None, "24000")
     fixed, prime = {**PRIME_TRACK, "principal": "24000"}, {**PRIME_TRACK, "principal": "24000"}
     world.engine.simulations = [figures_of("751", "27035"), figures_of("748", "26935")]
-    await world.tools.save_option({"tracks": [fixed]})
+    await world.tools.save_offer([fixed], "Fund")
 
-    result = await world.tools.save_option({"tracks": [prime]})
+    result = await world.tools.save_offer([prime], "Bank")
 
     assert (
-        "compared: against option option-1: first_payment 3 נמוך (זניח), "
-        "total_paid 100 נמוך (במקצת)"
+        "compared against option option-1: first_payment 3 נמוך (זניח), total_paid 100 נמוך (במקצת)"
     ) in result
 
 
@@ -766,13 +866,13 @@ async def test_a_clear_gap_is_marked_clear_and_another_term_is_not_compared(
         figures_of("900", "30000"),
         figures_of("500", "29000"),
     ]
-    await world.tools.save_option({"tracks": [track]})
-    clear = await world.tools.save_option({"tracks": [track]})
+    await world.tools.save_offer([track], "Fund")
+    clear = await world.tools.save_offer([track], "Bank")
     longer = {**track, "term_months": track["term_months"] + 12}
-    other_term = await world.tools.save_option({"tracks": [longer]})
+    other_term = await world.tools.save_offer([longer], "Agency")
 
     assert "first_payment 149 גבוה (ברור), total_paid 2965 גבוה (ברור)" in clear
-    assert "compared" not in other_term
+    assert "compared against" not in other_term
 
 
 async def two_offer_tracks(world: World) -> None:
@@ -822,8 +922,50 @@ async def fitting_with_room(world: World, offered: OfferTerm, **offer: object) -
 async def test_a_fitting_recommendation_names_its_margin_under_the_ceiling(world: World) -> None:
     result = await fitting_with_room(world, OfferTerm(term_months=48, comfortable=True))
 
-    assert "ceiling_margin: 961 (32%)" in result.splitlines()
+    assert "preferred_ceiling_margin: 961 (32%)" in result.splitlines()
+    assert "alternative_ceiling_margin" not in result
     assert "next_step" not in result
+
+
+async def test_an_option_whose_payment_never_changes_gives_no_historical_figures(
+    world: World,
+) -> None:
+    """A fixed unlinked track has no worst case in history; its figures say the payment never
+    changes and leave the three historical figures out, so no reply has a period to describe."""
+    await world.tools.set_loan(None, "80000")
+    await world.tools.set_term(48)
+    steady = replace(
+        PRIME_SIMULATION.figures, worst_peak_payment=None, worst_start=None, worst_end=None
+    )
+    world.engine.simulations = [replace(PRIME_SIMULATION, figures=steady)]
+    await add_example(world, PRIME_TRACK)
+
+    result = await world.tools.present_recommendation("option-1", REASONING)
+
+    (figures,) = [line for line in result.splitlines() if line.startswith("preferred_figures: ")]
+    assert "payment_changes never" in figures
+    assert "worst" not in figures
+
+
+async def test_a_fitting_recommendation_names_the_margin_of_its_alternative_too(
+    world: World,
+) -> None:
+    await world.tools.set_loan(None, "24000")
+    await world.tools.set_term(48)
+    await world.tools.set_ceiling("3000")
+    dearer = figures_of("760", "27400")
+    world.engine.simulations = [
+        figures_of("751", "27035"),
+        Simulation(replace(dearer.figures, worst_peak_payment=Decimal(2850)), dearer.structured),
+    ]
+    track = {**PRIME_TRACK, "principal": "24000"}
+    await world.tools.save_offer([track, {**track, "prime_spread": "2"}], "Fund")
+
+    result = await world.tools.present_recommendation("option-1", REASONING, "option-2")
+
+    lines = result.splitlines()
+    assert "preferred_ceiling_margin: 961 (32%)" in lines
+    assert "alternative_ceiling_margin: 150 (5%)" in lines
 
 
 async def test_room_under_the_ceiling_offers_the_shortest_term_that_still_fits(
@@ -1042,7 +1184,7 @@ async def test_an_option_of_another_term_is_neither_recommended_nor_offered_as_f
     await ready_for_recommendation(world)
     shorter = {**PRIME_TRACK, "term_months": 36}
     world.engine.simulations = [worst_case(PRIME_SIMULATION, "900")]
-    await world.tools.save_option({"tracks": [shorter]})
+    await add_example(world, shorter)
     await world.tools.set_ceiling("1000")
     world.engine.comfortable_terms = 84
 
@@ -1312,7 +1454,7 @@ async def test_show_chart_passes_the_engine_refusal_to_the_model(world: World) -
         await world.tools.show_chart("prime", 500)
 
 
-async def test_save_option_refuses_an_option_already_saved_with_the_same_figures(
+async def test_save_offer_refuses_an_offer_already_saved_with_the_same_figures(
     world: World,
 ) -> None:
     await world.tools.set_loan(None, "80000")
@@ -1593,8 +1735,8 @@ async def test_an_awaiting_offer_removes_the_examples(world: World) -> None:
     await car_loan(world)
     world.engine.simulations = [PRIME_SIMULATION, BALLOON_SIMULATION]
     of_the_check = {"principal": "45000", "term_months": 60}
-    await world.tools.save_option({"tracks": [{**PRIME_TRACK, **of_the_check}]})
-    await world.tools.save_option({"tracks": [{**BALLOON_TRACK, **of_the_check}]})
+    await add_example(world, {**PRIME_TRACK, **of_the_check})
+    await add_example(world, {**BALLOON_TRACK, **of_the_check})
     await world.tools.present_recommendation("option-1", REASONING)
 
     await world.tools.read_offer("אוויס", "45000", 60, None, "969", [], None)
@@ -1611,7 +1753,7 @@ async def test_an_example_is_refused_while_an_offer_awaits(world: World) -> None
     world.engine.simulations = [PRIME_SIMULATION]
 
     with pytest.raises(ToolError, match="examples are no longer saved") as refused:
-        await world.tools.save_option({"tracks": [{**PRIME_TRACK, "principal": "45000"}]})
+        await world.tools.save_examples()
 
     assert "tell the person" in str(refused.value)
     assert await world.options.list(CHECK) == []

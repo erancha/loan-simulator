@@ -415,7 +415,7 @@ async def test_model_tools_are_the_loan_side_allow_list(engine: McpLoanEngine) -
     tools = await engine.model_tools()
 
     assert {tool.name for tool in tools} == MODEL_ENGINE_TOOLS
-    assert MODEL_ENGINE_TOOLS == {"simulate_loan", "suggest_tracks", "market_series"}
+    assert MODEL_ENGINE_TOOLS == {"simulate_loan", "market_series"}
 
 
 async def test_model_tools_keep_schedule_in_artifact(engine: McpLoanEngine) -> None:
