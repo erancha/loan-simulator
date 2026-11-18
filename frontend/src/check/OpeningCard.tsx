@@ -16,6 +16,7 @@ import {
   openingLoanLine,
   PURPOSE_CHOICES,
 } from './copy.ts'
+import { GroupedAmountInput } from './GroupedAmountInput.tsx'
 import { isRefusal } from './rejection.ts'
 
 type Mode = keyof typeof OPENING_MODE
@@ -45,8 +46,8 @@ interface Props {
 }
 
 /**
- * The card a new check opens with: the loan's goal and its amount, the amount typed directly or
- * worked out from the purchase price less the person's own capital. Pressing the button judges
+ * The card a new check opens with, in two panels: the loan's goal, and its amount, typed directly
+ * or worked out from the purchase price less the person's own capital. Pressing the button judges
  * every box and marks the ones that are empty or out of range, sending nothing; a valid card is
  * sent once, with the amount as a decimal string.
  */
@@ -97,92 +98,77 @@ export function OpeningCard({ onSubmit }: Props) {
     >
       <p className="question-label">{OPENING_TITLE}</p>
 
-      <fieldset className="opening-row">
-        <legend>{OPENING_PURPOSE_LABEL}</legend>
-        <span className="opening-choices">
-          {PURPOSE_CHOICES.map((choice) => (
-            <label key={choice} className="opening-choice">
-              <input
-                type="radio"
-                name={`${id}-purpose`}
-                checked={purpose === choice}
-                onChange={() => setPurpose(choice)}
-              />
-              {choice}
-            </label>
-          ))}
-        </span>
-      </fieldset>
-      {tried && purpose === null && <p className="field-error">{OPENING_PURPOSE_MISSING}</p>}
-
-      <fieldset className="opening-row">
-        <legend>{OPENING_MODE_LABEL}</legend>
-        <span className="opening-choices">
-          {(Object.keys(OPENING_MODE) as Mode[]).map((choice) => (
-            <label key={choice} className="opening-choice">
-              <input
-                type="radio"
-                name={`${id}-mode`}
-                checked={mode === choice}
-                onChange={() => setMode(choice)}
-              />
-              {OPENING_MODE[choice]}
-            </label>
-          ))}
-        </span>
-      </fieldset>
-
-      {mode === 'loan' ? (
-        <div className="opening-row">
-          <label htmlFor={loanId}>{OPENING_MODE.loan}</label>
-          <span className="field-input">
-            <input
-              id={loanId}
-              type="text"
-              inputMode="decimal"
-              dir="ltr"
-              value={loanText}
-              onChange={(event) => setLoanText(event.target.value)}
-            />
-            <span className="unit">₪</span>
+      <div className="opening-panel">
+        <fieldset className="opening-row">
+          <legend>{OPENING_PURPOSE_LABEL}</legend>
+          <span className="opening-choices">
+            {PURPOSE_CHOICES.map((choice) => (
+              <label key={choice} className="opening-choice">
+                <input
+                  type="radio"
+                  name={`${id}-purpose`}
+                  checked={purpose === choice}
+                  onChange={() => setPurpose(choice)}
+                />
+                {choice}
+              </label>
+            ))}
           </span>
-        </div>
-      ) : (
-        <>
+        </fieldset>
+        {tried && purpose === null && <p className="field-error">{OPENING_PURPOSE_MISSING}</p>}
+      </div>
+
+      <div className="opening-panel">
+        <fieldset className="opening-row">
+          <legend>{OPENING_MODE_LABEL}</legend>
+          <span className="opening-choices">
+            {(Object.keys(OPENING_MODE) as Mode[]).map((choice) => (
+              <label key={choice} className="opening-choice">
+                <input
+                  type="radio"
+                  name={`${id}-mode`}
+                  checked={mode === choice}
+                  onChange={() => setMode(choice)}
+                />
+                {OPENING_MODE[choice]}
+              </label>
+            ))}
+          </span>
+        </fieldset>
+
+        {mode === 'loan' ? (
           <div className="opening-row">
-            <label htmlFor={priceId}>{OPENING_PRICE_LABEL}</label>
+            <label htmlFor={loanId}>{OPENING_MODE.loan}</label>
             <span className="field-input">
-              <input
-                id={priceId}
-                type="text"
-                inputMode="decimal"
-                dir="ltr"
-                value={priceText}
-                onChange={(event) => setPriceText(event.target.value)}
-              />
+              <GroupedAmountInput id={loanId} value={loanText} onChange={setLoanText} />
               <span className="unit">₪</span>
             </span>
           </div>
-          <div className="opening-row">
-            <label htmlFor={capitalId}>{OPENING_CAPITAL_LABEL}</label>
-            <span className="field-input">
-              <input
-                id={capitalId}
-                type="text"
-                inputMode="decimal"
-                dir="ltr"
-                value={capitalText}
-                onChange={(event) => setCapitalText(event.target.value)}
-              />
-              <span className="unit">₪</span>
-            </span>
-          </div>
-          {amount !== null && <p className="opening-hint">{openingLoanLine(amount)}</p>}
-        </>
-      )}
-      {tried && covers && <p className="field-error">{OPENING_CAPITAL_COVERS}</p>}
-      {tried && !covers && !amountValid && <p className="field-error">{OPENING_AMOUNT_INVALID}</p>}
-      {rejection !== null && <p className="field-error">{rejection}</p>}
+        ) : (
+          <>
+            <div className="opening-row">
+              <label htmlFor={priceId}>{OPENING_PRICE_LABEL}</label>
+              <span className="field-input">
+                <GroupedAmountInput id={priceId} value={priceText} onChange={setPriceText} />
+                <span className="unit">₪</span>
+              </span>
+            </div>
+            <div className="opening-row">
+              <label htmlFor={capitalId}>{OPENING_CAPITAL_LABEL}</label>
+              <span className="field-input">
+                <GroupedAmountInput id={capitalId} value={capitalText} onChange={setCapitalText} />
+                <span className="unit">₪</span>
+              </span>
+            </div>
+            {amount !== null && <p className="opening-hint">{openingLoanLine(amount)}</p>}
+          </>
+        )}
+        {tried && covers && <p className="field-error">{OPENING_CAPITAL_COVERS}</p>}
+        {tried && !covers && !amountValid && (
+          <p className="field-error">{OPENING_AMOUNT_INVALID}</p>
+        )}
+        {rejection !== null && <p className="field-error">{rejection}</p>}
+      </div>
 
       <div className="question-actions">
         <button type="submit" className="primary" disabled={busy}>

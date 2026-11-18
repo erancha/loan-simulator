@@ -201,7 +201,7 @@ export const FOLD_TITLE = 'למה המספרים האלה'
 
 export const TOTALS_HEADINGS = {
   option: 'אפשרות',
-  today: 'סך התשלומים בתנאים של היום',
+  today: 'סך התשלומים בתנאי היום',
   range: 'טווח בתרחישים',
 } as const
 

@@ -103,6 +103,19 @@ export function formatShekelRange(low: string, high: string): string {
   return `${formatAmount(low)}–${formatAmount(high)} ₪`
 }
 
+/**
+ * An amount as a person is typing it, with its whole part grouped by thousands: "100000" gives
+ * "100,000". Text that is not digits with at most one fraction is returned as typed, so the form
+ * that holds it can still judge it and say what is wrong.
+ */
+export function groupTypedAmount(text: string): string {
+  const match = /^(\d+)(\.\d*)?$/.exec(text.replace(/,/g, ''))
+  if (match === null) return text
+  const [, whole, fraction] = match
+  const grouped = whole.replace(/\B(?=(\d{3})+$)/g, ',')
+  return fraction === undefined ? grouped : grouped + fraction
+}
+
 /** The digits of an amount typed by a person; null when the field is empty. */
 export function normaliseMoneyInput(text: string): string | null {
   const stripped = text.replace(/[\s,₪]/g, '')

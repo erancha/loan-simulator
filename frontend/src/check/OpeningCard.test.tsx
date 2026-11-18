@@ -135,3 +135,23 @@ test('a sent card stays disabled, so a second press sends nothing', async () => 
   await userEvent.click(proceed())
   expect(onSubmit).toHaveBeenCalledOnce()
 })
+
+test('an amount is grouped by thousands as it is typed, and sent as plain digits', async () => {
+  const onSubmit = card()
+  await userEvent.click(goal('רכב'))
+  await userEvent.type(loanBox(), '100000')
+  expect(loanBox()).toHaveValue('100,000')
+
+  await userEvent.click(proceed())
+  expect(onSubmit).toHaveBeenCalledExactlyOnceWith('רכב', '100000')
+})
+
+test('a digit typed in the middle of an amount keeps the caret after it', async () => {
+  card()
+  await userEvent.type(loanBox(), '1000')
+  expect(loanBox()).toHaveValue('1,000')
+
+  await userEvent.type(loanBox(), '5', { initialSelectionStart: 1, initialSelectionEnd: 1 })
+  expect(loanBox()).toHaveValue('15,000')
+  expect((loanBox() as HTMLInputElement).selectionStart).toBe(2)
+})

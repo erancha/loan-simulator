@@ -76,7 +76,7 @@ test('the fold is open and lists totals; it can be closed', async () => {
   expect(fold).toHaveAttribute('open')
   const rows = within(fold).getAllByRole('row').map((row) => row.textContent)
   expect(rows).toHaveLength(4)
-  expect(within(fold).getByRole('columnheader', { name: 'סך התשלומים בתנאים של היום' }))
+  expect(within(fold).getByRole('columnheader', { name: 'סך התשלומים בתנאי היום' }))
     .toBeInTheDocument()
   expect(within(fold).getByRole('columnheader', { name: 'טווח בתרחישים' })).toBeInTheDocument()
   expect(rows[1]).toContain('32,547 ₪')

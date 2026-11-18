@@ -119,9 +119,14 @@ show but take no edit.
 ## The opening card and the chips
 
 A check the person has not started, with nothing in its conversation, shows only the opening card
-(`check/OpeningCard.tsx`), titled "פרטי ההלוואה": no chat box and no chips. It asks for the goal,
-one tap among רכב, שיפוץ and כללי, and the amount, through a switch between "סכום ההלוואה" (one
-box) and "מחיר והון עצמי" (two boxes, with the loan they leave shown under them). המשך judges
+(`check/OpeningCard.tsx`), titled "פרטי ההלוואה": no chat box and no chips. It has two panels,
+one per thing the person decides. The first asks for the goal, one tap among רכב, שיפוץ and כללי.
+The second asks for the amount, through a switch between "סכום ההלוואה" (one box) and "מחיר והון
+עצמי" (two boxes, with the loan they leave shown under them), with the boxes under the switch
+they belong to. Each choice is a button as wide as its share of the row, filled when chosen; its
+radio input stays in the page, out of sight, for the keyboard and screen readers. An amount box
+groups its digits by thousands as the person types (`check/GroupedAmountInput.tsx`), keeping the
+caret after the digit it followed. The card is as wide as the chat allows, up to 26rem. המשך judges
 every box and marks a missing goal, an amount outside 10,000 to 10,000,000 ₪, or own capital that
 covers the price, sending nothing. A valid card goes once to `POST /api/checks/<id>/opening` with
 the goal, the amount as a decimal string and the line "רכב: הלוואה בסך 45,000 ₪"; the agent saves
@@ -129,13 +134,17 @@ the loan and answers with the term card. A refused loan shows the card's own Heb
 the card; any other failure shows the page's notice. Once the check has events, the conversation
 and its chat box take the card's place.
 
-Above the chat box sit up to three chips, in this order. "דוגמאות" and "פריים ומדדים" fill the
-chat box with their sentence for the person to send as it is or change first; "הצעה מגוף מלווה"
-opens the empty offer form at once, while an offer in the person's own words goes through the
-chat box:
+Above the chat box sit up to four chips, in this order. "דוגמאות" and "פריים ומדדים" fill the
+chat box with their sentence for the person to send as it is or change first; the terms chips
+send theirs at once; "הצעה מגוף מלווה" opens the empty offer form at once, while an offer in the
+person's own words goes through the chat box:
 
 - "דוגמאות", while the check has a loan, a term, no option, example or offer, and no awaiting
   offer: its sentence goes to the model, which prices the example tracks.
+- "קיצור תקופה" and "הארכת תקופה", once a recommendation names an option whose term can move, an
+  example or an offer that leaves its term open (`termComparisons` in `check/events.ts`): the
+  first while a term above 6 months remains, the second below the longest term the option's
+  lender allows. The sentence goes to the model, which answers with the terms card.
 - "הצעה מגוף מלווה", once the check has a loan and a term: a tap sends "קיבלתי הצעה להלוואה מגוף
   מלווה" to `POST /api/checks/<id>/offer-sample`, answered with the empty offer form and no model
   call. The same sentence typed by hand goes the same way; any other wording goes to the model.
@@ -192,6 +201,14 @@ takes them as a request for help with the ceiling, as it takes "לא יודע/ת
   חודשי מרבי: 1,000 ₪", to `POST /api/checks/<id>/term-confirmation`. A check with no offer is
   answered with the offer form and no model call; for one with offers the model reads both as
   set rather than judging the line, and recommends on its offers.
+
+The terms card is a question of its own kind too: a table with the recommended option's own term
+first and the next terms shorter or longer under it, each row with its payment today and the
+highest the worst past window would have raised it to, marked in amber when that passes the
+ceiling, with a line under the table saying what the mark means. While the card is live, the
+first row is labelled "התקופה הנוכחית" and each other row has a "לבחור" button, which confirms
+that term exactly as the term card's אישור does; a marked term stays a choice. A closed card
+keeps its table without the buttons.
 
 A term outside 6 to 84 months, or a ceiling the check holds cleared from its box, is refused in
 the bubble. The card's own term typed in the chat ("60" or "60 חודשים") while the card is open

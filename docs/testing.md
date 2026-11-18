@@ -287,8 +287,9 @@ settled that the list does not show refreshes the list once.
 its one box; that a goal and an amount are sent once, the amount as a decimal string; that a price
 and own capital show the loan they leave and send it; that a missing goal or amount, an amount
 outside 10,000 to 10,000,000 ₪, or own capital at or above the price is marked and sends nothing;
-that a refused loan shows the card's own line and keeps the card; and that a sent card stays
-disabled.
+that a refused loan shows the card's own line and keeps the card; that a sent card stays
+disabled; and that an amount is grouped by thousands as it is typed and sent as plain digits,
+with the caret kept after a digit typed in its middle.
 
 **Readings card and offer replies.** `ReadingsCard.test.tsx` proves the card's parts and its
 likely reading chosen; that with no likely reading none is chosen and אישור asks for one; that

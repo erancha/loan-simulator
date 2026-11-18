@@ -12,6 +12,7 @@ import {
   isZero,
   roundedPercent,
   subtractAmounts,
+  groupTypedAmount,
   normaliseMoneyInput,
 } from './money.ts'
 
@@ -111,4 +112,18 @@ test('roundedPercent rounds half up and drops trailing zeros', () => {
   expect(roundedPercent('9.95', 1)).toBe('10')
   expect(roundedPercent('10.54', 1)).toBe('10.5')
   expect(roundedPercent('0.05', 1)).toBe('0.1')
+})
+
+test('groupTypedAmount groups the whole part of an amount as it is typed', () => {
+  expect(groupTypedAmount('100000')).toBe('100,000')
+  expect(groupTypedAmount('1,0000')).toBe('10,000')
+  expect(groupTypedAmount('999')).toBe('999')
+  expect(groupTypedAmount('1234567.5')).toBe('1,234,567.5')
+  expect(groupTypedAmount('1000.')).toBe('1,000.')
+  expect(groupTypedAmount('')).toBe('')
+})
+
+test('groupTypedAmount leaves text that is not an amount as typed', () => {
+  expect(groupTypedAmount('45,000 ₪')).toBe('45,000 ₪')
+  expect(groupTypedAmount('abc')).toBe('abc')
 })
