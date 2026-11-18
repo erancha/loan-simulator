@@ -33,13 +33,13 @@
 # --ec2 also needs the access key pair and region in scripts/lib/aws-config.sh, and deploys to
 # the account its credentials belong to.
 # It creates or updates the CloudFormation stack of scripts/template-ec2.yaml (the git branch
-# selects it: loan-simulator on main, loan-simulator-fb on any other branch): one ARM instance
-# with Docker, a fixed address, and a CloudFront distribution whose https address is the only way
-# in. This repo's stack is the host of the instance; the other Docker Compose repos deploy onto it
-# as guests (EC2_HOST_STACK of their stack-params.sh). It then builds the images here for ARM,
-# loads them into the instance's Docker daemon over SSH, and runs Compose against that daemon. The
-# settings files stay on this machine; each container's own settings, secrets included, reach the
-# instance as part of the container's configuration, which Docker keeps on the instance's
+# selects it: loan-simulator on main, loan-simulator-fb on any other branch): one ARM instance with
+# Docker, a fixed address, and a CloudFront distribution whose https address is the only way in. The
+# stack is that instance's host, unless EC2_HOST_STACK of params.sh names another Docker Compose
+# repo's host stack: then it is a guest on that stack's instance. It then builds the images here for
+# ARM, loads them into the instance's Docker daemon over SSH, and runs Compose against that daemon.
+# The settings files stay on this machine; each container's own settings, secrets included, reach
+# the instance as part of the container's configuration, which Docker keeps on the instance's
 # encrypted disk. The instance type is EC2_INSTANCE_TYPE of stack-params.sh; a change stops and
 # starts the same instance. Register the printed address with Google once (docs/sign-in.md).
 set -euo pipefail

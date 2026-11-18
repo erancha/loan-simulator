@@ -54,7 +54,7 @@ delete_preview() {
   local answer image url
   load_aws_config
   resolve_ec2_stack
-  ec2_stack_exists "$HOST_STACK_NAME" || die "Host stack $HOST_STACK_NAME is not deployed"
+  require_ec2_host_stack
   EC2_INSTANCE_ID="$(ec2_stack_output "$HOST_STACK_NAME" InstanceId)"
   EC2_HOST="$(ec2_stack_output "$HOST_STACK_NAME" PublicAddress)"
   url="$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \

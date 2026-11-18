@@ -186,11 +186,16 @@ machine, and no secret store is involved: each container's own settings, secrets
 reach the instance as part of its configuration, which Docker keeps on the instance's encrypted
 disk. That disk holds the database and outlives the instance.
 
-A preview of the working tree runs beside production on the same instance
-(`deploy.sh --ec2 --preview`): a guest stack of production's, like the other repos' stacks,
-with its own CloudFront address, Compose project and database, so a change is tried on the real
-host, and production's next schema migration rehearsed on a copy of its data, before production
-runs it ([ADR 0013](adr/0013-a-preview-runs-beside-production.md)).
+The instance can serve the other Docker Compose repos too. Any of their stacks can be its host,
+with the instance its own, and the others join it as guests, each with its own port and
+CloudFront distribution; `EC2_HOST_STACK` of `params.sh` names a guest's host
+([ADR 0014](adr/0014-any-docker-repo-can-host-the-instance.md)).
+
+A preview of the working tree runs beside production on the same instance (`deploy.sh --ec2
+--preview`): a guest stack on production's instance, like the other repos' stacks, with its own
+CloudFront address, Compose project and database, so a change is tried on the real host, and
+production's next schema migration rehearsed on a copy of its data, before production runs it
+([ADR 0013](adr/0013-a-preview-runs-beside-production.md)).
 
 ## Storage
 

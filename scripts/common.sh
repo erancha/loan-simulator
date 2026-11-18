@@ -35,6 +35,11 @@ load_settings() {
   source "$STACK_PARAMS_FILE"
   source_checked_file "$PARAMS_FILE" assert_addresses_untracked
   source_checked_file "$SECRETS_FILE" assert_secrets_untracked
+  # The preview runs on production's instance: production's own when production is the host, else
+  # the instance production is a guest on.
+  if [[ "${DEPLOY_PREVIEW:-}" == 1 ]]; then
+    export HOST_STACK_NAME="${EC2_HOST_STACK:-$EC2_STACK}"
+  fi
 }
 
 # Adds each listed setting that is blank or still its example's <placeholder> to

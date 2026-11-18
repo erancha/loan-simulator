@@ -61,9 +61,10 @@ than the license contact (`PUBLISHED_SETTINGS` of `lib/settings-guard.sh`).
 - `docker-helper.sh [--ec2 [--preview]]` — `--stop [--volumes] [--images]`, `--logs [-e]`,
   `--ps`; `--ec2 --delete-stack` deletes the EC2 stack (a host's leaves its disk).
 - `lib/ec2.sh` — the EC2 target: the stack's deploy, SSH with an Instance Connect key, Compose
-  against the instance's daemon. This repo's stack hosts the instance the other Docker Compose
-  repos deploy onto as guests; `template-ec2.yaml`, `lib/ec2.sh`, `lib/settings-guard.sh` and
-  the pre-commit hook are shared with them byte for byte, so change them in all four.
+  against the instance's daemon. The stack is a host, with an instance of its own, or a guest on
+  another Docker Compose repo's instance (`EC2_HOST_STACK` of `params.sh`); `template-ec2.yaml`,
+  `lib/ec2.sh`, `lib/settings-guard.sh` and the pre-commit hook are shared with them byte for byte,
+  so change them in all four.
 - `lib/settings-guard.sh` — the checks behind the pre-commit hook.
 - `tools/sql-helper.sh [--ec2]` — psql on the stack's database; `--counts`, `--rows`,
   `--backup <file>`, `--restore <file>`, `--people`, `--reset <account-id>`, `--reset-all`,

@@ -85,11 +85,13 @@ Docker runs the stack; `deploy.sh` and `docker-helper.sh` stop when it is not re
   into the instance's Docker daemon over SSH and starts the stack there, and prints the
   CloudFront address to open and to register with Google
   ([Sign-in](sign-in.md#setting-up-google)). The git branch selects the stack: `main` deploys
-  `loan-simulator`, any other branch `loan-simulator-fb`; an exported `STACK_NAME` wins. This
-  repo's stack is the instance's host: the other Docker Compose repos deploy onto the same
-  instance as guests, each with its own port and CloudFront distribution
-  ([ADR 0012](adr/0012-the-instance-hosts-the-other-docker-repos.md)). The `EC2` block of
-  `stack-params.sh` names the stack, its port and the instance type, t4g.small; a change of the
+  `loan-simulator`, any other branch `loan-simulator-fb`; an exported `STACK_NAME` wins. The
+  stack is a host, with an instance of its own, while `EC2_HOST_STACK` of `params.sh` is blank;
+  set to another Docker Compose repo's host stack, it deploys onto that instance as a guest, with
+  its own port and CloudFront distribution
+  ([ADR 0014](adr/0014-any-docker-repo-can-host-the-instance.md)); the host goes first. The
+  `EC2` block of `stack-params.sh` names the stack, its port and the instance type a host
+  starts, t4g.small; a change of the
   type stops and starts the same instance, which keeps its disk and its address. Every deploy,
   host or guest, also makes sure the instance has a 1 GB swap file (`prepare_ec2_host` in
   `lib/ec2.sh`), so a burst beyond the instance's 2 GB of memory slows the stacks instead of
@@ -145,7 +147,7 @@ files as production, so the same model key and Google client.
 
 The account needs, once:
 
-- **Production's stack on the current template**, which publishes the instance's address and
+- **The host stack on the current template**, which publishes the instance's address and
   offers four empty security groups attached to the instance: slots that name no guest. A rule
   that admits CloudFront's servers counts as 55 of a group's 60, the size of AWS's list of their
   addresses, so every stack's rule needs a group of its own. A guest's deploy claims a free slot
