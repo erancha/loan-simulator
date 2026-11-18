@@ -217,8 +217,22 @@ export type TermBasis =
   | { kind: 'typed' }
 
 /**
+ * One term of the terms card, priced on the recommended option: the payment today, its highest at
+ * today's rates, the highest the worst period in history would have raised it to (null for a
+ * payment that never changes) and the total paid.
+ */
+export interface TermRow {
+  term_months: number
+  first_payment: string
+  peak_payment: string
+  worst_payment: string | null
+  total_paid: string
+}
+
+/**
  * A field the page asks for, free text with optional choices, the offer to clone the check, which
- * the page words itself, the term to confirm with the first payment it gives, or a lender's offer
+ * the page words itself, the term to confirm with the first payment it gives, the recommended
+ * option priced at its term and at the next terms shorter or longer, or a lender's offer
  * to fill in, with what the person already said about it. A stored
  * question of the first two kinds may carry no `offer_clone`: the log keeps each question as the
  * app version that asked it wrote it.
@@ -233,6 +247,16 @@ export type Question =
       first_payment: string
       /** Absent from a term card stored before the basis was sent; the card then states none. */
       basis?: TermBasis
+    }
+  | {
+      kind: 'terms'
+      direction: 'shorter' | 'longer'
+      /** The recommended option's lender; null for an example. */
+      lender: string | null
+      source: OptionData['source']
+      payment_ceiling: string | null
+      /** The option's own term first, then the terms in the direction asked. */
+      rows: TermRow[]
     }
   | {
       kind: 'offer'

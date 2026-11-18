@@ -89,7 +89,14 @@ an example of another term refused and not named as fitting, and each answer abo
 refusal naming a saved option that fits, else a recommendation presented above the ceiling with its
 remedy, a longer term, the largest loan when 84 months do not fit, and none for a ceiling too low
 for any loan; for a check with offers, the longer term an open offer allows or the turn to the
-lenders, with no example search; and a balloon is judged on its recurring payment. A saved offer
+lenders, with no example search; a term that fits today and passes the ceiling only in the worst
+window is presented with no remedy; and a balloon is judged on its recurring payment. An
+explanation quoting a shekel amount no tool result gave is refused, naming the amounts it may
+quote, while the tools' amounts rounded to the shekel pass. The terms comparison prices the
+recommended offer at the next two shorter or longer terms in whole 6-month steps, leaves out a
+shorter term whose payment today is above the ceiling, stops at the longest term the lender
+allows, and is refused, with the reason, for an offer of a fixed term, a check with no
+recommendation, or no term in that direction. A saved offer
 deletes the check's examples with a recommendation that names one, and the examples are refused once
 the check holds an offer. The examples' tests prove that one call saves every track the engine
 suggests, that an engine refusal of one saves none, that an example already saved is kept while the
@@ -199,14 +206,17 @@ finances events set the check's figures, and an archive and a restore add and dr
 note. An awaiting offer becomes a card entry, a second emit of it replaces the card where it
 stands, a settled offer marks its card and leaves the awaiting offers, identified and unrecognized
 offers are entries of their own, a later message leaves a card unanswered, and a check counts as
-holding an offer with a saved or an awaiting one, not with examples alone.
+holding an offer with a saved or an awaiting one, not with examples alone. The terms chips wait
+for a recommendation, show both for an example, none for an offer of a fixed term, and only the
+shorter one at the longest term the lender allows.
 
 **Card.** `card.test.ts` maps stored results to what the card shows: the decision sentence, the
 green and amber chips for each kind of track (prime, linked, balloon), the offer and example sources
 (the bank average, and a pension fund's terms for the linked example), the three group titles, the
-three check states (unchecked, fits with the ceiling and its source, above with both payments), the
-examples for another term left out of the group while offers stay, the other options cheapest first,
-the awaiting offers listed by lender and kept out of the options, a real offer's price (its interest
+four check states (unchecked, fits with the ceiling and its source, within it today but above it
+in the worst window, above with both payments), the examples for another term left out of the
+group while offers stay, the other options cheapest first, the awaiting offers listed by lender
+and kept out of the options, a real offer's price (its interest
 cost, its rate above, similar to or below the market average, a linked rate on top of the CPI, and
 an offer stored without a price showing its interest cost alone), no label and no comparison for one
 option alone, and the error for a recommended option that is not saved.
@@ -229,7 +239,8 @@ new and streamed text and content that grows by itself until the reader scrolls 
 that a question is its own turn with a control only while live, that a question ending the
 conversation is announced with its lead-in and label, that the "דוגמאות" chip shows with a loan, a
 term and no offer and fills the chat box, and goes once an offer is saved or awaits, that the offer
-chip shows once the check has a loan and a term, that the market chip stays at every stage, and
+chip shows once the check has a loan and a term, that the terms chips show as offered and send
+their sentence at once, that the market chip stays at every stage, and
 that a card the checks list asks to focus is brought into view and highlighted, again on a second
 request, while the log follows the end again once the person scrolls or sends.
 `serverSamples.test.ts` proves which wordings count as the market-data sample and as the offer
@@ -244,10 +255,11 @@ from a new ceiling when the term is left as proposed, refuses a term outside 6 t
 cleared ceiling, and has one button. It is titled "חישוב ראשוני" only on the basis of the assumed
 payment, and "אפשר לקצר" with what it saves on a suggested shorter term, with the line on its
 basis, a card stored without a basis shows its term line alone, its ceiling box has no placeholder
-and may stay empty, and its "תכנון החזר חודשי" link sends its sentence and saves nothing. It also
-proves that a refused save or a non-number keeps the question open with its reason, and that a
-closed bubble
-shows only the question.
+and may stay empty, and its "תכנון החזר חודשי" link sends its sentence and saves nothing. The terms
+card lists each term with its payment today and in the worst window, marks a worst payment above
+the ceiling while keeping its term a choice, confirms a chosen term as the term card does, and
+keeps its table without buttons once answered. It also proves that a refused save or a non-number
+keeps the question open with its reason, and that a closed bubble shows only the question.
 
 **Check page.** `CheckPage.test.tsx` replays a recorded conversation into all three panes and proves
 sending, the cap notice with the local time on a 429, the silent 409, the clone offer's two choices,

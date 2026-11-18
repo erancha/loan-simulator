@@ -4,10 +4,12 @@ import type { AwaitingOffer, Finances, Reading } from '../api/types.ts'
 import {
   INPUT_LABEL, INPUT_PLACEHOLDER,
   questionText,
+  LONGER_TERMS_CHIP,
   MARKET_SAMPLE,
   OFFER_SAMPLE,
   SAMPLES_CHIP,
   SEND_BUTTON,
+  SHORTER_TERMS_CHIP,
   THINKING,
   TO_CARD,
   cloneLine,
@@ -87,6 +89,8 @@ interface Props {
   /** The check has a loan, a term, no option and no awaiting offer, so its examples can be
    * asked for. */
   samplesOffered: boolean
+  /** The terms cards the chips offer, shorter and longer than the recommendation's term. */
+  termChips: { shorter: boolean; longer: boolean }
   /** The awaiting offer whose card the checks list asked to bring into view. */
   focusAwaiting: AwaitingFocus | null
 }
@@ -145,6 +149,7 @@ export function Chat({
   opening,
   offersOpen,
   samplesOffered,
+  termChips,
   focusAwaiting,
   cardReplyId,
   onShowCard,
@@ -171,6 +176,8 @@ export function Chat({
   // Market data is worth asking at any point and costs no model call, so that chip stays.
   const samples = [
     ...(samplesOffered ? [SAMPLES_CHIP] : []),
+    ...(termChips.shorter ? [SHORTER_TERMS_CHIP] : []),
+    ...(termChips.longer ? [LONGER_TERMS_CHIP] : []),
     ...(offersOpen ? [OFFER_SAMPLE] : []),
     MARKET_SAMPLE,
   ]

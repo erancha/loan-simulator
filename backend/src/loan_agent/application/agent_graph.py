@@ -1,7 +1,7 @@
 """The agent loop: a language model leads the Hebrew conversation and calls the engine's tools and
 the check tools until it has a reply for the person, has asked them a question through ask,
-ask_term or ask_offer, or read_offer has put an offer's readings on their screen; each check's
-conversation is one checkpoint thread.
+ask_term, ask_offer or compare_terms, or read_offer has put an offer's readings on their screen;
+each check's conversation is one checkpoint thread.
 
 - build_agent_graph: the model node and the tool node over the thread's messages, as an
   AgentGraph; a reply's tool calls skip the tool node and are refused when an argument holds a
@@ -40,8 +40,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from loan_agent.application.check_tools import (
     READING_ON_SCREEN,
+    TERM_STEP,
     ChartSeries,
     CheckTools,
+    TermDirection,
     ToolDeps,
     ToolError,
     english_words,
@@ -169,6 +171,15 @@ class AskTermArgs(_Args):
         default=None,
         description="The number of months the person typed, for a card with that term's first "
         "payment; omit for the card's proposed term",
+    )
+    # Filled by the tool node from the graph state and hidden from the model's schema.
+    state: Annotated[MessagesState, InjectedState]
+
+
+class CompareTermsArgs(_Args):
+    direction: TermDirection = Field(
+        description="shorter when the person asks for fewer payments or a shorter term, longer "
+        "when they ask for more payments, a longer term or a lower monthly payment"
     )
     # Filled by the tool node from the graph state and hidden from the model's schema.
     state: Annotated[MessagesState, InjectedState]
@@ -416,6 +427,14 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
         _require_one_question(state)
         return await _tools_for(config, deps).ask_term(term_months)
 
+    async def compare_terms(
+        direction: TermDirection,
+        config: RunnableConfig,
+        state: Annotated[MessagesState, InjectedState],
+    ) -> str:
+        _require_one_question(state)
+        return await _tools_for(config, deps).compare_terms(direction)
+
     async def ask_offer(
         config: RunnableConfig,
         state: Annotated[MessagesState, InjectedState],
@@ -516,6 +535,18 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
             "term_months the card proposes the term from the check's ceiling or, with none, from "
             "an assumed first payment, and states which.",
             args_schema=AskTermArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=compare_terms,
+            name="compare_terms",
+            description="Show the terms card: the recommended option priced at its term and at "
+            f"the next terms {TERM_STEP} months apart in the direction the person asked, each with "
+            "its payment today and in the worst historical period against the ceiling, with a "
+            "button to choose each; the turn ends, and a chosen term arrives as the person's next "
+            "message. Call it when the person asks for a shorter or longer term without naming a "
+            "number. Refused, with what to tell the person, when no term in that direction is "
+            "possible.",
+            args_schema=CompareTermsArgs,
         ),
         StructuredTool.from_function(
             coroutine=ask_offer,
@@ -627,14 +658,14 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
 
 
 # The tools that put a question on the person's screen and end the turn.
-_QUESTION_TOOLS = frozenset({"ask", "ask_term", "ask_offer"})
+_QUESTION_TOOLS = frozenset({"ask", "ask_term", "ask_offer", "compare_terms"})
 
 
 def _require_one_question(state: MessagesState) -> None:
     if _question_call_count(state) > 1:
         raise ToolException(
-            "one question per turn: call ask, ask_term or ask_offer once, with the one question to "
-            "ask now"
+            "one question per turn: call ask, ask_term, ask_offer or compare_terms once, with the "
+            "one question to ask now"
         )
 
 
@@ -716,10 +747,10 @@ def _correction_for(reply: AIMessage, messages: Sequence[BaseMessage], check_id:
 
 
 def _after_tools(state: MessagesState) -> Literal["model", "__end__"]:
-    """Ends the turn once ask, ask_term or ask_offer put a question on the person's screen, or
-    when every result of the reply's calls is a reading on the screen, which the person answers
-    there. A refused question, an identified offer, a refusal and any other tool's result go back
-    to the model."""
+    """Ends the turn once ask, ask_term, ask_offer or compare_terms put a question on the person's
+    screen, or when every result of the reply's calls is a reading on the screen, which the person
+    answers there. A refused question, an identified offer, a refusal and any other tool's result
+    go back to the model."""
     asked = _question_call_ids(state)
     results: list[ToolMessage] = []
     for message in reversed(state["messages"]):

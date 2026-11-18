@@ -1,8 +1,13 @@
 import { type FormEvent, useState } from 'react'
-import type { Finances, Question, QuestionField, TermBasis } from '../api/types.ts'
-import { formatAmount, normaliseMoneyInput } from '../money.ts'
+import type { Finances, Question, QuestionField, TermBasis, TermRow } from '../api/types.ts'
+import { exceeds, formatAmount, formatShekels, normaliseMoneyInput } from '../money.ts'
 import {
   ANSWER,
+  CHOOSE_TERM,
+  CURRENT_TERM,
+  STEADY_PAYMENT,
+  TERMS_HEADINGS,
+  termsCeilingNote,
   amountText,
   answerLine,
   CEILING_CLEARED,
@@ -65,10 +70,10 @@ function isFinancesField(field: QuestionField): field is keyof Finances {
 }
 
 /**
- * A question with a field of its own or the model's own sentence: everything but the term card
- * and the offer form.
+ * A question with a field of its own or the model's own sentence: everything but the term card,
+ * the terms card and the offer form.
  */
-type FieldQuestion = Exclude<Question, { kind: 'term' | 'offer' }>
+type FieldQuestion = Exclude<Question, { kind: 'term' | 'terms' | 'offer' }>
 
 interface Props {
   entry: QuestionEntry
@@ -133,8 +138,9 @@ function MoneyBox(props: {
 
 /**
  * A question the model asked, as an assistant bubble: the lead-in, the label and, while live, a
- * control fitted to the question. The term card confirms or changes the calculated term, and the
- * offer form takes a lender's offer; every other question is a field's, handled by FieldBubble.
+ * control fitted to the question. The term card confirms or changes the calculated term, the
+ * terms card chooses among the recommendation's term and the terms beside it, and the offer form
+ * takes a lender's offer; every other question is a field's, handled by FieldBubble.
  */
 export function QuestionBubble(props: Props) {
   const { question } = props.entry
@@ -147,6 +153,9 @@ export function QuestionBubble(props: Props) {
         basis={question.basis}
       />
     )
+  }
+  if (question.kind === 'terms') {
+    return <TermsBubble {...props} question={question} />
   }
   if (question.kind === 'offer') {
     return (
@@ -295,6 +304,91 @@ function TermBubble({
           </div>
         </form>
       )}
+    </div>
+  )
+}
+
+type TermsQuestion = Extract<Question, { kind: 'terms' }>
+
+/**
+ * The terms card: the recommended option at its own term and at the terms shorter or longer, one
+ * row each with the payment today and the highest the worst period in history would have raised
+ * it to, marked when that passes the ceiling. Such a term stays a choice: the mark informs the
+ * person, who decides. While live, each other term has a button that confirms it, saved by the
+ * page like a confirmed term card; the person may also go on in the chat.
+ */
+function TermsBubble({ entry, live, onAnswer, question }: Props & { question: TermsQuestion }) {
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const ceiling = question.payment_ceiling
+
+  function aboveInTheWorstPeriod(row: TermRow): boolean {
+    return ceiling !== null && row.worst_payment !== null && exceeds(row.worst_payment, ceiling)
+  }
+
+  async function choose(months: number) {
+    setError(null)
+    setBusy(true)
+    try {
+      await onAnswer(termConfirmation(months, null))
+    } catch (caught) {
+      setError(rejectionText(caught))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="bubble bubble-assistant bubble-question">
+      {entry.leadIn !== null && <p className="question-lead-in">{entry.leadIn}</p>}
+      <p className="question-label">{withValues(questionText(question))}</p>
+      <table className="terms-table">
+        <thead>
+          <tr>
+            <th scope="col">{TERMS_HEADINGS.term}</th>
+            <th scope="col">{TERMS_HEADINGS.today}</th>
+            <th scope="col">{TERMS_HEADINGS.worst}</th>
+            {live && <td />}
+          </tr>
+        </thead>
+        <tbody>
+          {question.rows.map((row, index) => (
+            <tr key={row.term_months} className={index === 0 ? 'terms-current' : undefined}>
+              <th scope="row">{row.term_months}</th>
+              <td>{formatShekels(row.first_payment)}</td>
+              <td>
+                {row.worst_payment === null ? (
+                  STEADY_PAYMENT
+                ) : (
+                  <span className={aboveInTheWorstPeriod(row) ? 'chip chip-amber' : undefined}>
+                    {formatShekels(row.worst_payment)}
+                  </span>
+                )}
+              </td>
+              {live && (
+                <td>
+                  {index === 0 ? (
+                    <span className="terms-current-label">{CURRENT_TERM}</span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="primary"
+                      disabled={busy}
+                      onClick={() => void choose(row.term_months)}
+                    >
+                      {CHOOSE_TERM}
+                    </button>
+                  )}
+                </td>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {ceiling !== null && question.rows.some(aboveInTheWorstPeriod) && (
+        <p className="card-note">{withValues(termsCeilingNote(ceiling))}</p>
+      )}
+      {error !== null && <p className="field-error">{error}</p>}
     </div>
   )
 }

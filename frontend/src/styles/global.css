@@ -541,6 +541,48 @@ fieldset.field.changed {
   grid-column: 1 / -1;
 }
 
+/* Three or four narrow columns fit a phone's bubble; the numbers align for comparing down a
+   column. */
+.terms-table {
+  margin-top: 10px;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.terms-table th,
+.terms-table td {
+  padding: 4px 8px;
+  text-align: start;
+  white-space: nowrap;
+}
+
+/* A heading may wrap, so the widest one does not widen its column past its amounts. */
+.terms-table thead th {
+  color: var(--mute);
+  font-size: 0.85rem;
+  font-weight: 400;
+  white-space: normal;
+}
+
+.terms-table tbody tr + tr {
+  border-top: 1px solid var(--line);
+}
+
+.terms-current th,
+.terms-current td {
+  font-weight: 600;
+}
+
+.terms-current-label {
+  color: var(--mute);
+  font-size: 0.85rem;
+  font-weight: 400;
+}
+
+.terms-table button {
+  padding: 2px 12px;
+}
+
 /* The line under a question card's title that says what the card is for. */
 .card-note {
   margin: 6px 0 0;

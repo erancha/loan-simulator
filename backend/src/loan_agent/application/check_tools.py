@@ -8,9 +8,10 @@ recommendation, with the guardrail that keeps a recommendation honest.
   of its loan amount or an awaiting offer), save_offer (each track of a real offer as an option
   of its own, removing the check's examples) and
   present_recommendation, each returning a compact key: value summary for the model and
-  emitting an event for the page; ask, ask_term and ask_offer, emitting a question for the page
-  and returning ASKED_RESULT, after which the turn ends; show_chart, emitting a market series
-  for the page
+  emitting an event for the page; ask, ask_term, ask_offer and compare_terms (the recommended
+  option priced at its term and the next terms in the direction the person asked), emitting a
+  question for the page and returning ASKED_RESULT, after which the turn ends; show_chart,
+  emitting a market series for the page
 - Reading an offer described in words: read_offer prices its readings with the engine and, by
   offer_reading's decision, saves the one its payment fits, keeps it awaiting the lender with
   the readings its card shows, or reports its type unrecognized; an offer quoted for less than
@@ -94,9 +95,17 @@ ChartSeries = Literal["prime", "cpi"]
 _CHART_SERIES: tuple[str, ...] = get_args(ChartSeries)
 
 # The engine's shortest and longest terms (MIN_TERM and MAX_TERM of the engine's limits), which
-# the agent cannot import; the engine refuses a term outside them.
+# the agent cannot import; the engine refuses a term outside them. TERM_STEP is the step of the
+# engine's term searches (TERM_STEP of its assumptions): lenders quote terms in whole half-years,
+# so a comparison of terms moves by it too.
 MIN_TERM = 6
 MAX_TERM = 84
+TERM_STEP = 6
+
+TermDirection = Literal["shorter", "longer"]
+
+# How many terms a comparison shows beside the current one.
+_COMPARED_TERMS = 2
 
 ASKED_RESULT = (
     "The question is on the person's screen and this turn ends here; their answer arrives as the "
@@ -141,6 +150,15 @@ _PERSON_DECIDES = (
     "recommendation stands and the remedy is not offered again."
 )
 
+
+# The term a person keeps although only the worst period of history puts it above their ceiling
+# is an informed choice: the card warns of that period, and the model does not push back.
+_HISTORY_ONLY = (
+    "Today's payment fits the ceiling, so the card marks the recommendation as within the ceiling "
+    "today and above it only in the worst historical period. Say so in one sentence with both "
+    "payments and that period's dates. Do not suggest another term or amount, in this turn or "
+    "later: the person chose this term, and the comparison chips let them look at other terms"
+)
 
 _EXAMPLES_REFUSED = (
     "this check holds a real offer, so examples are no longer saved: the check compares real "
@@ -292,6 +310,66 @@ class CheckTools:
             "lender": lender,
             "tracks": [dict(track) for track in tracks],
             "max_term_months": max_term_months,
+        }
+        await self._deps.sink.emit(
+            self._check_id, QUESTION_ASKED, {"question": question, "lead_in": None}
+        )
+        return ASKED_RESULT
+
+    async def compare_terms(self, direction: TermDirection) -> str:
+        """Shows the person a card that prices the recommendation's preferred option at its own
+        term and at the next terms TERM_STEP months apart in the direction they asked for, each
+        with its payment today and in the worst period history holds, so they see what a change
+        costs before choosing one there. A shorter term whose payment today is already above the
+        ceiling is left out, since nobody can choose it; a longer one stops at the longest term
+        the option's lender allows."""
+        check = await self._check()
+        _require_loan(check, "compare_terms")
+        if check.term_months is None:
+            raise ToolError(
+                "the check has no term yet; show the term card with ask_term without term_months"
+            )
+        recommendation = await self._deps.recommendations.latest(self._check_id)
+        if recommendation is None:
+            raise ToolError(
+                "the comparison prices the recommended option, and the check has no "
+                "recommendation yet; save the options and call present_recommendation first"
+            )
+        preferred = await self._deps.options.get(self._check_id, recommendation.preferred_option_id)
+        if preferred.source == "offer" and preferred.max_term_months is None:
+            raise ToolError(
+                "the recommended offer's lender fixed its term, so no other term can be priced; "
+                "tell the person in one line and suggest asking the lender for another term"
+            )
+        (track,) = cast(list[Mapping[str, object]], preferred.loan["tracks"])
+        current = cast(int, track["term_months"])
+        longest = MAX_TERM if preferred.max_term_months is None else preferred.max_term_months
+        ceiling = check.payment_ceiling
+        terms = _compared_terms(current, direction, longest)
+        if not terms:
+            raise ToolError(_no_other_term(direction, current, longest))
+        rows = [_term_row(current, preferred.summary)]
+        for term in terms:
+            priced = {"tracks": [{**track, "term_months": term}]}
+            try:
+                figures = (await self._deps.engine.simulate(priced)).figures
+            except EngineError as error:
+                raise ToolError(
+                    f"The engine refused to price the option at {term} months: {error}"
+                ) from None
+            # A shorter term only raises the payment, so the terms after this one are above too.
+            if direction == "shorter" and ceiling is not None and figures.peak_payment > ceiling:
+                break
+            rows.append(_term_row(term, figures))
+        if len(rows) == 1:
+            raise ToolError(_all_above_ceiling(ceiling))
+        question = {
+            "kind": "terms",
+            "direction": direction,
+            "lender": preferred.lender,
+            "source": preferred.source,
+            "payment_ceiling": _json_value(ceiling),
+            "rows": rows,
         }
         await self._deps.sink.emit(
             self._check_id, QUESTION_ASKED, {"question": question, "lead_in": None}
@@ -925,7 +1003,9 @@ class CheckTools:
         another term is refused, and offers count at any term, since the term's save prices them
         at it. A named option above the ceiling is refused while a saved option for the term
         fits; when none does, the person's term stands, so the recommendation is presented above
-        the ceiling and its result names the remedy for the model to offer."""
+        the ceiling and its result names the remedy for the model to offer. When the payment
+        today fits and only the worst period of history passes the ceiling, the result offers no
+        remedy: the card warns of that period, and the person's choice stands."""
         check = await self._check()
         loan = _require_loan(check, "a recommendation")
         if not reasoning.strip():
@@ -983,6 +1063,7 @@ class CheckTools:
             if ceiling is None or above_ceiling is not None
             else await self._shorter_term(preferred, ceiling)
         )
+        _require_known_amounts(reasoning, _quotable_amounts(loan, ceiling, named, options, shorter))
 
         recommendation = Recommendation(
             check_id=self._check_id,
@@ -1065,7 +1146,8 @@ class CheckTools:
         """Called when a named option is above the ceiling. Refuses while a saved option for the
         term fits, saying which argument to change: the preferred option, or only the
         alternative when the preferred one fits. Otherwise returns what the presented
-        recommendation's result tells the model."""
+        recommendation's result tells the model: a warning alone when every named option fits
+        today, else the remedy."""
         named = [("preferred", preferred), *([("alternative", alternative)] if alternative else [])]
         payments = "; ".join(
             f"the {role} option {option.id} has a worst-case monthly payment of "
@@ -1074,6 +1156,8 @@ class CheckTools:
             if not _fits(option, ceiling)
         )
         fitting = [option for option in options if _fits(option, ceiling)]
+        if not fitting and all(_fits_today(option, ceiling) for _, option in named):
+            return f"{payments}. {_HISTORY_ONLY}"
         if not fitting:
             return (
                 f"{payments}, and no saved option for the term fits, so the card marks the "
@@ -1260,6 +1344,53 @@ def _term_basis(
     return {"kind": kind, "amount": str(amount), "fits": fits}
 
 
+def _compared_terms(current: int, direction: TermDirection, longest: int) -> list[int]:
+    """The terms a comparison prices beside the current one: the next whole multiples of
+    TERM_STEP in the direction asked, within MIN_TERM and the longest term the lender allows. A
+    current term between two multiples, such as 70, moves to the nearer one first (66 or 72)."""
+    if direction == "shorter":
+        first = (current - 1) // TERM_STEP * TERM_STEP
+        terms = [first - TERM_STEP * step for step in range(_COMPARED_TERMS)]
+        return [term for term in terms if term >= MIN_TERM]
+    first = (current // TERM_STEP + 1) * TERM_STEP
+    terms = [first + TERM_STEP * step for step in range(_COMPARED_TERMS)]
+    return [term for term in terms if term <= longest]
+
+
+def _term_row(term_months: int, figures: OptionFigures) -> dict[str, object]:
+    """One row of the terms card: the payment today, the highest at today's rates, the worst
+    history holds (None for a payment that never changes) and the total."""
+    return {
+        "term_months": term_months,
+        "first_payment": str(figures.first_payment),
+        "peak_payment": str(figures.peak_payment),
+        "worst_payment": _json_value(figures.worst_peak_payment),
+        "total_paid": str(figures.total_paid),
+    }
+
+
+def _no_other_term(direction: TermDirection, current: int, longest: int) -> str:
+    """The refusal of a comparison with no term to price beside the current one."""
+    if direction == "longer":
+        return (
+            f"{current} months is already the longest term the option allows ({longest}); tell "
+            "the person in one line"
+        )
+    return (
+        f"{current} months is already the shortest term the simulator prices; tell the person "
+        "in one line"
+    )
+
+
+def _all_above_ceiling(ceiling: Decimal | None) -> str:
+    """The refusal of a shorter-term comparison whose every shorter term is above the ceiling."""
+    assert ceiling is not None, "only the ceiling leaves out a shorter term the engine prices"
+    return (
+        f"at every shorter term the payment today is already above the ceiling of {ceiling}; "
+        "tell the person in one line, and that a higher ceiling or a smaller loan would allow one"
+    )
+
+
 def _require_term(term_months: int) -> None:
     if not MIN_TERM <= term_months <= MAX_TERM:
         raise ToolError(
@@ -1285,6 +1416,12 @@ def _known_fields(check: Check) -> dict[str, object]:
 def _fits(option: Option, ceiling: Decimal) -> bool:
     """A balloon is paid once at the end, so the test reads the recurring payment only."""
     return option.summary.risk_payment <= ceiling
+
+
+def _fits_today(option: Option, ceiling: Decimal) -> bool:
+    """Whether the option's highest payment at today's rates stays within the ceiling, whatever
+    the worst period history holds."""
+    return option.summary.peak_payment <= ceiling
 
 
 # The person reads Hebrew only, while the instructions and the tools' results the model reads name
@@ -1382,6 +1519,67 @@ def _shorter_term_step(shorter: _ShorterTerm) -> str:
         "call it shorter or cheaper, or say the option 'also' fits at it. If they keep their "
         "term, do not offer it again"
     )
+
+
+# A shekel amount as the person reads it in Hebrew text: digits, grouped by commas or not, with
+# any fraction, before the shekel sign or its written forms.
+_SHEKEL_AMOUNT = re.compile(r"(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?\s*(?:₪|ש\"ח|שקל)")
+
+# An amount quoted to the shekel may be rounded either way from the figure it quotes.
+_ROUNDING_SLACK = Decimal(1)
+
+
+def _quotable_amounts(
+    loan: LoanRequest,
+    ceiling: Decimal | None,
+    named: Sequence[Option],
+    options: Sequence[Option],
+    shorter: _ShorterTerm | None,
+) -> set[Decimal]:
+    """Every shekel amount the recommendation's tool results put before the model, to the
+    shekel: the loan and the ceiling; each option's money figures, interest cost and principal;
+    each named option's margin under the ceiling and its gaps from the options of its term, as
+    the save results compare them; and the shorter term's figures."""
+    amounts = {loan.amount, *([] if ceiling is None else [ceiling])}
+    for option in [*named, *options]:
+        figures = option.summary
+        amounts |= {figures.first_payment, figures.peak_payment, figures.total_paid}
+        for optional in (figures.worst_peak_payment, figures.balloon_due):
+            if optional is not None:
+                amounts.add(optional)
+        amounts |= {option.interest_cost, option.principal}
+    for option in named:
+        if ceiling is not None:
+            amounts.add(ceiling - option.summary.risk_payment)
+        for other in options:
+            if _terms(other) == _terms(option):
+                amounts.add(abs(option.summary.total_paid - other.summary.total_paid))
+                amounts.add(abs(option.summary.first_payment - other.summary.first_payment))
+    if shorter is not None:
+        amounts |= {shorter.worst_payment, shorter.saving}
+    return {shekels(amount) for amount in amounts}
+
+
+def _require_known_amounts(reasoning: str, known: set[Decimal]) -> None:
+    """Refuses reasoning that quotes a shekel amount no tool result gave, so the card never shows
+    a figure the model made up; the refusal lists the amounts it may quote."""
+    unknown = [
+        match.group(0)
+        for match in _SHEKEL_AMOUNT.finditer(reasoning)
+        if not any(abs(_quoted(match) - amount) <= _ROUNDING_SLACK for amount in known)
+    ]
+    if unknown:
+        listed = ", ".join(str(amount) for amount in sorted(known))
+        raise ToolError(
+            f"reasoning quotes {', '.join(unknown)}, which no tool result gave; quote only these "
+            f"amounts, to the shekel: {listed}; or leave the amount out"
+        )
+
+
+def _quoted(match: re.Match[str]) -> Decimal:
+    """The amount a _SHEKEL_AMOUNT match quotes, to the shekel."""
+    whole, fraction = match.group(1).replace(",", ""), match.group(2)
+    return shekels(Decimal(whole if fraction is None else whole + fraction))
 
 
 def _margin(option: Option, ceiling: Decimal) -> str:

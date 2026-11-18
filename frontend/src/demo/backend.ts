@@ -163,13 +163,14 @@ function examplesOnly({ preferred, alternative }: RecommendationPresented): bool
 
 /**
  * What the person typed for a message, or null for a tap (a skip or a choice), which types nothing,
- * and for an answer to the term card or the offer form, which is worded from several boxes.
+ * for an answer to the term card or the offer form, which is worded from several boxes, and for a
+ * term chosen on the terms card, a tap too.
  * An answer to any other live question was typed into the question's own box, as its value alone:
  * the money box shows its own ₪. Any other message was typed into the chat's composer.
  */
 function entryOf(text: string, live: Question | null): Entry | null {
   if (live === null) return { box: INPUT_LABEL, value: text }
-  if (live.kind === 'term' || live.kind === 'offer') return null
+  if (live.kind !== undefined) return null
   const label = questionLabel(live)
   const prefix = answerLine(label, '')
   if (!text.startsWith(prefix)) return null

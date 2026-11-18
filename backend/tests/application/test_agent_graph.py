@@ -79,6 +79,7 @@ SIMULATION_SUMMARY = "first_payment: 1887.99\nworst_peak_payment: 2038.63"
 CHECK_TOOL_NAMES = {
     "set_loan",
     "ask_term",
+    "compare_terms",
     "ask_offer",
     "set_term",
     "set_ceiling",

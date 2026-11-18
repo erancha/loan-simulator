@@ -27,6 +27,7 @@ import type {
   RecommendationPresented,
 } from '../api/types.ts'
 import { exceeds } from '../money.ts'
+import { TERM_MAX_MONTHS, TERM_MIN_MONTHS } from './copy.ts'
 
 export interface ChatMessage {
   id: string
@@ -426,6 +427,25 @@ export function isArchived(state: Pick<CheckState, 'messages'>): boolean {
 /** The check holds an option, example or offer, or an offer waiting on the lender's answer. */
 export function holdsOption(state: CheckState): boolean {
   return state.options.size > 0 || state.awaiting.size > 0
+}
+
+/**
+ * Which terms cards the chips offer. None until a recommendation names an option whose term can
+ * move: an example, or an offer that leaves its term open. Shorter while a term above the
+ * shortest the simulator prices remains; longer below the longest the option's lender allows.
+ * The agent refuses, saying why, a card whose every shorter term is above the ceiling.
+ */
+export function termComparisons(state: CheckState): { shorter: boolean; longer: boolean } {
+  if (state.recommendation === null) return { shorter: false, longer: false }
+  const id = state.recommendation.preferred.option_id
+  const preferred = state.options.get(id)
+  if (preferred === undefined) throw new Error(`the recommendation names option ${id}, not held`)
+  if (preferred.source === 'offer' && preferred.max_term_months === null) {
+    return { shorter: false, longer: false }
+  }
+  const [track] = preferred.loan.tracks
+  const longest = preferred.max_term_months === null ? TERM_MAX_MONTHS : preferred.max_term_months
+  return { shorter: track.term_months > TERM_MIN_MONTHS, longer: track.term_months < longest }
 }
 
 // Last, unanswered and idle means no person's message follows the question: the backend stores

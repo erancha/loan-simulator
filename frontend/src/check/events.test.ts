@@ -40,6 +40,7 @@ import {
   quotedBelowLoan,
   recommendationReplyId,
   reduce,
+  termComparisons,
 } from './events.ts'
 
 const play = (events: CheckEvent[]) => events.reduce(reduce, initialState)
@@ -423,4 +424,33 @@ test('holdsOption is true for an example, a saved offer or an awaiting one', () 
   expect(holdsOption(play([optionPrime36]))).toBe(true)
   expect(holdsOption(play([optionOfferFixed]))).toBe(true)
   expect(holdsOption(play([offerAwaiting(9, awaitingAvis)]))).toBe(true)
+})
+
+/** A recommendation of the offer, as presented with its data. */
+function recommending(offer: typeof optionOfferFixed): CheckEvent {
+  return {
+    ...withSeq(recommendationPrime, 20),
+    data: { ...recommendationPrime.data, preferred: offer.data },
+  }
+}
+
+test('the terms chips wait for a recommendation and follow its option', () => {
+  expect(termComparisons(play([optionPrime36]))).toEqual({ shorter: false, longer: false })
+  expect(termComparisons(play([optionPrime36, recommendationPrime]))).toEqual({
+    shorter: true,
+    longer: true,
+  })
+})
+
+test('an offer whose lender fixed its term offers no terms chip', () => {
+  const state = play([optionOfferFixed, recommending(optionOfferFixed)])
+  expect(termComparisons(state)).toEqual({ shorter: false, longer: false })
+})
+
+test('an offer at the longest term its lender allows offers only the shorter chip', () => {
+  const open = { ...optionOfferFixed, data: { ...optionOfferFixed.data, max_term_months: 36 } }
+  expect(termComparisons(play([open, recommending(open)]))).toEqual({
+    shorter: true,
+    longer: false,
+  })
 })

@@ -632,3 +632,87 @@ it('an income answer hands its update with its line', async () => {
     update: { net_fixed_income: '9000' },
   })
 })
+
+/** The terms card of a car loan under a ceiling of 2,000: 72 months as recommended, then 66 and
+ * 60, whose worst-period payment passes the ceiling. */
+const termsQuestion: Question = {
+  kind: 'terms',
+  direction: 'shorter',
+  lender: 'Bank',
+  source: 'offer',
+  payment_ceiling: '2000',
+  rows: [
+    {
+      term_months: 72,
+      first_payment: '1645.51',
+      peak_payment: '1645.51',
+      worst_payment: '1799.00',
+      total_paid: '118476.95',
+    },
+    {
+      term_months: 66,
+      first_payment: '1770.94',
+      peak_payment: '1770.94',
+      worst_payment: '1936.13',
+      total_paid: '116881.98',
+    },
+    {
+      term_months: 60,
+      first_payment: '1921.68',
+      peak_payment: '1921.68',
+      worst_payment: '2100.93',
+      total_paid: '115300.61',
+    },
+  ],
+}
+
+function renderTerms(live: boolean, onAnswer = vi.fn().mockResolvedValue(true)) {
+  render(
+    <QuestionBubble
+      entry={entryFor(termsQuestion)}
+      live={live}
+      finances={null}
+      ceiling="2000"
+      ceilingFormula={null}
+      onAnswer={onAnswer}
+      onSkip={vi.fn()}
+      onClone={vi.fn()}
+    />,
+  )
+  return onAnswer
+}
+
+it('the terms card lists each term with its payment today and in the worst period', () => {
+  renderTerms(true)
+  expect(screen.getByText(wholeText('חישבתי את ההמלצה ל-72, 66 ו-60 חודשים'))).toBeInTheDocument()
+  const rows = screen.getAllByRole('row').slice(1).map((row) => row.textContent)
+  expect(rows).toEqual([
+    '721,646 ₪1,799 ₪התקופה הנוכחית',
+    '661,771 ₪1,936 ₪לבחור',
+    '601,922 ₪2,101 ₪לבחור',
+  ])
+})
+
+it('a worst-period payment above the ceiling is marked and stays a choice', () => {
+  renderTerms(true)
+  expect(screen.getByText('2,101 ₪')).toHaveClass('chip-amber')
+  expect(screen.getByText('1,936 ₪')).not.toHaveClass('chip-amber')
+  expect(screen.getByText(wholeText(/^מסומן: .*2,000 ₪/))).toHaveClass('card-note')
+  expect(screen.getAllByRole('button', { name: 'לבחור' })).toHaveLength(2)
+})
+
+it('choosing a term confirms it as the term card does', async () => {
+  const onAnswer = renderTerms(true)
+  await userEvent.setup().click(screen.getAllByRole('button', { name: 'לבחור' })[1])
+  expect(onAnswer).toHaveBeenCalledExactlyOnceWith({
+    line: 'אישור: 60 חודשים',
+    term: 60,
+    ceiling: null,
+  })
+})
+
+it('an answered terms card keeps its table without the buttons', () => {
+  renderTerms(false)
+  expect(screen.getAllByRole('row')).toHaveLength(4)
+  expect(screen.queryByRole('button')).toBeNull()
+})

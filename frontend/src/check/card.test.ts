@@ -374,6 +374,19 @@ test('a recommendation above the ceiling shows both payments', () => {
   expect(card.checkNote).toBe('מעל התקרה שלך: 955 ₪ מול 900 ₪')
 })
 
+test('a recommendation above the ceiling only in the worst period says it fits today', () => {
+  const between: CheckEvent = {
+    ...ceilingSet,
+    seq: 7,
+    data: { ...ceilingSet.data, payment_ceiling: '930' },
+  }
+  const card = buildCard(stateOf(optionPrime36, optionFixed36, recommendationPrime, between))
+  expect(card.check).toBe('history')
+  expect(card.checkNote).toBe(
+    'בתוך התקרה שלך היום; בתקופה הגרועה בעבר ההחזר היה מגיע ל-955 ₪ מול 930 ₪',
+  )
+})
+
 test('awaiting offers are listed by lender and are not among the options', () => {
   const card = buildCard(stateOf(optionPrime36, offerAwaiting(20, awaitingAvis)))
   expect(card.awaiting).toEqual(['סוכנות אוויס רכבים: ממתינה לבירור סוג ההלוואה, לא נכללת בהשוואה'])

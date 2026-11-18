@@ -42,6 +42,7 @@ import {
   chipText,
   dataDatesLine,
   decisionText,
+  historyAboveCeilingText,
   interestLine,
   offerSource,
   rateAgainstMarketLine,
@@ -77,10 +78,11 @@ export interface CardModel {
   /**
    * Whether the recommendation was checked against the payment ceiling: 'fits' when it was made
    * with one, 'above' when the preferred option's worst case passes the ceiling the check holds
-   * now, 'unchecked' otherwise.
+   * now, 'history' when it passes it only in the worst period history holds while the payment
+   * at today's rates fits, 'unchecked' otherwise.
    */
-  check: 'unchecked' | 'fits' | 'above'
-  /** The line under the decision for 'unchecked' and 'above'. */
+  check: 'unchecked' | 'fits' | 'history' | 'above'
+  /** The line under the decision for every check but 'fits'. */
   checkNote: string | null
   /** The check's ceiling with where it came from, or that none is set yet. */
   ceiling: { label: string; amount: string; source: string | null }
@@ -243,7 +245,11 @@ function checkOf(
 ): Pick<CardModel, 'check' | 'checkNote'> {
   const worst = worstPayment(preferred)
   if (state.ceiling !== null && exceeds(worst, state.ceiling.amount)) {
-    return { check: 'above', checkNote: aboveCeilingText(worst, state.ceiling.amount) }
+    const ceiling = state.ceiling.amount
+    if (!exceeds(preferred.figures.peak_payment, ceiling)) {
+      return { check: 'history', checkNote: historyAboveCeilingText(worst, ceiling) }
+    }
+    return { check: 'above', checkNote: aboveCeilingText(worst, ceiling) }
   }
   if (recommendation.payment_ceiling !== null) return { check: 'fits', checkNote: null }
   return { check: 'unchecked', checkNote: UNCHECKED_NOTE }

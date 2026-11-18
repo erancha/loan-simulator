@@ -169,6 +169,13 @@ export function aboveCeilingText(worst: string, ceiling: string): string {
   return `מעל התקרה שלך: ${formatShekels(worst)} מול ${formatShekels(ceiling)}`
 }
 
+/** Under the decision of a recommendation within the ceiling today, above it only in the worst
+ * period history holds. */
+export function historyAboveCeilingText(worst: string, ceiling: string): string {
+  return `בתוך התקרה שלך היום; בתקופה הגרועה בעבר ההחזר היה מגיע ל-${formatShekels(worst)}` +
+    ` מול ${formatShekels(ceiling)}`
+}
+
 /** A check's title in the checks list: its purpose, or the general label, and its amount. */
 export function checkTitle(loan: LoanRequest): string {
   return `${loan.purpose ?? GENERAL_PURPOSE} - הלוואה בסך ${formatAmount(loan.amount)}₪`
@@ -427,34 +434,79 @@ export function termBasisLine(basis: TermBasis, firstPayment: string): string {
         ` כמו בעבר. ${CHANGE_PARAMETERS}`
 }
 
-/** The question a bubble shows: a field's question, the term card, the clone offer, or the
- * model's own sentence. */
+/** The chips that ask for the terms card, shorter or longer than the recommended option's term.
+ * A tap sends the sentence at once; the agent answers it with the card. */
+export const SHORTER_TERMS_CHIP = {
+  label: 'קיצור תקופה',
+  text: 'אפשר לראות סימולציה בתקופה קצרה יותר, עם פחות תשלומים?',
+  sendsAtOnce: true,
+}
+export const LONGER_TERMS_CHIP = {
+  label: 'הארכת תקופה',
+  text: 'אפשר לראות סימולציה בתקופה ארוכה יותר, עם החזר חודשי נמוך יותר?',
+  sendsAtOnce: true,
+}
+
+/** Terms as a Hebrew list: "72, 66 ו-60 חודשים". */
+function termsListText(terms: number[]): string {
+  const last = terms.at(-1)
+  if (last === undefined) throw new Error('a terms card lists at least one term')
+  const head = terms.slice(0, -1).join(', ')
+  return head === '' ? termText(last) : `${head} ו-${termText(last)}`
+}
+
+/** The terms card's title: the terms it priced, the option's own first. */
+export function termsTitle(terms: number[]): string {
+  return `חישבתי את ההמלצה ל-${termsListText(terms)}`
+}
+
+export const TERMS_HEADINGS = {
+  term: 'חודשים',
+  today: 'החזר היום',
+  worst: 'בתקופה הגרועה בעבר',
+} as const
+
+/** The worst-period cell of a payment that never changes. */
+export const STEADY_PAYMENT = 'קבוע'
+/** In place of a choice button on the row of the term the check already has. */
+export const CURRENT_TERM = 'התקופה הנוכחית'
+export const CHOOSE_TERM = 'לבחור'
+
+/** Under the terms card's table: what a marked worst-period payment means. */
+export function termsCeilingNote(ceiling: string): string {
+  return `מסומן: ההחזר היה עובר את התקרה שלך, ${formatShekels(ceiling)}, בתקופה הגרועה בעבר.` +
+    ' אפשר לבחור גם מספר חודשים כזה.'
+}
+
+/** The question a bubble shows: a field's question, the term card, the terms card, the clone
+ * offer, or the model's own sentence. */
 export function questionText(question: Question): string {
   if (question.kind === 'term') {
     return termLine(question.term_months, question.first_payment, question.basis)
   }
+  if (question.kind === 'terms') return termsTitle(question.rows.map((row) => row.term_months))
   if (question.kind === 'offer') return OFFER_FORM_TITLE
   if (question.offer_clone === true) return CLONE_QUESTION
   const { field } = question
   return field === null ? question.text : FIELD_COPY[field].text
 }
 
-/** A field's label, the term card's line, the clone offer, or the model's own sentence. */
+/** A field's label, a card's title, the clone offer, or the model's own sentence. */
 export function questionLabel(question: Question): string {
-  if (question.kind === 'term' || question.kind === 'offer') return questionText(question)
+  if (question.kind !== undefined) return questionText(question)
   if (question.offer_clone === true) return CLONE_QUESTION
   return question.field === null ? question.text : fieldLabel(question.field)
 }
 
-/** A field's hint; a free question, the term card and the offer form have none. */
+/** A field's hint; a free question and the cards have none. */
 export function questionHint(question: Question): string | null {
-  if (question.kind === 'term' || question.kind === 'offer' || question.field === null) return null
+  if (question.kind !== undefined || question.field === null) return null
   return FIELD_COPY[question.field].hint
 }
 
 /** Under the reply that presents a recommendation, on a screen that shows one pane at a time: the
- * way to the pane with every track, named by its tab. */
-export const TO_CARD = 'לפירוט כל המסלולים: מעבר ללשונית "המלצה"'
+ * way to the pane with the tracks' details, named by its tab. */
+export const TO_CARD = 'לפירוט המסלולים: מעבר ללשונית "המלצה"'
 
 export const OFFER_FORM_TITLE = 'פרטי ההצעה'
 export const OFFER_FORM_INTRO =

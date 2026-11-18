@@ -36,7 +36,13 @@ import { termConfirmation, typedTerm } from './QuestionBubble.tsx'
 import { isRefusal } from './rejection.ts'
 import type { Answer } from './QuestionBubble.tsx'
 import { RecommendationCard } from './RecommendationCard.tsx'
-import { holdsOption, isArchived, liveQuestion, recommendationReplyId } from './events.ts'
+import {
+  holdsOption,
+  isArchived,
+  liveQuestion,
+  recommendationReplyId,
+  termComparisons,
+} from './events.ts'
 import type { CheckState } from './events.ts'
 import type { AwaitingOffer, CheckSummary, Reading } from '../api/types.ts'
 import { isMarketSample, isOfferSample } from './serverSamples.ts'
@@ -304,6 +310,7 @@ export function CheckPage({
             opening={fresh ? <OpeningCard onSubmit={submitOpening} /> : null}
             offersOpen={offersOpen}
             samplesOffered={offersOpen && !holdsOption(state)}
+            termChips={termComparisons(state)}
             focusAwaiting={focusAwaiting}
           />
         </div>

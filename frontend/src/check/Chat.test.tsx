@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { Chat } from './Chat.tsx'
-import { MARKET_SAMPLE, TO_CARD } from './copy.ts'
+import { MARKET_SAMPLE, SHORTER_TERMS_CHIP, TO_CARD } from './copy.ts'
 import { awaitingAvis, checkArchived, cpiChart, identifiedMax } from '../test/fixtures.ts'
 import { restoreScrollIntoView, stubScrollIntoView } from '../test/scrollIntoView.ts'
 import type { ChatEntry, ChatMessage, CheckState, QuestionEntry } from './events.ts'
@@ -29,6 +29,7 @@ const noQuestion = {
   opening: null,
   offersOpen: false,
   samplesOffered: false,
+  termChips: { shorter: false, longer: false },
   focusAwaiting: null,
   cardReplyId: null,
   onShowCard: vi.fn(),
@@ -43,6 +44,7 @@ interface Options {
   onSend?: (text: string) => Promise<boolean>
   offersOpen?: boolean
   samplesOffered?: boolean
+  termChips?: { shorter: boolean; longer: boolean }
 }
 
 function renderChat({
@@ -54,6 +56,7 @@ function renderChat({
   onSend = vi.fn(() => Promise.resolve(true)),
   offersOpen = false,
   samplesOffered = false,
+  termChips = { shorter: false, longer: false },
 }: Options = {}) {
   const { unmount } = render(
     <Chat
@@ -66,6 +69,7 @@ function renderChat({
       onSend={onSend}
       offersOpen={offersOpen}
       samplesOffered={samplesOffered}
+      termChips={termChips}
     />,
   )
   return { onSend, unmount }
@@ -409,6 +413,19 @@ test('the samples chip shows with a loan and a term and no offer, and fills the 
 test('no samples chip once an offer is saved or awaits', () => {
   renderChat({ offersOpen: true, samplesOffered: false })
   expect(chipLabels()).toEqual(['הצעה מגוף מלווה', 'פריים ומדדים'])
+})
+
+test('the terms chips show as offered and send their sentence at once', async () => {
+  const { onSend } = renderChat({ offersOpen: true, termChips: { shorter: true, longer: true } })
+  expect(chipLabels()).toEqual(['קיצור תקופה', 'הארכת תקופה', 'הצעה מגוף מלווה', 'פריים ומדדים'])
+  await userEvent.click(screen.getByRole('button', { name: 'קיצור תקופה' }))
+
+  expect(onSend).toHaveBeenCalledExactlyOnceWith(SHORTER_TERMS_CHIP.text)
+})
+
+test('only the terms chips the recommendation allows show', () => {
+  renderChat({ offersOpen: true, termChips: { shorter: true, longer: false } })
+  expect(chipLabels()).toEqual(['קיצור תקופה', 'הצעה מגוף מלווה', 'פריים ומדדים'])
 })
 
 test('the offer chip sends its sentence at once, which opens the empty offer form', async () => {

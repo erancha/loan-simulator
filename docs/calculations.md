@@ -215,10 +215,27 @@ The first payment shown on the card is the higher of the two tracks' first payme
 The card states which assumption it used, with its amount, and says so when even 84 months does
 not keep the payment under it.
 
+### Comparing terms
+
+Once a check has a recommendation, the person may ask for a shorter or a longer term without
+naming one, in their own words or with the "קיצור תקופה" and "הארכת תקופה" chips. The agent then
+prices the recommended option at its own term and at the next two whole multiples of 6 months in
+that direction (72 gives 66 and 60, or 78 and 84; 70 gives 66 and 60), and the terms card shows
+each with its payment today and its worst-case payment, marked when that passes the ceiling. A
+marked term stays a choice: the mark informs, and the person decides. Every row is priced on the
+recommended option itself, so its figures match the recommendation's. The rows stop at 6 months,
+at the longest term the option's lender allows, and, going shorter, before the first term whose
+payment at today's rates is already above the ceiling. An offer whose lender fixed its term has
+no other term to price. A chosen row is saved like a confirmed term card, the open offers are
+priced at it, and the recommendation is made again.
+
 ### Remedies above the ceiling
 
 When the recommended options do not fit the ceiling and no saved option for the term does, the
-recommendation stands above the ceiling. A check with real offers is measured by its offers alone:
+recommendation stands above the ceiling. When their payment at today's rates fits and only the
+worst historical window passes the ceiling, the card says so ("בתוך התקרה שלך היום") with the
+worst payment, and no remedy is offered: the person chose the term with that window in view. A
+check with real offers is measured by its offers alone:
 the remedy is the shortest term, within what each lender allows, at which an offer that leaves its
 term open fits (`shortest_comfortable_offer_term`), else asking the lenders for a longer term or
 borrowing less. A check with examples only gets two searches that give the person something

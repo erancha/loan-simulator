@@ -32,8 +32,10 @@ from loan_agent.application.check_tools import (
     ASKED_RESULT,
     READING_ON_SCREEN,
     CheckTools,
+    TermDirection,
     ToolDeps,
     ToolError,
+    _compared_terms,
 )
 from loan_agent.domain.errors import AwaitingOfferNotFoundError
 from loan_agent.domain.models import Check, Finances, LoanRequest, Option
@@ -1949,3 +1951,198 @@ async def test_confirming_an_unknown_offer_or_kind_is_refused(world: World) -> N
 
     assert len(await world.awaiting.list(CHECK)) == 1
     assert await world.options.list(CHECK) == []
+
+
+# The terms card and the ceiling's worst period, over the case a person tried by hand: 100,000 for
+# a car under a stated ceiling of 2,000, with one offer at prime + 1% for up to 84 months.
+
+CAR_TRACK = {**PRIME_TRACK, "principal": "100000", "term_months": 72, "prime_spread": "1"}
+
+
+def payments(today: str, worst: str, total: str) -> Simulation:
+    """A prime track's figures: the payment today, its highest in history and the total."""
+    return Simulation(
+        replace(
+            PRIME_SIMULATION.figures,
+            first_payment=Decimal(today),
+            peak_payment=Decimal(today),
+            worst_peak_payment=Decimal(worst),
+            total_paid=Decimal(total),
+        ),
+        PRIME_SIMULATION.structured,
+    )
+
+
+AT_72 = payments("1645.51", "1799.00", "118476.95")
+AT_66 = payments("1770.94", "1936.13", "116881.98")
+AT_60 = payments("1921.68", "2100.93", "115300.61")
+
+
+async def car_offer_recommended(world: World, **offer: object) -> None:
+    """The car loan at 72 months, its offer saved and recommended; the shorter-term search finds
+    nothing shorter, so the recommendation's result asks for no term card."""
+    await world.tools.set_loan("רכב", "100000")
+    await world.tools.set_term(72)
+    await world.tools.set_ceiling("2000")
+    world.engine.simulations = [AT_72]
+    world.engine.offer_terms = OfferTerm(term_months=72, comfortable=True)
+    await world.tools.save_offer([CAR_TRACK], "Bank", **offer)
+    await world.tools.present_recommendation("option-1", REASONING)
+    world.sink.events.clear()
+    world.engine.calls.clear()
+
+
+async def test_compare_terms_prices_the_offer_at_the_next_two_shorter_terms(world: World) -> None:
+    await car_offer_recommended(world, max_term_months=84)
+    world.engine.simulations = [AT_66, AT_60]
+
+    result = await world.tools.compare_terms("shorter")
+
+    assert result == ASKED_RESULT
+    priced = [loan for name, loan in world.engine.calls if name == "simulate"]
+    assert priced == [
+        {"tracks": [{**CAR_TRACK, "term_months": 66}]},
+        {"tracks": [{**CAR_TRACK, "term_months": 60}]},
+    ]
+    (asked,) = world.events_of(QUESTION_ASKED)
+    assert asked == {
+        "lead_in": None,
+        "question": {
+            "kind": "terms",
+            "direction": "shorter",
+            "lender": "Bank",
+            "source": "offer",
+            "payment_ceiling": "2000",
+            "rows": [
+                {
+                    "term_months": term,
+                    "first_payment": str(simulation.figures.first_payment),
+                    "peak_payment": str(simulation.figures.peak_payment),
+                    "worst_payment": str(simulation.figures.worst_peak_payment),
+                    "total_paid": str(simulation.figures.total_paid),
+                }
+                for term, simulation in ((72, AT_72), (66, AT_66), (60, AT_60))
+            ],
+        },
+    }
+    assert (await world.check()).term_months == 72
+
+
+async def test_a_shorter_term_whose_payment_today_passes_the_ceiling_is_left_out(
+    world: World,
+) -> None:
+    await car_offer_recommended(world, max_term_months=84)
+    world.engine.simulations = [AT_66, payments("2050", "2200", "114000")]
+
+    await world.tools.compare_terms("shorter")
+
+    (asked,) = world.events_of(QUESTION_ASKED)
+    assert isinstance(asked, dict)
+    assert [row["term_months"] for row in asked["question"]["rows"]] == [72, 66]
+
+
+async def test_no_shorter_term_within_the_ceiling_is_refused_with_the_reason(world: World) -> None:
+    await car_offer_recommended(world, max_term_months=84)
+    world.engine.simulations = [payments("2050", "2200", "114000")]
+
+    with pytest.raises(ToolError, match="every shorter term the payment today is already above"):
+        await world.tools.compare_terms("shorter")
+
+    assert world.events_of(QUESTION_ASKED) == []
+
+
+async def test_a_longer_term_stops_at_the_longest_its_lender_allows(world: World) -> None:
+    await car_offer_recommended(world, max_term_months=78)
+    world.engine.simulations = [payments("1540", "1690", "120000")]
+
+    await world.tools.compare_terms("longer")
+
+    (asked,) = world.events_of(QUESTION_ASKED)
+    assert isinstance(asked, dict)
+    assert [row["term_months"] for row in asked["question"]["rows"]] == [72, 78]
+
+
+async def test_a_longer_term_than_the_lender_allows_is_refused(world: World) -> None:
+    await car_offer_recommended(world, max_term_months=72)
+
+    with pytest.raises(ToolError, match="already the longest term the option allows"):
+        await world.tools.compare_terms("longer")
+
+
+async def test_an_offer_whose_lender_fixed_its_term_is_not_compared(world: World) -> None:
+    await car_offer_recommended(world)
+
+    with pytest.raises(ToolError, match="lender fixed its term"):
+        await world.tools.compare_terms("shorter")
+
+
+async def test_compare_terms_needs_a_recommendation(world: World) -> None:
+    await world.tools.set_loan("רכב", "100000")
+    await world.tools.set_term(72)
+
+    with pytest.raises(ToolError, match="no recommendation yet"):
+        await world.tools.compare_terms("shorter")
+
+
+@pytest.mark.parametrize(
+    ("current", "direction", "longest", "expected"),
+    [
+        (72, "shorter", 84, [66, 60]),
+        (70, "shorter", 84, [66, 60]),
+        (12, "shorter", 84, [6]),
+        (6, "shorter", 84, []),
+        (72, "longer", 84, [78, 84]),
+        (70, "longer", 84, [72, 78]),
+        (72, "longer", 78, [78]),
+    ],
+)
+def test_compared_terms_are_whole_steps_within_the_limits(
+    current: int, direction: TermDirection, longest: int, expected: list[int]
+) -> None:
+    assert _compared_terms(current, direction, longest) == expected
+
+
+async def test_a_term_above_the_ceiling_only_in_the_worst_period_is_not_pushed_back(
+    world: World,
+) -> None:
+    await world.tools.set_loan("רכב", "100000")
+    await world.tools.set_term(60)
+    await world.tools.set_ceiling("2000")
+    world.engine.simulations = [AT_60]
+    await world.tools.save_offer([{**CAR_TRACK, "term_months": 60}], "Bank", max_term_months=84)
+
+    summary = await world.tools.present_recommendation("option-1", REASONING)
+
+    (next_step,) = [line for line in summary.splitlines() if line.startswith("next_step")]
+    assert "2100.93, above the payment_ceiling of 2000" in next_step
+    assert "within the ceiling today and above it only in the worst historical period" in next_step
+    assert "Do not suggest another term" in next_step
+    assert "offer_term" not in [name for name, _ in world.engine.calls]
+    assert world.recommendations.rows[CHECK].preferred_option_id == "option-1"
+
+
+async def test_reasoning_quoting_an_amount_no_tool_gave_is_refused(world: World) -> None:
+    await world.tools.set_loan("רכב", "100000")
+    await world.tools.set_term(60)
+    await world.tools.set_ceiling("2000")
+    world.engine.simulations = [AT_60]
+    await world.tools.save_offer([{**CAR_TRACK, "term_months": 60}], "Bank", max_term_months=84)
+    made_up = "בתקופה ההיסטורית הגרועה ההחזר היה מגיע עד 2,336 ₪, מעל התקרה של 2,000 ₪."
+
+    with pytest.raises(ToolError, match="quotes 2,336 ₪") as refused:
+        await world.tools.present_recommendation("option-1", made_up)
+
+    assert "2101" in str(refused.value)
+    assert CHECK not in world.recommendations.rows
+
+
+async def test_reasoning_quoting_the_tools_amounts_rounded_is_accepted(world: World) -> None:
+    await car_offer_recommended(world, max_term_months=84)
+    reasoning = (
+        "בתקופה ההיסטורית הגרועה ההחזר היה מגיע עד 1,799 ₪, מתחת לתקרה של 2,000 ₪; ריבית של "
+        'כ-18,477 ₪ ומרווח של 201 ש"ח.'
+    )
+
+    await world.tools.present_recommendation("option-1", reasoning)
+
+    assert world.recommendations.rows[CHECK].reasoning == reasoning

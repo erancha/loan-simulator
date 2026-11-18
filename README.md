@@ -45,7 +45,9 @@ machine under Docker Compose. This repo holds the loan engine, the agent and the
   from the model's text. The amount recommended is always the amount the person asked for.
   Without a ceiling the card says the recommendation is not yet checked against what the person
   can pay; with one, a guardrail in code refuses an option whose worst case is above it, and the
-  assistant offers a longer term or names the largest loan that fits.
+  assistant offers a longer term or names the largest loan that fits. A term the person picks that
+  fits today and passes the ceiling only in the worst past window stands, with that warning; the
+  "קיצור תקופה" and "הארכת תקופה" chips compare the term with two shorter or longer ones.
 - **Message limit**: each person may send 20 messages per 24 hours as shipped; the operator can
   set another limit for a person by email.
 - **Market data**: refreshed daily from public sources: the Bank of Israel rate and its average
