@@ -936,6 +936,26 @@ def test_the_prompt_gives_one_form_for_a_tracks_price_and_places_the_ceiling_on_
     assert "אל תכתוב שההחזר לא השתנה" in flat
 
 
+def test_the_prompt_limits_offers_to_what_a_tool_does() -> None:
+    """The model offers and reports only actions one of its tools performs. The prompt names
+    what a person may ask for and no tool does (approaching a lender, a file, an email, a
+    month-by-month schedule), and it forbids asking for contact details."""
+    flat = " ".join(SYSTEM_PROMPT.split())
+    assert "אין כלי שעושה את זה: אל תציע" in flat
+    assert "רק על מה שכלי עשה בתור הזה" in flat
+    for missing in ("פנייה לגוף מלווה", "קובץ", "לוח תשלומים חודשי", "כתובת מייל"):
+        assert missing in flat, missing
+
+
+def test_the_prompt_gives_a_yes_or_no_question_its_choices() -> None:
+    """A free question without choices is drawn as a text box, so a question answered by yes
+    or no, or by one of a few answers, carries them as choices the person taps."""
+    flat = " ".join(SYSTEM_PROMPT.split())
+    assert "choices של 'כן' ו-'לא'" in flat
+    assert "בלי choices המסך מציג תיבת טקסט" in flat
+    assert "yes or no" in AskQuestion.model_fields["choices"].description
+
+
 def test_the_prompt_words_the_historical_payment_as_what_would_have_happened() -> None:
     """The worst period is a scenario, what the payment would have reached had the loan run
     through it, never something that happened to the person."""

@@ -96,7 +96,10 @@ without a tool call, and the block never enters the checkpoint.
 
 The model chooses what to ask and which tool to call. It never produces a figure: the prompt
 tells it that every amount, rate or payment it says comes from a tool result of that
-conversation, and the page shows figures from stored tool results.
+conversation, and the page shows figures from stored tool results. The prompt likewise limits
+what the model offers the person to what one of its tools does: it does not offer to approach a
+lender, to produce a file or to send anything, and it asks a yes or no question with the two
+answers as `choices`, since the page draws a free question without choices as a text box.
 
 Of the inner layers, only `application/agent_graph.py` imports `langgraph` and `langchain_core`.
 The chat model is built from `LLM_MODEL` (`provider:model`, anthropic or openai) and

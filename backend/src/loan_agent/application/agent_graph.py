@@ -329,7 +329,9 @@ class AskQuestion(_Args):
     choices: list[str] | None = Field(
         default=None,
         min_length=2,
-        description="Two or more answers to pick from, in Hebrew; free questions only",
+        description="The answers the person taps, in Hebrew; free questions only. Always given "
+        "for a question answered by yes or no or by one of a few answers; omitted only "
+        "when the person answers in their own words or with a number",
     )
 
     @model_validator(mode="after")
