@@ -90,7 +90,10 @@ Docker runs the stack; `deploy.sh` and `docker-helper.sh` stop when it is not re
   instance as guests, each with its own port and CloudFront distribution
   ([ADR 0012](adr/0012-the-instance-hosts-the-other-docker-repos.md)). The `EC2` block of
   `stack-params.sh` names the stack, its port and the instance type, t4g.small; a change of the
-  type stops and starts the same instance, which keeps its disk and its address.
+  type stops and starts the same instance, which keeps its disk and its address. Every deploy,
+  host or guest, also makes sure the instance has a 1 GB swap file (`prepare_ec2_host` in
+  `lib/ec2.sh`), so a burst beyond the instance's 2 GB of memory slows the stacks instead of
+  killing a container.
 - `deploy.sh --ec2 --preview` — runs the working tree beside production on the same instance;
   [The preview on EC2](#the-preview-on-ec2) covers it, from the first deploy to its removal.
 - [`docker-helper.sh`](../scripts/docker-helper.sh) — `--stop [--volumes]`, `--logs [-e]` or

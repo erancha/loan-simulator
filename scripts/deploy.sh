@@ -95,7 +95,7 @@ deploy_ec2() {
 
   echo "Building the images for linux/arm64 on this machine..."
   compose build
-  wait_for_ec2_docker
+  prepare_ec2_host
   echo "Loading the images into the instance's Docker daemon..."
   # shellcheck disable=SC2046  # one image name per word, none with spaces
   docker save $(ec2_built_images) | gzip | ssh_ec2 "$EC2_HOST_USER@$EC2_HOST" 'gunzip | docker load'

@@ -10,6 +10,7 @@
 # - resolve_ec2_stack / deploy_ec2_stack / resolve_ec2_host: the stacks the git branch selects
 #   (this repo's and the host's), the deploy, and the instance and addresses
 # - ec2_guest_slot: the host's security-group slot a guest stack opens its port in
+# - prepare_ec2_host: the instance's Docker daemon answering, and its swap file in place
 # - ssh_ec2 / use_ec2: a command on the instance, and Compose pointed at the instance's daemon
 # - delete_ec2_stack: the stack's deletion, which leaves the instance's disk
 #
@@ -20,12 +21,14 @@
 #
 # The instance accepts SSH as ec2-user with an EC2 Instance Connect key, valid for 60 seconds after
 # each push and only for starting a connection, so every connection pushes the key first. One
-# throwaway key pair stays on this machine, gitignored; nothing permanent is written to the
-# instance.
+# throwaway key pair stays on this machine, gitignored; no key is written to the instance.
 
 EC2_TEMPLATE_FILE="$ROOT/scripts/template-ec2.yaml"
 EC2_COMPOSE_FILE="$ROOT/docker-compose.ec2.yml"
 EC2_HOST_USER='ec2-user'
+# Swap on the instance, so a burst of memory beyond its RAM slows the stacks instead of killing a
+# container: the instance is small, and several repos' stacks share it.
+EC2_SWAP_SIZE='1G'
 EC2_SSH_DIR="$ROOT/scripts/lib/.ssh"
 EC2_SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o LogLevel=ERROR)
 # The latest Amazon Linux 2023 image for ARM, which AWS publishes under this SSM parameter.
@@ -214,15 +217,26 @@ ssh_ec2() {
     "${EC2_SSH_OPTS[@]}" "$@"
 }
 
-# Waits up to about five minutes until the instance's Docker daemon answers ec2-user: a new
-# instance installs Docker on its first boot.
-wait_for_ec2_docker() {
-  local attempt
+# Waits up to about five minutes until the instance's Docker daemon answers ec2-user (a new
+# instance installs Docker on its first boot), then makes sure the instance's swap file exists
+# and is on, also across reboots. Every deploy runs it, the host stack's and a guest's, so an
+# instance with no swap file gets one from whichever stack deploys to it first.
+prepare_ec2_host() {
+  local attempt ready=''
   for attempt in $(seq 30); do
-    if ssh_ec2 "$EC2_HOST_USER@$EC2_HOST" docker info >/dev/null 2>&1; then return; fi
+    if ssh_ec2 "$EC2_HOST_USER@$EC2_HOST" docker info >/dev/null 2>&1; then ready=1; break; fi
     sleep 10
   done
-  die "The Docker daemon on $EC2_HOST did not answer; check the instance's first boot"
+  [[ -n "$ready" ]] ||
+    die "The Docker daemon on $EC2_HOST did not answer; check the instance's first boot"
+  ssh_ec2 "$EC2_HOST_USER@$EC2_HOST" sudo sh -s -- "$EC2_SWAP_SIZE" <<'SWAP'
+swapon --show=NAME --noheadings | grep -qx /swapfile && exit 0
+if [ ! -f /swapfile ]; then
+  fallocate -l "$1" /swapfile && chmod 600 /swapfile && mkswap /swapfile >/dev/null
+fi
+swapon /swapfile
+grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap defaults 0 0' >> /etc/fstab
+SWAP
 }
 
 # Points docker and Compose of this shell at the instance's daemon: one SSH connection forwards
