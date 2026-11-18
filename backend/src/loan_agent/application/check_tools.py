@@ -260,7 +260,8 @@ class CheckTools:
     ) -> str:
         """Shows the offer form with whatever the person already said filled in. The values are
         a starting point for the boxes: the form validates what the person submits, and
-        save_offer what the model saves from it."""
+        save_offer what the model saves from it. An offer with nothing missing is refused, since
+        the form would only ask the person for what they already said."""
         _require_loan(await self._check(), "ask_offer")
         _require_named_lender(lender)
         question = {
@@ -276,6 +277,16 @@ class CheckTools:
 
     async def _last_card_term(self) -> int | None:
         """The term of the check's latest question when it is a term card."""
+        if (
+            lender is not None
+            and max_term_months is not None
+            and tracks
+            and all(track["rate"] is not None for track in tracks)
+        ):
+            raise ToolError(
+                "the offer already names its lender, every track's rate and its term, so the "
+                "form has nothing to ask; save it with save_offer"
+            )
         asked = await self._deps.sink.latest(self._check_id, QUESTION_ASKED)
         if asked is None:
             return None

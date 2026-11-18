@@ -362,7 +362,7 @@ async def test_ask_offer_puts_the_form_on_the_screen_with_what_was_said(world: W
     await world.tools.set_loan("רכב", "60000")
     track = {"rate_kind": "prime", "rate": "0.5", "cpi_linked": False}
 
-    result = await world.tools.ask_offer("קרן הפנסיה", [track], 84)
+    result = await world.tools.ask_offer("קרן הפנסיה", [track], None)
 
     assert result == ASKED_RESULT
     assert world.events_of(QUESTION_ASKED) == [
@@ -371,11 +371,21 @@ async def test_ask_offer_puts_the_form_on_the_screen_with_what_was_said(world: W
                 "kind": "offer",
                 "lender": "קרן הפנסיה",
                 "tracks": [track],
-                "max_term_months": 84,
+                "max_term_months": None,
             },
             "lead_in": None,
         }
     ]
+
+
+async def test_ask_offer_with_nothing_missing_names_save_offer(world: World) -> None:
+    await world.tools.set_loan("רכב", "60000")
+    track = {"rate_kind": "prime", "rate": "1", "cpi_linked": False}
+
+    with pytest.raises(ToolError, match="save_offer"):
+        await world.tools.ask_offer("קרן הפנסיה", [track], 84)
+
+    assert world.events_of(QUESTION_ASKED) == []
 
 
 async def test_ask_offer_with_nothing_said_opens_an_empty_form(world: World) -> None:
