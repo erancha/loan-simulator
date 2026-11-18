@@ -13,7 +13,7 @@ import type { CheckSummary, User } from '../api/types.ts'
 import type { AwaitingFocus } from '../check/Chat.tsx'
 import { CheckPage } from '../check/CheckPage.tsx'
 import { AccountMenu } from './AccountMenu.tsx'
-import { ChecksList } from './ChecksList.tsx'
+import { ChecksList, isUnused } from './ChecksList.tsx'
 import { APP_TITLE } from '../copy.ts'
 import { useLatest } from '../latest.ts'
 import {
@@ -152,7 +152,13 @@ export function Shell({ user, onSignOut }: Props) {
     if (newestLive !== undefined) open(newestLive.id)
   }
 
+  // An unused check is already a new one, so the button opens it instead of adding another.
   async function create() {
+    const unused = checks?.find(isUnused)
+    if (unused !== undefined) {
+      select(unused.id, 'chat')
+      return
+    }
     try {
       const { id } = await createCheck()
       await refresh()

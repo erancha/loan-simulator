@@ -359,8 +359,10 @@ dropped.
 ## Archiving and deleting a check
 
 An entry in the checks list the person has sent a message to (the list's `started` flag) has a
-duplicate icon, which clones the check beside it, and when live an archive icon; a check not yet
-started, which shows only its opening card, has neither, since it has nothing to copy or keep. An
+duplicate icon, which clones the check beside it, and when live an archive icon. A live check not
+yet started, which shows only its opening card and holds no finances, has neither, since it has
+nothing to copy or keep; it has a delete icon that removes it at once, and the button for a new
+check opens it rather than adding another empty one, so unused checks do not pile up. An
 entry shows its loan as its title and, once confirmed, its term on a second line. A clone, from the
 icon or the clone offer, adds a handoff note to the source's conversation ("הבדיקה שוכפלה לבדיקה
 נפרדת.") with a button to the copy; the source stays open. The clone offer's choice sends the copy
@@ -370,10 +372,11 @@ checks follow the live ones in a group of their own, folded until the person ope
 archived check is read-only, with a note closing its conversation. Archiving the open check opens
 the newest live check in its place, or a new check when none is left, so the open check is never one
 hidden in the folded group. An archived check has a restore icon and a delete icon, so a delete is
-always a second step. The delete icon first asks for confirmation beside the entry, with focus on
-the cancel button, because a delete cannot be undone. A confirmed delete calls `DELETE
-/api/checks/<id>` and refreshes the list. Deleting the open check opens the newest one left; with
-none left the page shows a centred card with the button for a new check. A delete during a reply is
+a second step for any check that holds work. The archived check's delete icon first asks for
+confirmation beside the entry, with focus on the cancel button, because a delete cannot be undone.
+A confirmed delete calls `DELETE /api/checks/<id>` and refreshes the list. Deleting the open check
+opens the newest one left; with none left the page shows a centred card with the button for a new
+check. A delete during a reply is
 refused with a sentence asking to try again in a moment.
 
 ## Serving

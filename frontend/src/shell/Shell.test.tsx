@@ -157,6 +157,25 @@ test('no checks: the empty state; the button creates and opens a check', async (
   expect(posts).toHaveLength(1)
 })
 
+test('with an unused live check, the button opens it instead of creating another', async () => {
+  const fetchStub = stubApi([
+    [
+      summary('a', '2026-01-01T00:00:00Z'),
+      summary('empty', '2026-02-01T00:00:00Z', { started: false }),
+    ],
+  ])
+  window.history.replaceState(null, '', '#check=a')
+  const user = userEvent.setup()
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+
+  await waitFor(() => expect(openedStreams()).toEqual(['/api/checks/a/events']))
+  await user.click(screen.getByRole('button', { name: '+ בדיקה חדשה' }))
+
+  await waitFor(() => expect(window.location.hash).toBe('#check=empty'))
+  const posts = fetchStub.mock.calls.filter(([p, i]) => p === '/api/checks' && i?.method === 'POST')
+  expect(posts).toHaveLength(0)
+})
+
 test('lists checks with price and recommendation markers; the newest opens', async () => {
   stubApi([
     [
@@ -551,13 +570,32 @@ test('a check with a confirmed term shows it under its title', async () => {
   expect(open.closest('li')).not.toHaveTextContent('חודשים')
 })
 
-test('a check showing only the opening card has no duplicate or archive icon', async () => {
+test('a check showing only the opening card has only a delete icon', async () => {
   stubApi([[summary('empty', '2026-01-01T00:00:00Z', { started: false })]])
   render(<Shell user={dana} onSignOut={vi.fn()} />)
 
   expect(await screen.findByRole('button', { name: /^בדיקה חדשה/ })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'מחיקת הבדיקה: בדיקה חדשה' })).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: /^שכפול/ })).not.toBeInTheDocument()
   expect(screen.queryByRole('button', { name: /^העברה לארכיון/ })).not.toBeInTheDocument()
+})
+
+test('an unused check is deleted at once, with no confirmation', async () => {
+  const fetchStub = stubApi([
+    [
+      summary('a', '2026-01-01T00:00:00Z'),
+      summary('empty', '2026-02-01T00:00:00Z', { started: false }),
+    ],
+    [summary('a', '2026-01-01T00:00:00Z')],
+  ])
+  const user = userEvent.setup()
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+
+  await user.click(await screen.findByRole('button', { name: 'מחיקת הבדיקה: בדיקה חדשה' }))
+
+  await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(1))
+  const deletes = fetchStub.mock.calls.filter(([, i]) => i?.method === 'DELETE')
+  expect(deletes.map(([p]) => p)).toEqual(['/api/checks/empty'])
 })
 
 test('archiving the open check opens the newest live one in its place', async () => {

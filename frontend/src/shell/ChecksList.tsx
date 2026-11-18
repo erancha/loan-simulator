@@ -30,6 +30,11 @@ function titleOf(check: CheckSummary): string {
   return check.loan === null ? UNTITLED_CHECK : checkTitle(check.loan)
 }
 
+/** A live check with no message and no finances: it shows the opening card and holds no work. */
+export function isUnused(check: CheckSummary): boolean {
+  return !check.archived && !check.started && !check.has_finances
+}
+
 interface Props {
   checks: CheckSummary[]
   selectedId: string | null
@@ -59,17 +64,18 @@ interface Props {
  * them, or unfolded on load when every check is archived, so they neither mix with the live
  * checks nor fill the sidebar. A check the person has written to has a duplicate icon,
  * and when live an archive icon; one showing only the opening card has neither, since it has
- * nothing to copy or keep. An archived check has a restore icon and a delete icon. Only an
- * archived check can be deleted, so a delete is always a second step. It cannot be undone, so its
- * icon first asks beside the check, with focus on the cancel button. A live check with offers
- * awaiting the lender's answer has a yellow bubble counting them, which unfolds under the check a
- * list of links, one per offer, each opening the check on its conversation. A check whose
- * finances hold a figure has a finances link on its months row, which opens the check on its
- * conversation with the finances line shown, and hides the line again on a second tap; the open
- * check has no such link while its term card takes an answer. A check's item in the list is a
- * container rather than one button so the finances link can sit inside it: the select button
- * holds the title, its click area stretches over the item, and it takes the item's text as its
- * name.
+ * nothing to copy or keep; while it also holds no finances it has a delete icon that removes it
+ * at once. An archived check has a restore icon and a delete icon. A check that holds work is
+ * deleted only from the archive, so deleting work is always a second step. That delete cannot be
+ * undone, so its icon first asks beside the check, with focus on the cancel button. A live check
+ * with offers awaiting the lender's answer has a yellow bubble counting them, which unfolds
+ * under the check a list of links, one per offer, each opening the check on its conversation. A
+ * check whose finances hold a figure has a finances link on its months row, which opens the
+ * check on its conversation with the finances line shown, and hides the line again on a second
+ * tap; the open check has no such link while its term card takes an answer. A check's item in
+ * the list is a container rather than one button so the finances link can sit inside it: the
+ * select button holds the title, its click area stretches over the item, and it takes the item's
+ * text as its name.
  */
 export function ChecksList({
   checks,
@@ -200,6 +206,8 @@ export function ChecksList({
               action('archive', 'check-clone', archiveLabel, () => onArchive(check.id), check)}
             {check.archived &&
               action('trash', 'check-delete', deleteLabel, () => setConfirmingId(check.id), check)}
+            {isUnused(check) &&
+              action('trash', 'check-delete', deleteLabel, () => onDelete(check.id), check)}
           </div>
         </div>
         {awaitingOpenId === check.id && !check.archived && (

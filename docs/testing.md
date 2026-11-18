@@ -302,9 +302,11 @@ a check, the list's titles, terms and markers (the ready chip only for a recomme
 compares options, "הצעה נבדקה" for one offer alone, the example chip for examples), the archived
 checks folded in their own group (unfolded on load when every check is archived), cloning from the
 list, the archive icon of a live check, the absence of both the duplicate and archive icons on a
-check not yet started, that archiving the open check opens the newest live one or a new check, the
-restore icon of an archived one, the side tab named "בדיקות", selection by hash and the fallback to
-the newest check, the tab bar, and that a late list answer does not overwrite a newer one. For
+check not yet started, its delete icon that removes it with no confirmation, that the new-check
+button opens such a check rather than creating another, that archiving the open check opens the
+newest live one or a new check, the restore icon of an archived one, the side tab named "בדיקות",
+selection by hash and the fallback to the newest check, the tab bar, and that a late list answer
+does not overwrite a newer one. For
 awaiting offers it proves the bubble's count with its singular and plural tooltip, no bubble without
 one or on an archived check, the list of links the bubble opens and closes, and that a link opens
 its check on the conversation and names the card to focus, on every tap. Its delete tests, on
