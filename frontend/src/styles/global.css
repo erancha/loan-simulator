@@ -577,9 +577,12 @@ fieldset.field.changed {
   min-width: 0;
 }
 
-.offer-rate input,
-.offer-months input {
+.offer-rate input {
   width: 4.5em;
+}
+
+.offer-months input {
+  width: 3ch;
 }
 
 .offer-track .offer-linked {
