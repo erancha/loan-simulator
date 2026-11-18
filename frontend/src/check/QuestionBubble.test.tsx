@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { expect, it, vi } from 'vitest'
 import { ApiException } from '../api/client.ts'
-import type { Finances, Question } from '../api/types.ts'
+import type { Finances, Question, TermBasis } from '../api/types.ts'
 import { PAYMENT_PLANNING, termBasisLine } from './copy.ts'
 import { finances } from '../test/fixtures.ts'
 import { wholeText } from '../test/wholeText.ts'
@@ -372,7 +372,7 @@ it('a term question shows its proposed term and first payment', () => {
       onClone={vi.fn()}
     />,
   )
-  expect(screen.getByText(wholeText(TERM_TITLE))).toBeInTheDocument()
+  expect(screen.getByText(wholeText(TERM_LINE))).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'דילוג' })).not.toBeInTheDocument()
 })
 
@@ -386,6 +386,13 @@ it('the term card colours its values as a reply does', () => {
   renderTerm()
   const values = [...document.querySelectorAll('.bubble-question .reply-value')]
   expect(values.map((value) => value.textContent)).toEqual(['60', '812 ₪', '1,000 ₪'])
+})
+
+it('only the card of the assumed payment is titled a first calculation', () => {
+  const { rerender } = render(termCard({ kind: 'typed' }))
+  expect(screen.getByText(wholeText(TERM_LINE))).toBeInTheDocument()
+  rerender(termCard({ kind: 'ceiling', amount: '2000', fits: true }))
+  expect(screen.getByText(wholeText(TERM_LINE))).toBeInTheDocument()
 })
 
 it('a term card stored without its basis shows the title alone', () => {
@@ -444,12 +451,28 @@ it('the term card offers payment planning while a finances figure is missing', (
 })
 
 const termBasis = { kind: 'first_payment_target', amount: '1000', fits: true } as const
-const TERM_TITLE = 'חישוב ראשוני: 60 חודשים · החזר ראשון כ-812 ₪'
+const TERM_LINE = '60 חודשים · החזר ראשון כ-812 ₪'
+const TERM_TITLE = `חישוב ראשוני: ${TERM_LINE}`
 const termQuestion: Question = {
   kind: 'term',
   term_months: 60,
   first_payment: '812.4',
   basis: termBasis,
+}
+
+function termCard(basis: TermBasis) {
+  return (
+    <QuestionBubble
+      entry={entryFor({ kind: 'term', term_months: 60, first_payment: '812.4', basis })}
+      live
+      finances={null}
+      ceiling={null}
+      ceilingFormula={null}
+      onAnswer={vi.fn()}
+      onSkip={vi.fn()}
+      onClone={vi.fn()}
+    />
+  )
 }
 
 function renderTerm(

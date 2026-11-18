@@ -165,6 +165,18 @@ class _Quote:
 
 
 @dataclass(frozen=True)
+class _ShorterTerm:
+    """A term shorter than the preferred option's own (from_term_months) at which the option
+    still fits the ceiling: its worst-case monthly payment there and the total it saves, both
+    in whole shekels."""
+
+    term_months: int
+    from_term_months: int
+    worst_payment: Decimal
+    saving: Decimal
+
+
+@dataclass(frozen=True)
 class ToolDeps:
     checks: CheckRepository
     options: OptionRepository
@@ -224,9 +236,10 @@ class CheckTools:
             ) from None
 
     async def ask_term(self, term_months: int | None) -> str:
-        """With term_months None, the card proposes a term; with a number, the person typed it
-        and the card shows its first payment. The question's basis tells the card which: the
-        assumption the proposed term rests on, or typed."""
+        """With term_months None, the card proposes a term; with a number, the card shows that
+        term's first payment. The question's basis tells the card where the term comes from: the
+        assumption the proposed term rests on, the shorter term the recommendation suggested,
+        with what it saves, or a term the person typed."""
         if term_months is not None:
             _require_term(term_months)
             if term_months == await self._last_card_term():
@@ -240,7 +253,7 @@ class CheckTools:
             proposed, basis = await self._proposed_term(check, loan)
         else:
             proposed = ProposedTerm(term_months, await self._first_payment(loan, term_months))
-            basis = {"kind": "typed"}
+            basis = await self._typed_or_suggested(check, term_months)
         question = {
             "kind": "term",
             "term_months": proposed.term_months,
@@ -264,6 +277,16 @@ class CheckTools:
         the form would only ask the person for what they already said."""
         _require_loan(await self._check(), "ask_offer")
         _require_named_lender(lender)
+        if (
+            lender is not None
+            and max_term_months is not None
+            and tracks
+            and all(track["rate"] is not None for track in tracks)
+        ):
+            raise ToolError(
+                "the offer already names its lender, every track's rate and its term, so the "
+                "form has nothing to ask; save it with save_offer"
+            )
         question = {
             "kind": "offer",
             "lender": lender,
@@ -275,18 +298,28 @@ class CheckTools:
         )
         return ASKED_RESULT
 
+    async def _typed_or_suggested(self, check: Check, term_months: int) -> dict[str, object]:
+        """The basis of a card for an explicit term: the shorter term the check's recommendation
+        suggests when the term is that one, so the card states what it saves; otherwise typed."""
+        ceiling = check.payment_ceiling
+        recommendation = await self._deps.recommendations.latest(self._check_id)
+        if ceiling is not None and recommendation is not None:
+            preferred = await self._deps.options.get(
+                self._check_id, recommendation.preferred_option_id
+            )
+            shorter = await self._shorter_term(preferred, ceiling)
+            if shorter is not None and shorter.term_months == term_months:
+                return {
+                    "kind": "shorter",
+                    "amount": str(ceiling),
+                    "from_term_months": shorter.from_term_months,
+                    "worst_payment": str(shorter.worst_payment),
+                    "saving": str(shorter.saving),
+                }
+        return {"kind": "typed"}
+
     async def _last_card_term(self) -> int | None:
         """The term of the check's latest question when it is a term card."""
-        if (
-            lender is not None
-            and max_term_months is not None
-            and tracks
-            and all(track["rate"] is not None for track in tracks)
-        ):
-            raise ToolError(
-                "the offer already names its lender, every track's rate and its term, so the "
-                "form has nothing to ask; save it with save_offer"
-            )
         asked = await self._deps.sink.latest(self._check_id, QUESTION_ASKED)
         if asked is None:
             return None
@@ -997,29 +1030,27 @@ class CheckTools:
         if above_ceiling is not None:
             data["next_step"] = above_ceiling
         elif shorter is not None:
-            data["next_step"] = shorter
+            data["next_step"] = _shorter_term_step(shorter)
         return summary(data)
 
-    async def _shorter_term(self, preferred: Option, ceiling: Decimal) -> str | None:
+    async def _shorter_term(self, preferred: Option, ceiling: Decimal) -> _ShorterTerm | None:
         """When the preferred option fits the ceiling and its term may move (an example, or an
         offer that leaves its term open), the shortest term at which its track still fits, by
         the engine's offer search, with the interest it saves; None when no shorter term fits."""
         if preferred.source == "offer" and preferred.max_term_months is None:
             return None
         (track,) = cast(list[Mapping[str, object]], preferred.loan["tracks"])
+        from_term = cast(int, track["term_months"])
         found = await self._deps.engine.offer_term(track, ceiling)
-        if not found.comfortable or found.term_months >= cast(int, track["term_months"]):
+        if not found.comfortable or found.term_months >= from_term:
             return None
         shorter = {**track, "term_months": found.term_months}
         figures = (await self._deps.engine.simulate({"tracks": [shorter]})).figures
-        saving = (preferred.summary.total_paid - figures.total_paid).quantize(Decimal(1))
-        return (
-            f"the preferred option also fits the ceiling at {found.term_months} months, with a "
-            f"worst-case monthly payment of {figures.risk_payment.quantize(Decimal(1))} and "
-            f"{saving} less in total. Say so in one sentence of the reply with both figures, "
-            f"then end the turn with ask_term with term_months {found.term_months}, so the "
-            "person confirms the shorter term on the term card or keeps theirs; never offer it "
-            "in the reply's text alone. If they keep their term, do not offer it again"
+        return _ShorterTerm(
+            term_months=found.term_months,
+            from_term_months=from_term,
+            worst_payment=figures.risk_payment.quantize(Decimal(1)),
+            saving=(preferred.summary.total_paid - figures.total_paid).quantize(Decimal(1)),
         )
 
     async def _above_ceiling(
@@ -1337,6 +1368,20 @@ def price_text(option: Option) -> str:
 def _inline(values: Mapping[str, object]) -> str:
     """Several values on one line of a summary, as "key value" pairs."""
     return ", ".join(f"{key} {_summary_value(value)}" for key, value in values.items())
+
+
+def _shorter_term_step(shorter: _ShorterTerm) -> str:
+    """The instruction a recommendation's result gives the model for a shorter term that fits."""
+    return (
+        f"the preferred option also fits the ceiling at {shorter.term_months} months, with a "
+        f"worst-case monthly payment of {shorter.worst_payment} and "
+        f"{shorter.saving} less in total than at {shorter.from_term_months} months. End the "
+        f"turn with ask_term with term_months {shorter.term_months}: its card states these "
+        "figures, so the person confirms the shorter term there or keeps theirs, and the "
+        "reply says nothing of them. Once they confirm, it is simply the check's term: never "
+        "call it shorter or cheaper, or say the option 'also' fits at it. If they keep their "
+        "term, do not offer it again"
+    )
 
 
 def _margin(option: Option, ceiling: Decimal) -> str:

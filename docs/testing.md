@@ -241,10 +241,12 @@ questions with and without choices, the skip line, and the ceiling question's "�
 card shows its term and first payment, starts its two boxes at the proposed term and the check's
 ceiling, confirms the term in its box with a new ceiling only when one was typed, asks for a card
 from a new ceiling when the term is left as proposed, refuses a term outside 6 to 84 months or a
-cleared ceiling, and has one button. It is titled "חישוב ראשוני" with the line on its basis, a
-card stored without a basis shows the title alone, its ceiling box has no placeholder and may stay
-empty, and its "תכנון החזר חודשי" link sends its sentence and saves nothing. It also proves that a
-refused save or a non-number keeps the question open with its reason, and that a closed bubble
+cleared ceiling, and has one button. It is titled "חישוב ראשוני" only on the basis of the assumed
+payment, and "אפשר לקצר" with what it saves on a suggested shorter term, with the line on its
+basis, a card stored without a basis shows its term line alone, its ceiling box has no placeholder
+and may stay empty, and its "תכנון החזר חודשי" link sends its sentence and saves nothing. It also
+proves that a refused save or a non-number keeps the question open with its reason, and that a
+closed bubble
 shows only the question.
 
 **Check page.** `CheckPage.test.tsx` replays a recorded conversation into all three panes and proves

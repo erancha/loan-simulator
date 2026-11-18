@@ -996,8 +996,38 @@ async def test_room_under_the_ceiling_offers_the_shortest_term_that_still_fits(
     )
     (next_step,) = [line for line in result.splitlines() if line.startswith("next_step")]
     assert "at 24 months" in next_step
-    assert "635 less in total" in next_step
-    assert "end the turn with ask_term with term_months 24" in next_step
+    assert "635 less in total than at 48 months" in next_step
+    assert "ask_term with term_months 24" in next_step
+    assert "the reply says nothing of them" in next_step
+
+
+async def test_the_card_of_the_suggested_shorter_term_states_what_it_saves(world: World) -> None:
+    await fitting_with_room(world, OfferTerm(term_months=24, comfortable=True), max_term_months=84)
+    world.sink.events.clear()
+    # The card's first payment from the two lender examples, then the offer at the shorter term.
+    world.engine.simulations = [PRIME_SIMULATION, BALLOON_SIMULATION, figures_of("1100", "26400")]
+
+    await world.tools.ask_term(24)
+
+    (asked,) = world.events_of(QUESTION_ASKED)
+    assert isinstance(asked, dict) and asked["question"]["basis"] == {
+        "kind": "shorter",
+        "amount": "3000",
+        "from_term_months": 48,
+        "worst_payment": "2039",
+        "saving": "635",
+    }
+
+
+async def test_another_term_typed_after_a_suggestion_is_a_typed_one(world: World) -> None:
+    await fitting_with_room(world, OfferTerm(term_months=24, comfortable=True), max_term_months=84)
+    world.sink.events.clear()
+    world.engine.simulations = [PRIME_SIMULATION, BALLOON_SIMULATION, figures_of("1100", "26400")]
+
+    await world.tools.ask_term(36)
+
+    (asked,) = world.events_of(QUESTION_ASKED)
+    assert isinstance(asked, dict) and asked["question"]["basis"] == {"kind": "typed"}
 
 
 async def test_an_offer_with_a_fixed_term_is_not_offered_a_shorter_one(world: World) -> None:

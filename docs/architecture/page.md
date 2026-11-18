@@ -162,11 +162,15 @@ instead. A question with choices of its own
 chat box takes any other answer and a skip only gets the question asked again. A closed question
 shows only the text.
 
-The term card is a question of its own kind, a first calculation the person tunes: one line,
-"חישוב ראשוני", with the term in months and its first payment; a line on the assumption the term
-was worked out from, which the question's `basis` carries: the assumed first payment of 1,000 ₪
-when the check has no ceiling, or the check's ceiling, each with the amount, or the term the
-person typed. When even 84 months does not keep the payment under the check's ceiling, the line
+The term card is a question of its own kind, a calculation the person tunes: one line with the
+term in months and its first payment, titled "חישוב ראשוני" only when the term was worked out from
+the simulator's own assumed payment, not from the person's ceiling or typed term; a line on the
+assumption the term was worked out from, which the question's `basis` carries: the assumed first
+payment of 1,000 ₪ when the check has no ceiling, or the check's ceiling, each with the amount, or
+the term the person typed. The card of a shorter term a recommendation suggests is titled "אפשר
+לקצר", and its line says the term is the best one under the ceiling, with the term it shortens,
+the worst-case payment and what it saves in total, so a card the person did not ask for explains
+itself. When even 84 months does not keep the payment under the check's ceiling, the line
 says so plainly. When the person named no ceiling and 84 months cannot meet the assumed payment,
 the line names no assumed amount, since the person never chose one: it states that 84 months is
 the longest term and gives the lowest payment the loan allows, the card's first payment.

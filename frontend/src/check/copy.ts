@@ -373,9 +373,20 @@ export const CLONE_CHOICE = 'לשכפל ולבדוק בנפרד'
 export const cloneLine = (request: string) => `${CLONE_CHOICE}: ${request}`
 export const STAY_CHOICE = 'לעדכן את הבדיקה הזאת'
 
-/** The term question's card line: the term worked out and the first payment it gives. */
-export function termLine(termMonths: number, firstPayment: string): string {
-  return `חישוב ראשוני: ${termText(termMonths)} · החזר ראשון כ-${formatShekels(firstPayment)}`
+const INITIAL_CALCULATION = 'חישוב ראשוני: '
+const SHORTER_TERM = 'אפשר לקצר: '
+
+/**
+ * The term question's card line: the term and the first payment it gives. The card worked out
+ * from the simulator's own assumed payment is titled an initial calculation, and the card of a
+ * shorter term the recommendation suggests is titled a possible shortening, so a card the person
+ * did not ask for says what it is; a term that follows the person's ceiling or that they typed
+ * has no title.
+ */
+export function termLine(termMonths: number, firstPayment: string, basis?: TermBasis): string {
+  const line = `${termText(termMonths)} · החזר ראשון כ-${formatShekels(firstPayment)}`
+  if (basis?.kind === 'first_payment_target') return `${INITIAL_CALCULATION}${line}`
+  return basis?.kind === 'shorter' ? `${SHORTER_TERM}${line}` : line
 }
 
 const LONGEST_TERM = `גם ב-${termText(TERM_MAX_MONTHS)}, התקופה הארוכה ביותר שהסימולטור מחשב,`
@@ -392,6 +403,15 @@ const CHANGE_PARAMETERS = 'אפשר לשנות כאן את הפרמטרים.'
 export function termBasisLine(basis: TermBasis, firstPayment: string): string {
   if (basis.kind === 'typed') return `זה החישוב למספר החודשים שבחרת. ${CHANGE_PARAMETERS}`
   const amount = formatShekels(basis.amount)
+  if (basis.kind === 'shorter') {
+    return (
+      `זה מספר החודשים המיטבי לפי ההחזר החודשי המרבי שלך, ${amount}: במקום` +
+      ` ${termText(basis.from_term_months)}, ההחזר נשאר עד` +
+      ` כ-${formatShekels(basis.worst_payment)} גם אם הריבית תעלה כמו בעבר, והסכום הכולל להחזר` +
+      ` קטן ב-${formatShekels(basis.saving)}.` +
+      ` ${CHANGE_PARAMETERS}`
+    )
+  }
   if (basis.kind === 'first_payment_target') {
     return basis.fits
       ? `בהנחה ראשונית שההחזר החודשי יהיה עד כ-${amount}, זה מספר החודשים המתאים, לפי` +
@@ -410,7 +430,9 @@ export function termBasisLine(basis: TermBasis, firstPayment: string): string {
 /** The question a bubble shows: a field's question, the term card, the clone offer, or the
  * model's own sentence. */
 export function questionText(question: Question): string {
-  if (question.kind === 'term') return termLine(question.term_months, question.first_payment)
+  if (question.kind === 'term') {
+    return termLine(question.term_months, question.first_payment, question.basis)
+  }
   if (question.kind === 'offer') return OFFER_FORM_TITLE
   if (question.offer_clone === true) return CLONE_QUESTION
   const { field } = question

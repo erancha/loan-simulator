@@ -118,7 +118,7 @@ The model sees two sets of tools. An agent tool's result is a compact `key: valu
 | Engine | `simulate_loan` | Cost and worst-case figures of a loan. |
 | Engine | `market_series` | Today's prime and the latest months of the prime and of the CPI's monthly change. |
 | Agent | `set_loan` | Saves the loan: its amount and an optional purpose, and a payment ceiling the person named in the same message, saved as stated before the term card proposes a term. Refuses an empty purpose, a ceiling of 0 or less, an amount of 0 or less, and an amount outside the principal limits the engine prices, naming them. When the check's recommendation is for another amount, its result tells the model to save options of the new amount and recommend again. |
-| Agent | `ask_term` | Puts the term card on the person's screen. Without a term it proposes one (below); with the number of months the person typed, it shows that term's first payment. Refuses a term outside 6 to 84 months, a check with no loan, and the term the last card already showed, which the person's answer confirms, so the model calls `set_term` instead of showing the same card again. |
+| Agent | `ask_term` | Puts the term card on the person's screen. Without a term it proposes one (below); with a number of months, it shows that term's first payment, and marks the card as the recommendation's suggested shorter term when the number is that term, as the person's typed term otherwise. Refuses a term outside 6 to 84 months, a check with no loan, and the term the last card already showed, which the person's answer confirms, so the model calls `set_term` instead of showing the same card again. |
 | Agent | `ask_offer` | Puts the offer form on the person's screen, with the lender, tracks and longest term the person already said filled in, when a message about a real offer lacks one of them. Refuses a check with no loan, and an offer that lacks none of them, which `save_offer` saves: the form would ask the person again for what they said. |
 | Agent | `read_offer` | Reads an offer described in words that quotes a monthly payment or leaves its type open, from only what the person said: the lender, the amount and months the lender quoted, the number stated, the payment and the type words (פריים, קבוע, צמוד). The engine's `offer_readings` prices each loan the words may mean on the quoted amount and term, and `application/offer_reading.py` decides (below): an identified reading is saved as a real offer on the check's loan amount and goes back to the model to recommend on, unless the quoted amount is below the check's loan, when it is stored as awaiting the lender's answer on the amount; an offer left open is stored as awaiting its lender, with the readings its card shows, which removes the check's examples; an unrecognized one saves nothing. With an awaiting offer's id it adds the new detail to that offer and decides again, and it refuses describing an awaiting offer anew, naming its id. It also refuses a check with no loan, a missing lender, an unknown term, and an offer with neither a number nor a payment, which goes to the form instead. |
 | Agent | (runner) | `POST /api/checks/{id}/opening`, from the opening card, saves its purpose and amount as the loan through `set_loan` before the line is stored, so a refused loan answers 422 with its reason and records nothing, then shows the term card through `ask_term` with no model call. A check that already holds a loan is refused. |
@@ -237,8 +237,10 @@ beside that payment, in numbers the model did not compute. When the preferred
 option's term may move (an example, or an offer that leaves its term open), the engine's offer
 search finds the shortest term at which its track still fits; a shorter one comes back as a
 `next_step` with its worst-case payment and the interest it saves, telling the model to end the
-turn with the term card for it (`ask_term`), where the person confirms it or keeps their term. A
-term confirmed before the ceiling was known is otherwise never revisited.
+turn with the term card for it (`ask_term`), where the person confirms it or keeps their term. The
+card states those figures, not the reply: showing a card ends the turn, so a sentence about them
+would only be written a turn late, after the term changed. A term confirmed before the ceiling was
+known is otherwise never revisited.
 
 The result also gives each named option's price, `preferred_price` and `alternative_price`, as
 [calculations](../calculations.md#the-price-of-an-offer) defines it: its interest cost over the
@@ -339,7 +341,7 @@ person may send another message.
 | `loan.set`, `term.set` | A tool saved the loan or the confirmed term. |
 | `ceiling.set` | The person stated a ceiling; carries it with the source `stated`. |
 | `finances.updated` | A figure was saved; carries both figures, the ones missing, and the check's ceiling and its source after the save. |
-| `question.asked` | The model asked one question, or put up the term card (kind `term`, with the term, its first payment and `basis`: how the term was chosen, `first_payment_target` or `ceiling` with the amount and whether the term fits it, or `typed`) or the offer form (kind `offer`, with what the person already said); the page renders it with a control. |
+| `question.asked` | The model asked one question, or put up the term card (kind `term`, with the term, its first payment and `basis`: how the term was chosen, `first_payment_target` or `ceiling` with the amount and whether the term fits it, `shorter` for the shorter term a recommendation suggested, with the ceiling, the term it shortens, the worst-case payment and the saving, or `typed`) or the offer form (kind `offer`, with what the person already said); the page renders it with a control. |
 | `chart.shown` | A market series for the page to draw: which series, its date and its monthly values. |
 | `check.cloned` | Left on the source check after a clone, naming the copy; the page adds a handoff note to the source's conversation, with a button to the copy, and the source stays open. A clone does not copy it. |
 | `option.saved` | An option was saved; carries the engine's full result. |

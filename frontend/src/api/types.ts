@@ -201,10 +201,19 @@ export type QuestionField =
 /**
  * How the term card's term was chosen: the shortest term whose first payment stays under an
  * assumed amount, or whose worst-case payment fits the check's ceiling, with fits false when even
- * the longest term does not; or the term the person typed.
+ * the longest term does not; or a shorter term the recommendation suggests, at which its
+ * preferred option still fits the ceiling (amount), with the term it shortens, the worst-case
+ * payment there and what it saves in total; or the term the person typed.
  */
 export type TermBasis =
   | { kind: 'first_payment_target' | 'ceiling'; amount: string; fits: boolean }
+  | {
+      kind: 'shorter'
+      amount: string
+      from_term_months: number
+      worst_payment: string
+      saving: string
+    }
   | { kind: 'typed' }
 
 /**
