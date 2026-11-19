@@ -157,23 +157,18 @@ test('no checks: the empty state; the button creates and opens a check', async (
   expect(posts).toHaveLength(1)
 })
 
-test('with an unused live check, the button opens it instead of creating another', async () => {
-  const fetchStub = stubApi([
+test('with an unused live check, the new-check button is disabled', async () => {
+  stubApi([
     [
       summary('a', '2026-01-01T00:00:00Z'),
       summary('empty', '2026-02-01T00:00:00Z', { started: false }),
     ],
   ])
   window.history.replaceState(null, '', '#check=a')
-  const user = userEvent.setup()
   render(<Shell user={dana} onSignOut={vi.fn()} />)
 
   await waitFor(() => expect(openedStreams()).toEqual(['/api/checks/a/events']))
-  await user.click(screen.getByRole('button', { name: '+ בדיקה חדשה' }))
-
-  await waitFor(() => expect(window.location.hash).toBe('#check=empty'))
-  const posts = fetchStub.mock.calls.filter(([p, i]) => p === '/api/checks' && i?.method === 'POST')
-  expect(posts).toHaveLength(0)
+  expect(screen.getByRole('button', { name: '+ בדיקה חדשה' })).toBeDisabled()
 })
 
 test('lists checks with price and recommendation markers; the newest opens', async () => {

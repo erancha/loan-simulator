@@ -152,7 +152,7 @@ export function Shell({ user, onSignOut }: Props) {
     if (newestLive !== undefined) open(newestLive.id)
   }
 
-  // An unused check is already a new one, so the button opens it instead of adding another.
+  // An unused check is already a new one, so it is opened instead of adding another.
   async function create() {
     const unused = checks?.find(isUnused)
     if (unused !== undefined) {

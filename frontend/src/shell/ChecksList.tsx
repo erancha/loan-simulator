@@ -253,7 +253,13 @@ export function ChecksList({
   return (
     <nav className="checks-list" aria-label={CHECKS_HEADING}>
       <h2 className="panel-title">{CHECKS_HEADING}</h2>
-      <button type="button" className="primary" onClick={onCreate}>
+      {/* An unused check is already a new one, and its own item opens it. */}
+      <button
+        type="button"
+        className="primary"
+        onClick={onCreate}
+        disabled={live.some(isUnused)}
+      >
         {NEW_CHECK}
       </button>
       <ul>{live.map(item)}</ul>
