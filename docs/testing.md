@@ -320,7 +320,8 @@ list, the archive icon of a live check, the absence of both the duplicate and ar
 check not yet started, its delete icon that removes it with no confirmation, that the new-check
 button opens such a check rather than creating another, that archiving the open check opens the
 newest live one or a new check, the restore icon of an archived one, the side tab named "בדיקות",
-selection by hash and the fallback to the newest check, the tab bar, and that a late list answer
+selection by hash and the fallback to the newest check, the tab bar, the swipe between panes
+with the moves it leaves to scrolling, and that a late list answer
 does not overwrite a newer one. For
 awaiting offers it proves the bubble's count with its singular and plural tooltip, no bubble without
 one or on an archived check, the list of links the bubble opens and closes, and that a link opens

@@ -31,6 +31,7 @@ import {
 } from './copy.ts'
 import { TabBar } from './TabBar.tsx'
 import type { Pane } from './TabBar.tsx'
+import { useTabSwipe } from './useTabSwipe.ts'
 
 const HASH_PREFIX = '#check='
 
@@ -50,7 +51,8 @@ interface Props {
 
 /**
  * The signed-in page: header, the person's checks, and the open check laid out by CSS as three
- * columns or, on a phone, as the pane the tab bar picks. The open check is kept in the URL hash.
+ * columns or, on a phone, as the pane the tab bar or a sideways swipe picks. The open check is
+ * kept in the URL hash.
  */
 export function Shell({ user, onSignOut }: Props) {
   const [checks, setChecks] = useState<CheckSummary[] | null>(null)
@@ -60,6 +62,7 @@ export function Shell({ user, onSignOut }: Props) {
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const [wantedId, setWantedId] = useState(hashedId)
   const [pane, setPane] = useState<Pane>('chat')
+  const tabSwipe = useTabSwipe(pane, setPane)
   // The awaiting offer whose card the open check brings into view: the list link that opened it.
   const [focusAwaiting, setFocusAwaiting] = useState<AwaitingFocus | null>(null)
   const focusRequests = useRef(0)
@@ -285,7 +288,7 @@ export function Shell({ user, onSignOut }: Props) {
           ),
       )}
       {selected !== null && (
-        <main className="shell-main">
+        <main className="shell-main" {...tabSwipe}>
           <TabBar active={pane} onChange={setPane} />
           <CheckPage
             key={selected.id}

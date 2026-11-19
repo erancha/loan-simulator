@@ -62,9 +62,15 @@ title fits its first line and its term its second. The card starts at 470px; dra
 between it and the conversation, or the arrow keys on that border, narrows it to 380px or widens it
 up to what leaves the conversation 360px (`check/CardResizer.tsx`), and the browser keeps the width.
 The conversation takes the rest. Below 900px a tab bar ("בדיקות", "שיחה", "המלצה") shows one of the
-three at a time (`frontend/src/styles/global.css`). There, the reply that presents the check's
-recommendation carries a link under its bubble that switches to the "המלצה" pane, where every
-track is listed; the reply is the first finished one after the recommendation, in its own turn.
+three at a time (`frontend/src/styles/global.css`). A sideways swipe moves to the next pane in
+Hebrew reading order, a finger moving right bringing in the tab on the left, and wraps around from
+"המלצה" to "בדיקות" (`shell/useTabSwipe.ts`). Scrolling wins: a mostly vertical move, a move that
+starts in a text field or in something that scrolls sideways, such as a scenario's table, and one
+that starts at a screen edge, where the phone has its own back gesture, switch nothing.
+
+Below 900px, the reply that presents the check's recommendation carries a link under its bubble
+that switches to the "המלצה" pane, where every track is listed; the reply is the first finished
+one after the recommendation, in its own turn.
 
 ## Data flow
 

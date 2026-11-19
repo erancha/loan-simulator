@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import type { CheckSummary, User } from '../api/types.ts'
@@ -316,6 +316,49 @@ test('the tab bar switches the active pane', async () => {
   expect(screen.getByRole('tab', { name: 'המלצה' })).toHaveAttribute('aria-selected', 'true')
   await user.click(screen.getByRole('tab', { name: 'בדיקות' }))
   expect(page).toHaveAttribute('data-active-pane', 'side')
+})
+
+test('a sideways swipe moves through the panes in Hebrew order, around the tab bar', async () => {
+  stubApi([[summary('a', '2026-01-01T00:00:00Z')]])
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  await screen.findByRole('navigation', { name: 'הבדיקות שלי' })
+  const page = document.querySelector('.check-page')!
+  const swipe = (dx: number, dy = 0, at: Element = page, x = 500) => {
+    fireEvent.touchStart(at, { touches: [{ clientX: x, clientY: 300 }] })
+    fireEvent.touchEnd(at, { changedTouches: [{ clientX: x + dx, clientY: 300 + dy }] })
+  }
+
+  swipe(100)
+  expect(page).toHaveAttribute('data-active-pane', 'card')
+  swipe(100)
+  expect(page).toHaveAttribute('data-active-pane', 'side')
+  swipe(-100)
+  expect(page).toHaveAttribute('data-active-pane', 'card')
+  swipe(-100)
+  expect(page).toHaveAttribute('data-active-pane', 'chat')
+  expect(screen.getByRole('tab', { name: 'שיחה' })).toHaveAttribute('aria-selected', 'true')
+})
+
+test('a short, vertical, edge or in-scroller swipe leaves the pane alone', async () => {
+  stubApi([[summary('a', '2026-01-01T00:00:00Z')]])
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  await screen.findByRole('navigation', { name: 'הבדיקות שלי' })
+  const page = document.querySelector('.check-page')!
+  const swipe = (dx: number, dy: number, at: Element, x = 500) => {
+    fireEvent.touchStart(at, { touches: [{ clientX: x, clientY: 300 }] })
+    fireEvent.touchEnd(at, { changedTouches: [{ clientX: x + dx, clientY: 300 + dy }] })
+  }
+  const scroller = document.createElement('div')
+  scroller.style.overflowX = 'auto'
+  Object.defineProperty(scroller, 'scrollWidth', { value: 800 })
+  Object.defineProperty(scroller, 'clientWidth', { value: 300 })
+  page.append(scroller)
+
+  swipe(40, 0, page)
+  swipe(100, 80, page)
+  swipe(100, 0, page, 10)
+  swipe(100, 0, scroller)
+  expect(page).toHaveAttribute('data-active-pane', 'chat')
 })
 
 test('the side tab is named בדיקות', async () => {
