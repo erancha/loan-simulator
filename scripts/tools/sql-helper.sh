@@ -33,6 +33,14 @@
 #                                                    print the revision before and after: a
 #                                                    rehearsal of production's next upgrade;
 #                                                    asks to type the database's name
+#   ./scripts/tools/sql-helper.sh --copy-live        replace this machine's database with a copy
+#                                                    of production's on the EC2 instance (read
+#                                                    only there; the dump streams over SSH, no
+#                                                    file is written), then run this working
+#                                                    tree's schema migration on it and restart
+#                                                    the local agent: reproduces locally what
+#                                                    people saw in production; asks to type the
+#                                                    database's name
 #   ./scripts/tools/sql-helper.sh --demo-check <id>  write the stored events of the check with that
 #                                                    id (the #check= part of the page's URL) to
 #                                                    frontend/src/demo/recording.json, the
@@ -79,7 +87,7 @@ fi
 
 COPY_LIVE=""
 if [[ "${1:-}" == --copy-live ]]; then
-  [[ -n "$PREVIEW" && $# -eq 1 ]] || { print_help >&2; exit 2; }
+  [[ ( -n "$PREVIEW" || "$TARGET" == local ) && $# -eq 1 ]] || { print_help >&2; exit 2; }
   COPY_LIVE=1
   set --
 fi
@@ -185,31 +193,44 @@ elif [[ "$DUMP_MODE" == restore ]]; then
     --clean --if-exists --no-owner --single-transaction < "$DUMP_FILE"
   echo "Restored $DUMP_FILE; restart the agent: ./scripts/deploy.sh"
 elif [[ -n "$COPY_LIVE" ]]; then
-  # Production's Postgres runs on the same Docker daemon as the preview's, in production's
-  # Compose project (the name of docker-compose.yml), so its dump streams straight into the
-  # preview's: no copy lands on a disk.
-  live_project="$(awk '/^name:/ {print $2}' "$ROOT/docker-compose.yml")"
-  live_db="$(docker ps -q --filter "label=com.docker.compose.project=$live_project" \
-    --filter label=com.docker.compose.service=db)"
-  [[ -n "$live_db" ]] ||
-    { echo "Production's database is not running on the instance; deploy it first:" \
-        "./scripts/deploy.sh --ec2" >&2; exit 1; }
-  echo "The preview's schema revision: $(schema_revision)"
-  echo "This replaces the preview's database '$POSTGRES_DB' with a copy of production's."
+  if [[ -n "$PREVIEW" ]]; then
+    copy_name="the preview's database"
+    # Production's Postgres runs on the same Docker daemon as the preview's, in production's
+    # Compose project (the name of docker-compose.yml), so its dump streams straight into the
+    # preview's: no copy lands on a disk.
+    live_project="$(awk '/^name:/ {print $2}' "$ROOT/docker-compose.yml")"
+    live_db="$(docker ps -q --filter "label=com.docker.compose.project=$live_project" \
+      --filter label=com.docker.compose.service=db)"
+    [[ -n "$live_db" ]] ||
+      { echo "Production's database is not running on the instance; deploy it first:" \
+          "./scripts/deploy.sh --ec2" >&2; exit 1; }
+    live_dump() {
+      docker exec "$live_db" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom
+    }
+  else
+    copy_name="this machine's database"
+    # A subshell holds the EC2 target, so this shell's compose stays on the local daemon; its
+    # stdout carries only the dump, which streams through the instance's SSH connection.
+    live_dump() {
+      ( use_ec2 >&2
+        compose exec -T db pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom )
+    }
+  fi
+  echo "The schema revision of $copy_name: $(schema_revision)"
+  echo "This replaces $copy_name '$POSTGRES_DB' with a copy of production's."
   read -r -p "Type the database's name to continue: " answer
   [[ "$answer" == "$POSTGRES_DB" ]] || { echo "Nothing copied." >&2; exit 1; }
-  # The preview's own schema goes first: a restore drops only the objects production's dump
-  # holds, and a table only the preview's newer migrations made would make the migration fail.
+  # The target's own schema goes first: a restore drops only the objects production's dump
+  # holds, and a table only the target's newer migrations made would make the migration fail.
   compose exec -T db "${PSQL[@]}" -q -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
-  docker exec "$live_db" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom |
+  live_dump |
     compose exec -T db pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --no-owner \
       --single-transaction
   live_revision="$(schema_revision)"
-  echo "Production's schema revision, now the preview's: $live_revision"
+  echo "Production's schema revision, now that of $copy_name: $live_revision"
   if ! compose run --rm migrate; then
-    echo "The migration failed on the copy of production's data; the preview's database stays" \
-      "at revision $live_revision for inspection (sql-helper.sh --ec2 --preview), and the" \
-      "preview's agent keeps running on it unrestarted" >&2
+    echo "The migration failed on the copy of production's data; $copy_name stays at revision" \
+      "$live_revision for inspection, and its agent keeps running on it unrestarted" >&2
     exit 1
   fi
   echo "After the migration: $(schema_revision)"

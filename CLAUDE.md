@@ -69,6 +69,7 @@ than the license contact (`PUBLISHED_SETTINGS` of `lib/settings-guard.sh`).
 - `tools/sql-helper.sh [--ec2]` — psql on the stack's database; `--counts`, `--rows`,
   `--backup <file>`, `--restore <file>`, `--people`, `--reset <account-id>`, `--reset-all`,
   `--clone <from> <to>` (refuses a target with records); `--ec2 --preview` acts on the preview,
-  and `--ec2 --preview --copy-live` copies production's database into it and migrates it.
+  and `--ec2 --preview --copy-live` copies production's database into it and migrates it;
+  `--copy-live` alone does the same into the local database.
 - `tools/lock.sh` — recompiles each component's `requirements.txt` inside its Dockerfile's
   Python image after editing a dependency list.
