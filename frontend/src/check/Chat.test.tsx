@@ -348,11 +348,11 @@ test('a scenario pairs each figure today with the scenario, marking how it moved
   expect(cells(prime)[1]).toHaveAccessibleName('ללא שינוי')
 })
 
-test('a scenario names each option by its source, with the full track on its title', () => {
+test('a scenario names each option by its lender, with the full track on its title', () => {
   renderChat({ messages: [{ id: 's-2', role: 'scenario', scenario: scenarioCpi5 }] })
 
   const name = within(screen.getByRole('table')).getAllByRole('rowheader')[0]
-  expect(name.querySelector('.scenario-source')).toHaveTextContent('הצעה מבנק הפועלים')
+  expect(name.querySelector('.scenario-lender .chip-lender')).toHaveTextContent('הצעה מבנק הפועלים')
   expect(name.querySelector('.scenario-track')).not.toBeNull()
   expect(name.getAttribute('title')).toMatch(/^ריבית קבועה 6.9%.*\nהצעה מבנק הפועלים/s)
 })

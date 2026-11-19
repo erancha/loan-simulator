@@ -13,7 +13,7 @@ import {
   TOTALS_HEADINGS,
 } from './copy.ts'
 import { withValues } from './emphasis.tsx'
-import { ExampleChip, OptionCardView } from './OptionCardView.tsx'
+import { ExampleChip, OptionCardView, OptionLender } from './OptionCardView.tsx'
 
 function OthersGroup({ title, options }: NonNullable<CardModel['others']>) {
   const titleId = useId()
@@ -77,10 +77,16 @@ function Fold({ fold, options }: FoldProps) {
               <th scope="row">
                 {option.isExample && <ExampleChip />}
                 {withValues(option.track)}
-                <span className="option-source totals-source">{option.source}</span>
+                <span className="option-lender totals-lender">
+                  <OptionLender lender={option.lender} isExample={option.isExample} />
+                </span>
               </th>
               <td>{withValues(option.totalToday)}</td>
-              <td>{option.totalRange === null ? NO_RANGE : withValues(option.totalRange)}</td>
+              {option.totalRange === null ? (
+                <td>{NO_RANGE}</td>
+              ) : (
+                <td title={option.totalRange.basis}>{withValues(option.totalRange.range)}</td>
+              )}
             </tr>
           ))}
         </tbody>

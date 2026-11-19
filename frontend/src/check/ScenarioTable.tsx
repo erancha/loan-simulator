@@ -4,6 +4,7 @@ import { exceeds, formatShekels } from '../money.ts'
 import { optionName } from './card.ts'
 import { SCENARIO_HEADINGS, SCENARIO_SAME, scenarioTitle } from './copy.ts'
 import { withValues } from './emphasis.tsx'
+import { OptionLender } from './OptionCardView.tsx'
 
 /**
  * A scenario's figure beside today's: in red when higher, in green when lower, and only the
@@ -29,7 +30,7 @@ function ScenarioCell({ today, scenario }: { today: string; scenario: string }) 
  * Every saved option priced on a future the person named, as a table in the conversation: its
  * name as its card shows it, then its highest payment and its total, each today and on the
  * scenario. The title names the scenario, so its figures are never read as the options' own. A
- * narrow screen names an option by its source alone, the full track on its title.
+ * narrow screen names an option by its lender alone, the full track on its title.
  */
 export function ScenarioTable({ scenario }: { scenario: ScenarioShown }) {
   const titleId = useId()
@@ -60,12 +61,14 @@ export function ScenarioTable({ scenario }: { scenario: ScenarioShown }) {
         </thead>
         <tbody>
           {scenario.rows.map((row) => {
-            const { track, source } = optionName(row)
+            const { track, lender } = optionName(row)
             return (
               <tr key={row.option_id}>
-                <th scope="row" className="scenario-name" title={`${track}\n${source}`}>
+                <th scope="row" className="scenario-name" title={`${track}\n${lender}`}>
                   <span className="scenario-track">{withValues(track)}</span>
-                  <span className="option-source totals-source scenario-source">{source}</span>
+                  <span className="option-lender totals-lender scenario-lender">
+                    <OptionLender lender={lender} isExample={row.source === 'example'} />
+                  </span>
                 </th>
                 <td>{formatShekels(row.today.max_payment)}</td>
                 <ScenarioCell today={row.today.max_payment} scenario={row.scenario.max_payment} />

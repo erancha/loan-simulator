@@ -47,7 +47,10 @@ test('the reference model shows the decision and both labelled options', () => {
 test('options outside the recommendation sit in their titled group', () => {
   render(<RecommendationCard model={reference} />)
   const group = screen.getByRole('region', { name: 'הצעות חדשות, עוד לא נכללו בהמלצה' })
-  expect(within(group).getByText('הצעה מבנק הפועלים · 02.11.2026')).toBeInTheDocument()
+  expect(within(group).getByText('הצעה מבנק הפועלים · 02.11.2026')).toHaveClass(
+    'chip',
+    'chip-lender',
+  )
 })
 
 test('a real offer shows its price under its payment, and an example does not', () => {
@@ -80,7 +83,9 @@ test('the fold is open and lists totals; it can be closed', async () => {
     .toBeInTheDocument()
   expect(within(fold).getByRole('columnheader', { name: 'טווח בתרחישים' })).toBeInTheDocument()
   expect(rows[1]).toContain('32,547 ₪')
-  expect(rows[1]).toContain('32,432–34,026 ₪ (לפי 85 תקופות מהעבר)')
+  expect(rows[1]).toContain('32,432–34,026 ₪')
+  expect(rows[1]).not.toContain('תקופות מהעבר')
+  expect(within(fold).getByTitle('לפי 85 תקופות מהעבר')).toHaveTextContent('32,432–34,026 ₪')
   expect(rows[2]).toContain('32,667 ₪—')
   const rowHeaders = within(fold).getAllByRole('rowheader')
   expect(rowHeaders[0]).toHaveTextContent('לפי ריבית ממוצעת בבנקים')

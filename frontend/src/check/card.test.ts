@@ -35,14 +35,14 @@ const PRIME_CARD = {
   id: 'prime-36',
   label: 'מועדפת',
   track: `מסלול פריים − 0.5%, ${SPITZER_BY_RATE}, 36 חודשים`,
-  source: 'לפי ריבית ממוצעת בבנקים',
+  lender: 'לפי ריבית ממוצעת בבנקים',
   termNote: null,
   isExample: true,
   paymentToday: '904 ₪',
   chip: { tone: 'amber', text: 'עד ~955 ₪ אם הריבית תעלה כמו ב-2022–2025' },
   balloon: null,
   totalToday: '32,547 ₪',
-  totalRange: '32,432–34,026 ₪ (לפי 85 תקופות מהעבר)',
+  totalRange: { range: '32,432–34,026 ₪', basis: 'לפי 85 תקופות מהעבר' },
   price: null,
 }
 
@@ -50,7 +50,7 @@ const FIXED_CARD = {
   id: 'fixed-36',
   label: 'חלופה',
   track: 'ריבית קבועה 6.9%, שפיצר (תשלום חודשי קבוע), 36 חודשים',
-  source: 'לפי ריבית ממוצעת בבנקים',
+  lender: 'לפי ריבית ממוצעת בבנקים',
   termNote: null,
   isExample: true,
   paymentToday: '907 ₪',
@@ -115,7 +115,7 @@ test('an offer after the recommendation goes under "הצעות חדשות, עו�
       id: 'offer-hapoalim',
       label: null,
       track: 'ריבית קבועה 6.9%, שפיצר (תשלום חודשי קבוע), 36 חודשים',
-      source: 'הצעה מבנק הפועלים · 02.11.2026',
+      lender: 'הצעה מבנק הפועלים · 02.11.2026',
       termNote: null,
       isExample: false,
       paymentToday: '890 ₪',
@@ -293,9 +293,9 @@ test('a CPI-linked example names the pension fund terms it follows', () => {
     },
   }
   const [option] = buildCard(stateOf(pension)).others!.options
-  expect(option.source).toBe('לפי תנאים שקרן פנסיה מפרסמת לעמיתיה')
+  expect(option.lender).toBe('לפי תנאים שקרן פנסיה מפרסמת לעמיתיה')
   expect(option.isExample).toBe(true)
-  expect(buildCard(stateOf(optionFixed36)).others!.options[0].source).toBe(
+  expect(buildCard(stateOf(optionFixed36)).others!.options[0].lender).toBe(
     'לפי ריבית ממוצעת בבנקים',
   )
 })
@@ -316,15 +316,15 @@ test('a prime track linked to the index says both the rate and prices', () => {
   })
 })
 
-test('an offer source names the lender, with a hyphen before a non-Hebrew name', () => {
+test('an offer names its lender, with a hyphen before a non-Hebrew name', () => {
   const lender = (name: string) => ({
     ...optionOfferFixed,
     data: { ...optionOfferFixed.data, lender: name },
   })
-  expect(buildCard(stateOf(lender('Max'))).others!.options[0].source).toBe(
+  expect(buildCard(stateOf(lender('Max'))).others!.options[0].lender).toBe(
     'הצעה מ-Max · 02.11.2026',
   )
-  expect(buildCard(stateOf(lender('בנק לאומי'))).others!.options[0].source).toBe(
+  expect(buildCard(stateOf(lender('בנק לאומי'))).others!.options[0].lender).toBe(
     'הצעה מבנק לאומי · 02.11.2026',
   )
 })

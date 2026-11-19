@@ -33,7 +33,7 @@ import {
   OTHERS_TITLE,
   PUBLISHED_RATE_LINE,
   RATE_KIND,
-  SOURCE_EXAMPLE,
+  EXAMPLE_LENDER,
   SPITZER_MOVING,
   UNCHECKED_NOTE,
   aboveCeilingText,
@@ -43,13 +43,13 @@ import {
   dataDatesLine,
   decisionText,
   historyAboveCeilingText,
+  historyBasis,
   interestLine,
-  offerSource,
+  offerLender,
   rateAgainstMarketLine,
   rateOverIndexLine,
   shortAwaitingNote,
   termText,
-  totalRangeText,
 } from './copy.ts'
 import { quotedBelowLoan, type CheckState } from './events.ts'
 
@@ -57,7 +57,8 @@ export interface OptionCard {
   id: string
   label: typeof LABEL_PREFERRED | typeof LABEL_ALTERNATIVE | null
   track: string
-  source: string
+  /** A real offer's lender with its offer date; an example's generic lender. */
+  lender: string
   /** A real offer whose lender allows less than the check's term, priced at its maximum. */
   termNote: string | null
   isExample: boolean
@@ -65,7 +66,8 @@ export interface OptionCard {
   chip: { tone: 'green'; text: typeof CHIP_UNCHANGING } | { tone: 'amber'; text: string }
   balloon: string | null
   totalToday: string
-  totalRange: string | null
+  /** The range of totals over past periods, with how many periods it was replayed over. */
+  totalRange: { range: string; basis: string } | null
   /**
    * A real offer's price; null for an example. The rate line is null for an offer stored before
    * the engine reported the rates.
@@ -142,29 +144,29 @@ function chipOf(option: OptionSaved, track: Track): OptionCard['chip'] {
   return { tone: 'amber', text }
 }
 
-function totalRangeOf(option: OptionSaved): string | null {
+function totalRangeOf(option: OptionSaved): OptionCard['totalRange'] {
   const simulated = option.result.tracks[0]
   if (simulated.total_paid_range === null) return null
   const { low, high } = simulated.total_paid_range
-  return totalRangeText(formatShekelRange(low, high), simulated.windows)
+  return { range: formatShekelRange(low, high), basis: historyBasis(simulated.windows) }
 }
 
 /** The fields an option is named by, on its card and in a scenario's table. */
 type Named = Pick<OptionData, 'source' | 'lender' | 'offer_date' | 'loan'>
 
-/** An option's name as its card shows it: its track, and where it comes from. */
-export function optionName(option: Named): { track: string; source: string } {
-  return { track: trackText(option.loan.tracks[0]), source: sourceOf(option) }
+/** An option's name as its card shows it: its track and its lender. */
+export function optionName(option: Named): { track: string; lender: string } {
+  return { track: trackText(option.loan.tracks[0]), lender: lenderOf(option) }
 }
 
-function sourceOf(option: Named): string {
+function lenderOf(option: Named): string {
   if (option.source === 'example') {
     // The engine's only CPI-linked example is the pension fund's.
     const { cpi_linked: linked } = option.loan.tracks[0]
-    return linked ? SOURCE_EXAMPLE.pensionFund : SOURCE_EXAMPLE.bankAverage
+    return linked ? EXAMPLE_LENDER.pensionFund : EXAMPLE_LENDER.bankAverage
   }
   const date = option.offer_date === null ? null : formatDate(option.offer_date)
-  return offerSource(option.lender, date)
+  return offerLender(option.lender, date)
 }
 
 function optionCard(
@@ -178,7 +180,7 @@ function optionCard(
     id: option.option_id,
     label,
     track: trackText(track),
-    source: sourceOf(option),
+    lender: lenderOf(option),
     termNote: max !== null && termMonths !== null && max < termMonths ? offerMaxNote(max) : null,
     isExample: option.source === 'example',
     paymentToday: formatShekels(option.figures.first_payment),

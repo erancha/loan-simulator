@@ -52,9 +52,9 @@ export const SPITZER_MOVING = {
 export const LABEL_PREFERRED = 'מועדפת'
 export const LABEL_ALTERNATIVE = 'חלופה'
 
-/** Where an example's rate comes from: the unlinked ones from the bank average, the
- * CPI-linked one from the terms a pension fund publishes for loans to its members. */
-export const SOURCE_EXAMPLE = {
+/** An example's lender, named generically by where its rate comes from: the bank average for
+ * the unlinked ones, the terms a pension fund publishes for its members for the CPI-linked one. */
+export const EXAMPLE_LENDER = {
   bankAverage: 'לפי ריבית ממוצעת בבנקים',
   pensionFund: 'לפי תנאים שקרן פנסיה מפרסמת לעמיתיה',
 } as const satisfies Record<string, string>
@@ -71,7 +71,7 @@ export function fromLender(lender: string): string {
   return `${HEBREW_LETTER.test(lender) ? 'מ' : 'מ-'}${lender}`
 }
 
-export function offerSource(lender: string | null, date: string | null): string {
+export function offerLender(lender: string | null, date: string | null): string {
   const from = lender === null ? 'הצעה' : `הצעה ${fromLender(lender)}`
   return date === null ? from : `${from} · ${date}`
 }
@@ -125,8 +125,9 @@ export function balloonLine(amount: string): string {
   return `ובסוף התקופה תשלום אחד של ${amount}`
 }
 
-export function totalRangeText(range: string, windows: number): string {
-  return `${range} (לפי ${windows} תקופות מהעבר)`
+/** How many periods of the past a range of totals was replayed over. */
+export function historyBasis(windows: number): string {
+  return `לפי ${windows} תקופות מהעבר`
 }
 
 export function termText(months: number): string {

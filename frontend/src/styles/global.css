@@ -17,6 +17,7 @@
   --bot-bubble: #e6efeb;
   --side: #e9edf2;
   --sign-in-border: #ccc;
+  --fine-print: calc(0.85rem - 2px);
   color-scheme: light dark;
 }
 
@@ -986,7 +987,8 @@ button.primary:disabled,
   margin: 4px 0;
 }
 
-.option-source {
+.option-lender,
+.option-note {
   color: var(--mute);
   font-size: 0.85rem;
 }
@@ -1027,6 +1029,13 @@ button.primary:disabled,
   background: var(--example);
   color: #ffffff;
   font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.chip-lender {
+  border: 1px solid var(--accent-border);
+  color: var(--accent);
+  font-size: var(--fine-print);
   font-weight: 600;
 }
 
@@ -1112,14 +1121,21 @@ button.primary:disabled,
   text-align: start;
 }
 
-.totals-source {
+.totals-lender {
   display: block;
 }
 
-/* A scenario's table may be wider than a bubble of text: it takes the chat column's width and
-   scrolls sideways on a narrow screen rather than squeezing its five columns. */
+/* An option's name is the longest text of its row, so it is set smaller than the figures. */
+.fold .totals th[scope='row'] {
+  font-size: var(--fine-print);
+}
+
+/* A scenario's table may be wider than a bubble of text: it grows to its content up to the chat
+   column's width, and scrolls sideways on a narrow screen rather than squeezing its five
+   columns. */
 .scenario {
-  width: min(100%, 720px);
+  width: fit-content;
+  max-width: 100%;
   overflow-x: auto;
 }
 
@@ -1128,7 +1144,13 @@ button.primary:disabled,
   font-weight: 600;
 }
 
-/* A scenario figure against today's: red when it costs more, green when less. */
+/* A scenario figure against today's: red when it costs more, green when less, bold either way
+   so a change stands out from the figures that stay. */
+.scenario-higher,
+.scenario-lower {
+  font-weight: 600;
+}
+
 .scenario-higher {
   color: var(--red);
 }
@@ -1147,7 +1169,7 @@ button.primary:disabled,
   white-space: nowrap;
 }
 
-/* A narrow screen gives the table to its figures: an option is named by its source alone, on one
+/* A narrow screen gives the table to its figures: an option is named by its lender alone, on one
    line cut with "…", and its title holds the full track. */
 @media (max-width: 899px) {
   .scenario-track {
@@ -1158,10 +1180,30 @@ button.primary:disabled,
     max-width: 9em;
   }
 
-  .scenario-name .scenario-source {
+  .scenario-name .scenario-lender,
+  .scenario-name .chip-lender {
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
+  }
+
+  .scenario-name .chip-lender {
+    max-width: 100%;
+    box-sizing: border-box;
+    vertical-align: bottom;
+  }
+}
+
+/* A wide screen names an option on one line where the column allows: its track, then its
+   lender's chip beside it. */
+@media (min-width: 900px) {
+  .scenario-name .scenario-lender {
+    display: inline;
+  }
+
+  .scenario-name .chip-lender {
+    margin-inline-start: 6px;
+    white-space: nowrap;
   }
 }
 
@@ -1184,9 +1226,13 @@ button.primary:disabled,
   margin-block-end: 2px;
 }
 
+.totals .chip-lender {
+  margin-block-start: 2px;
+}
+
 .assumptions {
   color: var(--mute);
-  font-size: calc(0.85rem - 2px);
+  font-size: var(--fine-print);
 }
 
 .error {
