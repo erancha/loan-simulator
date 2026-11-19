@@ -3,7 +3,7 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
-from loan_engine.domain.models import Loan, Profile, Track
+from loan_engine.domain.models import DEFAULT_SCENARIO, Loan, Profile, Scenario, Track
 
 
 def make_track(**overrides: object) -> Track:
@@ -122,3 +122,25 @@ def test_multi_track_loan_principal_limits_apply_to_the_sum() -> None:
         with pytest.raises(ValidationError, match="principal"):
             Loan(tracks=tracks)
     assert Loan(tracks=[make_track(principal=Decimal(a)) for a in (4000, 6000)]).principal == 10000
+
+
+def test_a_scenario_defaults_to_two_percent_cpi_and_a_flat_prime() -> None:
+    assert Scenario() == DEFAULT_SCENARIO
+    assert (DEFAULT_SCENARIO.cpi_per_year, DEFAULT_SCENARIO.prime_per_year) == (2, 0)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("cpi_per_year", -6), ("cpi_per_year", 21), ("prime_per_year", -6), ("prime_per_year", 6)],
+)
+def test_a_scenario_refuses_values_out_of_range(field: str, value: int) -> None:
+    with pytest.raises(ValidationError, match=field):
+        Scenario.model_validate({field: value})
+
+
+def test_a_scenario_takes_a_movement_as_a_rise_or_as_the_last_years_not_both() -> None:
+    with pytest.raises(ValidationError, match="cpi_per_year or cpi_like_last_years"):
+        Scenario(cpi_per_year=Decimal(5), cpi_like_last_years=3)
+    assert Scenario(prime_like_last_years=10).prime_like_last_years == 10
+    with pytest.raises(ValidationError, match="prime_like_last_years"):
+        Scenario(prime_like_last_years=11)

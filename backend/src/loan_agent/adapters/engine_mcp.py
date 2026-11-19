@@ -26,6 +26,7 @@ from loan_agent.ports.engine import (
     OfferReadings,
     OfferTerm,
     ProposedTerm,
+    ScenarioFigures,
     Simulation,
 )
 
@@ -146,6 +147,23 @@ class McpLoanEngine:
         result = await self._call("market_series", {"prime_months": months, "cpi_months": months})
         return market_series_of(result)
 
+    async def simulate_scenario(
+        self, loan: Mapping[str, object], scenario: Mapping[str, object]
+    ) -> ScenarioFigures:
+        result = await self._call(
+            "simulate_scenario", {"loan": dict(loan), "scenario": dict(scenario)}
+        )
+        chosen = result["scenario"]
+        return ScenarioFigures(
+            cpi_per_year=_money(chosen, "cpi_per_year"),
+            prime_per_year=_money(chosen, "prime_per_year"),
+            cpi_like_last_years=chosen["cpi_like_last_years"],
+            prime_like_last_years=chosen["prime_like_last_years"],
+            first_payment=_money(result, "first_payment"),
+            max_payment=_money(result, "max_payment"),
+            total_paid=_money(result, "total_paid"),
+        )
+
     async def _call(self, tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
         async with self._client.session(_SERVER) as session:
             result = await session.call_tool(tool, arguments)
@@ -206,18 +224,22 @@ def _optional_money(data: Mapping[str, Any], key: str) -> Decimal | None:
 
 
 def _figures(simulation: Mapping[str, Any]) -> OptionFigures:
-    """The loan's totals with its single track's worst window, balloon and price."""
+    """The loan's totals with its single track's worst window, range of totals across the
+    windows, balloon and price."""
     tracks = simulation["tracks"]
     if len(tracks) != 1:
         raise EngineError("multi-track loans are not supported in phase 1")
     (track,) = tracks
     worst = track["worst"]
+    totals = track["total_paid_range"]
     return OptionFigures(
         first_payment=_money(simulation, "first_payment"),
         peak_payment=_money(simulation, "max_base_payment"),
         worst_peak_payment=None if worst is None else _money(worst, "max_payment"),
         worst_start=None if worst is None else date.fromisoformat(worst["start"]),
         worst_end=None if worst is None else date.fromisoformat(worst["end"]),
+        total_paid_low=None if totals is None else _money(totals, "low"),
+        total_paid_high=None if totals is None else _money(totals, "high"),
         balloon_due=_optional_money(track, "balloon_due"),
         total_paid=_money(simulation, "total_paid"),
         rate_as_of=date.fromisoformat(simulation["rate_as_of"]),

@@ -50,6 +50,7 @@ from loan_agent.ports.engine import (
     OfferReadings,
     OfferTerm,
     ProposedTerm,
+    ScenarioFigures,
     Simulation,
 )
 from loan_agent.ports.repositories import CheckIds, EventTimes, StoredEvent
@@ -105,6 +106,8 @@ PRIME_SIMULATION = Simulation(
         worst_peak_payment=Decimal("2038.63"),
         worst_start=date(2022, 4, 1),
         worst_end=date(2026, 3, 1),
+        total_paid_low=Decimal("90549.92"),
+        total_paid_high=Decimal("96665.48"),
         balloon_due=None,
         total_paid=Decimal("90623.31"),
         rate_as_of=date(2026, 10, 26),
@@ -125,6 +128,8 @@ BALLOON_SIMULATION = Simulation(
         worst_peak_payment=Decimal("1482.61"),
         worst_start=date(2021, 5, 1),
         worst_end=date(2025, 4, 1),
+        total_paid_low=Decimal("91716.73"),
+        total_paid_high=Decimal("101326.32"),
         balloon_due=Decimal("32472.96"),
         total_paid=Decimal("96049.73"),
         rate_as_of=date(2026, 10, 26),
@@ -447,7 +452,8 @@ class InMemoryCheckEventStore:
 @dataclass
 class FakeLoanEngine:
     """simulations are answered in order; simulate_error, suggest_error, assess_error and
-    market_error, when set, are raised instead; suggest answers the captured tracks at the
+    market_error, when set, are raised instead; scenarios are answered in order, or
+    scenario_error raised when set; suggest answers the captured tracks at the
     principal and term asked for; market_series answers from the captured engine result.
     comfortable_terms and largest_loans answer the ceiling searches, None meaning nothing fits.
     offer_readings answers readings, captured from the engine for 45,000 over 60 months at a
@@ -459,6 +465,8 @@ class FakeLoanEngine:
     suggest_error: EngineError | None = None
     assess_error: EngineError | None = None
     market_error: EngineError | None = None
+    scenarios: list[ScenarioFigures] = field(default_factory=list)
+    scenario_error: EngineError | None = None
     offer_terms: OfferTerm = COMFORTABLE_OFFER_TERM
     offer_term_error: EngineError | None = None
     proposed: ProposedTerm = PROPOSED_TERM
@@ -555,6 +563,14 @@ class FakeLoanEngine:
             raise self.readings_error
         return self.readings
 
+    async def simulate_scenario(
+        self, loan: Mapping[str, object], scenario: Mapping[str, object]
+    ) -> ScenarioFigures:
+        self.calls.append(("simulate_scenario", {"loan": loan, "scenario": scenario}))
+        if self.scenario_error is not None:
+            raise self.scenario_error
+        return self.scenarios.pop(0)
+
     async def market_series(self, months: int) -> MarketSeries:
         self.calls.append(("market_series", {"months": months}))
         if self.market_error is not None:
@@ -584,6 +600,11 @@ class RecordingSink:
     async def latest(self, check_id: str, type: str) -> Mapping[str, object] | None:
         of_type = [e for e in self.events if e.check_id == check_id and e.type == type]
         return of_type[-1].data if of_type else None
+
+    async def since(self, check_id: str, type: str, after: str) -> list[Mapping[str, object]]:
+        events = [e for e in self.events if e.check_id == check_id]
+        start = max((i for i, event in enumerate(events) if event.type == after), default=-1)
+        return [event.data for event in events[start + 1 :] if event.type == type]
 
 
 class ScriptedChatModel(BaseChatModel):

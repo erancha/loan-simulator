@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import type { CheckSummary, User } from '../api/types.ts'
 import { FakeEventSource } from '../test/fakeEventSource.ts'
-import { checkTitle, TO_CARD } from '../check/copy.ts'
+import { checkTitle, FOLD_TITLE, TO_CARD } from '../check/copy.ts'
 import {
   assistantMessage,
   awaitingAvis,
@@ -11,6 +11,7 @@ import {
   loan,
   loanSet,
   offerAwaiting,
+  optionFixed36,
   optionPrime36,
   questionAsked,
   recommendationPrime,
@@ -19,7 +20,6 @@ import {
   withSeq,
 } from '../test/fixtures.ts'
 import { restoreScrollIntoView, stubScrollIntoView } from '../test/scrollIntoView.ts'
-import { TABS } from './copy.ts'
 import { Shell } from './Shell.tsx'
 import { wholeText } from '../test/wholeText.ts'
 
@@ -276,9 +276,10 @@ test('the link under the reply that presents a recommendation shows the recommen
   const events = [
     userMessage(1, 'אפשר לראות דוגמאות?'),
     withSeq(optionPrime36, 2),
-    withSeq(recommendationPrime, 3),
-    assistantMessage(4, 'a1', 'הנה ההמלצה'),
-    turnStatus(5, 'idle'),
+    withSeq(optionFixed36, 3),
+    withSeq(recommendationPrime, 4),
+    assistantMessage(5, 'a1', 'הנה ההמלצה'),
+    turnStatus(6, 'idle'),
   ]
   act(() => {
     for (const event of events) {
@@ -288,14 +289,17 @@ test('the link under the reply that presents a recommendation shows the recommen
   const page = document.querySelector('.check-page')!
   expect(page).toHaveAttribute('data-active-pane', 'chat')
 
+  stubScrollIntoView()
   await user.click(screen.getByRole('button', { name: TO_CARD }))
 
   expect(page).toHaveAttribute('data-active-pane', 'card')
   expect(screen.getByRole('tab', { name: 'המלצה' })).toHaveAttribute('aria-selected', 'true')
+  await waitFor(() => expect(document.querySelector('details.fold')).toHaveClass('fold-flash'))
+  restoreScrollIntoView()
 })
 
-test('the link under a recommendation names the tab it leads to', () => {
-  expect(TO_CARD).toContain(`"${TABS.find((tab) => tab.pane === 'card')!.label}"`)
+test('the link under a recommendation names the table it leads to', () => {
+  expect(TO_CARD).toContain(FOLD_TITLE)
 })
 
 test('the tab bar switches the active pane', async () => {

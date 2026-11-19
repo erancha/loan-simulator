@@ -264,6 +264,11 @@ export type Question =
       tracks: OfferTrackDraft[]
       max_term_months: number | null
     }
+  /** The form that simulates a movement not yet simulated on the check's offers. */
+  | { kind: 'scenario'; movement: ScenarioMovement }
+
+/** A movement a scenario simulates: prime's yearly rise, or the CPI's. */
+export type ScenarioMovement = 'prime' | 'cpi'
 
 /**
  * A track of an offer as far as the person described it. `rate` is the annual percent of a fixed
@@ -389,6 +394,7 @@ export const CHECK_EVENT_TYPES = [
   'turn.failed',
   'question.asked',
   'chart.shown',
+  'scenario.shown',
   'check.archived',
   'check.restored',
   'check.cloned',
@@ -419,6 +425,24 @@ export interface ChartShown {
   points: { month: string; value: string }[]
 }
 
+/** Every saved option priced on a future the person named, beside its total in today's
+ * calculation; the scenario holds both values, the engine's default filling the one not named. */
+export interface ScenarioShown {
+  /** Each movement as its yearly figure; a movement taken from the last years also names them. */
+  scenario: {
+    cpi_per_year: string
+    prime_per_year: string
+    cpi_like_last_years: number | null
+    prime_like_last_years: number | null
+  }
+  /** The values the person named; the other kept the engine's default. */
+  named: ('cpi_per_year' | 'prime_per_year' | 'cpi_like_last_years' | 'prime_like_last_years')[]
+  rows: (Pick<OptionData, 'option_id' | 'source' | 'lender' | 'offer_date' | 'loan'> & {
+    scenario: { first_payment: string; max_payment: string; total_paid: string }
+    today: { max_payment: string; total_paid: string }
+  })[]
+}
+
 export type CheckEvent =
   | Sequenced<'message.user', { text: string }>
   | { type: 'message.delta'; data: { message_id: string; text: string }; seq: null }
@@ -436,6 +460,7 @@ export type CheckEvent =
   | Sequenced<'turn.failed', { message: string }>
   | Sequenced<'question.asked', { question: Question; lead_in: string | null }>
   | Sequenced<'chart.shown', ChartShown>
+  | Sequenced<'scenario.shown', ScenarioShown>
   | Sequenced<'check.archived', CheckArchived>
   | Sequenced<'check.cloned', CheckCloned>
   | Sequenced<'check.restored', Record<string, never>>

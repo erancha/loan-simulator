@@ -5,14 +5,15 @@ from typing import Any
 import pytest
 from mcp import Client
 
-from loan_engine.domain.history import MarketHistory, simulate
-from loan_engine.domain.models import Track
+from loan_engine.domain.history import MarketHistory, price, resolved, simulate
+from loan_engine.domain.models import Scenario, Track
 from loan_engine.service.config import Settings
 from loan_engine.service.server import build_server
 
 TOOLS = {
     "assess_affordability",
     "simulate_loan",
+    "simulate_scenario",
     "shortest_comfortable_term",
     "shortest_comfortable_offer_term",
     "propose_term",
@@ -214,6 +215,11 @@ async def test_simulate_loan_text_is_a_summary_and_schedule_is_structured(
     ):
         assert value in text, value
     assert text.count("balloon") == 2
+    totals, peaks = prime["total_paid_range"], prime["max_payment_range"]
+    assert (
+        f"total repaid across the historical windows {totals['low']} to {totals['high']} ₪"
+    ) in text
+    assert f"peak recurring payment across them {peaks['low']} to {peaks['high']} ₪" in text
 
 
 async def test_simulate_loan_without_history_window_is_tool_error(
@@ -472,3 +478,94 @@ async def test_largest_comfortable_loan_is_null_for_a_ceiling_of_200(
         )
     assert not result.is_error, result.content
     assert result.structured_content == {"loan_amount": None}
+
+
+LINKED_TRACK: dict[str, Any] = {
+    "principal": 40000,
+    "term_months": 36,
+    "rate_kind": "fixed",
+    "annual_rate": "3",
+    "cpi_linked": True,
+    "method": "spitzer",
+}
+
+
+async def test_simulate_scenario_prices_each_track_on_the_scenario_alone(
+    settings: Settings, history: MarketHistory
+) -> None:
+    scenario = {"cpi_per_year": "5", "prime_per_year": "1"}
+    async with client(settings, history) as c:
+        result = await c.call_tool(
+            "simulate_scenario",
+            {"loan": {"tracks": [PRIME_TRACK, LINKED_TRACK]}, "scenario": scenario},
+        )
+    assert not result.is_error, result.content
+    loan = result.structured_content
+    assert loan is not None
+
+    chosen = Scenario.model_validate(scenario)
+    prime = price(Track.model_validate(PRIME_TRACK), history, chosen)
+    linked = price(Track.model_validate(LINKED_TRACK), history, chosen)
+    assert [track["total_paid"] for track in loan["tracks"]] == [
+        cents(prime.total_paid),
+        cents(linked.total_paid),
+    ]
+    assert loan["tracks"][1]["max_payment"] == cents(linked.max_payment)
+    assert loan["first_payment"] == cents(prime.first_payment + linked.first_payment)
+    assert loan["total_paid"] == cents(prime.total_paid + linked.total_paid)
+    assert loan["scenario"] == {
+        "cpi_per_year": "5",
+        "prime_per_year": "1",
+        "cpi_like_last_years": None,
+        "prime_like_last_years": None,
+    }
+    assert "windows" not in loan["tracks"][0]
+    (text,) = result.content
+    assert "5% a year" in text.text  # type: ignore[union-attr]
+
+
+async def test_simulate_scenario_fills_an_unnamed_value_from_the_default(
+    settings: Settings, history: MarketHistory
+) -> None:
+    async with client(settings, history) as c:
+        result = await c.call_tool(
+            "simulate_scenario", {"loan": {"tracks": [LINKED_TRACK]}, "scenario": {}}
+        )
+    assert result.structured_content is not None
+    default = simulate(Track.model_validate(LINKED_TRACK), history).base
+    assert result.structured_content["total_paid"] == cents(default.total_paid)
+    assert result.structured_content["scenario"] == {
+        "cpi_per_year": "2.0",
+        "prime_per_year": "0",
+        "cpi_like_last_years": None,
+        "prime_like_last_years": None,
+    }
+
+
+async def test_simulate_scenario_out_of_range_is_tool_error_naming_the_value(
+    settings: Settings, history: MarketHistory
+) -> None:
+    async with client(settings, history) as c:
+        result = await c.call_tool(
+            "simulate_scenario",
+            {"loan": {"tracks": [LINKED_TRACK]}, "scenario": {"cpi_per_year": 30}},
+        )
+    assert result.is_error
+    assert "cpi_per_year" in json.dumps([c.model_dump() for c in result.content])
+
+
+async def test_simulate_scenario_prices_a_movement_like_the_last_years(
+    settings: Settings, history: MarketHistory
+) -> None:
+    async with client(settings, history) as c:
+        result = await c.call_tool(
+            "simulate_scenario",
+            {"loan": {"tracks": [LINKED_TRACK]}, "scenario": {"cpi_like_last_years": 3}},
+        )
+    assert not result.is_error, result.content
+    chosen = resolved(Scenario(cpi_like_last_years=3), history)
+    assert result.structured_content is not None
+    assert result.structured_content["scenario"]["cpi_per_year"] == str(chosen.cpi_per_year)
+    assert result.structured_content["scenario"]["cpi_like_last_years"] == 3
+    priced = price(Track.model_validate(LINKED_TRACK), history, chosen)
+    assert result.structured_content["total_paid"] == cents(priced.total_paid)

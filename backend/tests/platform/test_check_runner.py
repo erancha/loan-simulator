@@ -58,9 +58,10 @@ from loan_agent.platform.check_runner import (
     TERM_CARD_FOR_CEILING,
     TOOL_CALL_OUTCOME_UNKNOWN,
     CheckRunner,
+    RetryRoute,
 )
 from loan_agent.platform.checkpointer import checkpoint_serde
-from loan_agent.ports.engine import EngineError
+from loan_agent.ports.engine import EngineError, ScenarioFigures
 
 PERSON = User("1001", "dana@example.com", "Dana")
 OTHER_PERSON = User("2002", "omer@example.com", "Omer")
@@ -112,12 +113,28 @@ def runner(
     model: ScriptedChatModel,
     engine_tools: list[BaseTool] | None = None,
     turn_limit_overrides: Mapping[str, int] | None = None,
+    retry_model: ScriptedChatModel | None = None,
 ) -> CheckRunner:
+    checkpointer = InMemorySaver(serde=checkpoint_serde())
+
     graph = build_agent_graph(
         model,
         engine_tools=[] if engine_tools is None else engine_tools,
         tool_deps=world.deps,
-        checkpointer=InMemorySaver(serde=checkpoint_serde()),
+        checkpointer=checkpointer,
+    )
+    retry = (
+        None
+        if retry_model is None
+        else RetryRoute(
+            build_agent_graph(
+                retry_model,
+                engine_tools=[] if engine_tools is None else engine_tools,
+                tool_deps=world.deps,
+                checkpointer=checkpointer,
+            ),
+            frozenset({PERSON.email}),
+        )
     )
     return CheckRunner(
         graph,
@@ -129,6 +146,7 @@ def runner(
         turn_limit_overrides={} if turn_limit_overrides is None else turn_limit_overrides,
         window=WINDOW,
         clock=world.clock,
+        retry=retry,
     )
 
 
@@ -240,6 +258,84 @@ async def test_tool_call_chunks_are_not_published(world: World) -> None:
     assert list(last_text.values()) == ["רגע, אני בודק", REPLY]
     assistant = [event["data"]["text"] for event in live if event["type"] == "message.assistant"]
     assert assistant == ["רגע, אני בודק", REPLY]
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "נסה שוב, אח שלי",
+        "נסה שוב אח שלי.",
+        " נסה  שוב, אח שלי ",
+        "נסה שוב, אח שלי!",
+        "נסה שוב, אח שלי?!",
+    ],
+)
+async def test_the_retry_phrase_reruns_the_previous_message_on_the_whole_conversation(
+    world: World, phrase: str
+) -> None:
+    model = ScriptedChatModel(replies=[AIMessage(REPLY)])
+    strong = ScriptedChatModel(replies=[AIMessage("תשובה מלאה")])
+    checks = runner(world, model, retry_model=strong)
+    check = await checks.create(PERSON)
+    await checks.send(PERSON, check.id, "תשווה את ההצעות")
+    await checks.drain()
+
+    await checks.send(PERSON, check.id, phrase)
+    await checks.drain()
+
+    assert len(model.received) == 1
+    (conversation,) = strong.received
+    assert [m.content for m in conversation if not isinstance(m, SystemMessage)] == [
+        "תשווה את ההצעות",
+        REPLY,
+        "תשווה את ההצעות",
+    ]
+    events = await stored(world, check.id)
+    assert ("message.user", {"text": phrase}) in events
+    assert events[-2][1]["text"] == "תשובה מלאה"
+
+
+async def test_a_turn_after_a_retry_sees_the_whole_conversation(world: World) -> None:
+    model = ScriptedChatModel(replies=[AIMessage(REPLY), AIMessage("המשך")])
+    strong = ScriptedChatModel(replies=[AIMessage("תשובה מלאה")])
+    checks = runner(world, model, turn_limit_overrides={PERSON.email: 3}, retry_model=strong)
+    check = await checks.create(PERSON)
+    for text in ("תשווה את ההצעות", "נסה שוב, אח שלי", "תודה"):
+        await checks.send(PERSON, check.id, text)
+        await checks.drain()
+
+    contents = [m.content for m in model.received[1]]
+    assert REPLY in contents and "תשובה מלאה" in contents
+
+
+async def test_the_retry_phrase_of_an_unlisted_person_is_an_ordinary_message(
+    world: World,
+) -> None:
+    model = ScriptedChatModel(replies=[AIMessage(REPLY)])
+    strong = ScriptedChatModel(replies=[])
+    checks = runner(world, model, retry_model=strong)
+    check = await checks.create(OTHER_PERSON)
+
+    await checks.send(OTHER_PERSON, check.id, "נסה שוב, אח שלי")
+    await checks.drain()
+
+    assert strong.received == []
+    assert model.received[0][-1].content == "נסה שוב, אח שלי"
+
+
+async def test_the_retry_phrase_with_no_earlier_message_is_an_ordinary_message(
+    world: World,
+) -> None:
+    model = ScriptedChatModel(replies=[AIMessage(REPLY)])
+    strong = ScriptedChatModel(replies=[])
+    checks = runner(world, model, retry_model=strong)
+    check = await checks.create(PERSON)
+
+    await checks.send(PERSON, check.id, "נסה שוב, אח שלי")
+    await checks.drain()
+
+    assert strong.received == []
+    assert model.received[0][-1].content == "נסה שוב, אח שלי"
 
 
 async def test_second_message_while_running_is_conflict(world: World) -> None:
@@ -669,6 +765,66 @@ async def recommended_check(world: World, checks: CheckRunner) -> Check:
         )
     )
     return await world.checks.get(PERSON.id, check.id)
+
+
+def shows_scenario(**named: str) -> AIMessage:
+    call = {"name": "show_scenario", "args": named, "id": "call-scenario", "type": "tool_call"}
+    return AIMessage(content="", tool_calls=[call])
+
+
+def on_scenario(cpi: str, prime: str) -> list[ScenarioFigures]:
+    """The engine's answers to one table of one option: the scenario, then today's."""
+    figures = {"first_payment": Decimal(1), "max_payment": Decimal(2), "total_paid": Decimal(3)}
+    return [
+        ScenarioFigures(
+            cpi_per_year=Decimal(cpi),
+            prime_per_year=Decimal(prime),
+            cpi_like_last_years=None,
+            prime_like_last_years=None,
+            **figures,
+        ),
+        ScenarioFigures(
+            cpi_per_year=Decimal(2),
+            prime_per_year=Decimal(0),
+            cpi_like_last_years=None,
+            prime_like_last_years=None,
+            **figures,
+        ),
+    ]
+
+
+async def test_a_turn_that_showed_a_scenario_ends_with_the_form_of_the_next_movement(
+    world: World,
+) -> None:
+    model = ScriptedChatModel(replies=[shows_scenario(cpi_per_year="5"), AIMessage("סיכום")])
+    checks = runner(world, model)
+    check = await recommended_check(world, checks)
+    world.engine.scenarios = on_scenario("5", "0")
+
+    await checks.send(PERSON, check.id, "ואם המדד יעלה 5% בשנה?")
+    await checks.drain()
+
+    *_, reply, asked, idle = await stored(world, check.id)
+    assert reply == ("message.assistant", {"text": "סיכום", "message_id": reply[1]["message_id"]})
+    assert asked == (
+        "question.asked",
+        {"question": {"kind": "scenario", "movement": "prime"}, "lead_in": None},
+    )
+    assert idle == ("turn.status", {"status": "idle"})
+
+
+async def test_no_form_follows_once_both_movements_were_simulated(world: World) -> None:
+    model = ScriptedChatModel(
+        replies=[shows_scenario(cpi_per_year="5", prime_per_year="1"), AIMessage("סיכום")]
+    )
+    checks = runner(world, model)
+    check = await recommended_check(world, checks)
+    world.engine.scenarios = on_scenario("5", "1")
+
+    await checks.send(PERSON, check.id, "ואם שניהם יעלו?")
+    await checks.drain()
+
+    assert "question.asked" not in [type for type, _ in await stored(world, check.id)]
 
 
 async def test_clone_copies_the_check_its_log_and_its_conversation(world: World) -> None:
@@ -1353,3 +1509,17 @@ async def test_the_three_replies_count_as_messages_and_keep_the_send_guards(
         await checks.send_opening(PERSON, check.id, OPENING, "רכב", Decimal(45000))
     with pytest.raises(CheckNotFoundError):
         await checks.send_opening(OTHER_PERSON, fresh.id, OPENING, "רכב", Decimal(45000))
+
+
+async def test_a_retry_never_reruns_an_earlier_retry_phrase(world: World) -> None:
+    model = ScriptedChatModel(replies=[AIMessage(REPLY), AIMessage("שוב")])
+    strong = ScriptedChatModel(replies=[])
+    checks = runner(world, model, retry_model=strong)
+    check = await checks.create(PERSON)
+
+    for _ in range(2):
+        await checks.send(PERSON, check.id, "נסה שוב, אח שלי")
+        await checks.drain()
+
+    assert strong.received == []
+    assert [received[-1].content for received in model.received] == ["נסה שוב, אח שלי"] * 2

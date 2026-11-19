@@ -3,7 +3,10 @@
 from decimal import Decimal
 
 HISTORY_MONTHS = 120
-BASE_ANNUAL_INFLATION = Decimal("2.0")
+# The future the engine assumes for today's figures: the CPI rises DEFAULT_CPI_PER_YEAR percent a
+# year and prime stays where it is.
+DEFAULT_CPI_PER_YEAR = Decimal("2.0")
+DEFAULT_PRIME_PER_YEAR = Decimal(0)
 PRIME_MARGIN = Decimal("1.5")
 BOI_RATE_FLOOR = Decimal(0)
 

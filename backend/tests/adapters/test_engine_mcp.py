@@ -31,6 +31,7 @@ from loan_agent.ports.engine import (
     MarketPoint,
     OfferTerm,
     ProposedTerm,
+    ScenarioFigures,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "engine"
@@ -180,6 +181,24 @@ def _stub_server(calls: list[tuple[str, dict[str, Any]]]) -> FastMCP:
         series = _fixture("market_series")
         return _result(series, json.dumps(series))
 
+    @server.tool()
+    def simulate_scenario(loan: dict[str, Any], scenario: dict[str, Any]) -> CallToolResult:
+        calls.append(("simulate_scenario", {"loan": loan, "scenario": scenario}))
+        priced = {
+            "scenario": {
+                "cpi_per_year": "5",
+                "prime_per_year": "0",
+                "cpi_like_last_years": None,
+                "prime_like_last_years": None,
+            },
+            "tracks": [],
+            "first_payment": "1887.99",
+            "max_payment": "2014.20",
+            "total_paid": "95210.44",
+            "rate_as_of": "2026-10-26",
+        }
+        return _result(priced, json.dumps(priced))
+
     return server
 
 
@@ -318,6 +337,10 @@ async def test_simulate_parses_figures_and_keeps_structured(engine: McpLoanEngin
     assert figures.worst_peak_payment == Decimal("2038.63")
     assert figures.worst_start == date(2022, 4, 1)
     assert figures.worst_end == date(2026, 3, 1)
+    assert (figures.total_paid_low, figures.total_paid_high) == (
+        Decimal("90549.92"),
+        Decimal("96665.48"),
+    )
     assert figures.balloon_due is None
     assert figures.rate_as_of == date(2026, 10, 26)
     assert figures.cpi_as_of == date(2026, 9, 1)
@@ -438,3 +461,23 @@ async def test_model_tools_keep_schedule_in_artifact(engine: McpLoanEngine) -> N
     assert "balance" not in content
     artifact: Mapping[str, Any] = message.artifact
     assert len(artifact["structured_content"]["tracks"][0]["schedule"]) == 48
+
+
+async def test_simulate_scenario_sends_the_named_values_and_parses_the_totals(
+    engine: McpLoanEngine, stub: StubEngine
+) -> None:
+    figures = await engine.simulate_scenario({"tracks": [PRIME_TRACK]}, {"cpi_per_year": "5"})
+
+    assert stub.calls[0] == (
+        "simulate_scenario",
+        {"loan": {"tracks": [PRIME_TRACK]}, "scenario": {"cpi_per_year": "5"}},
+    )
+    assert figures == ScenarioFigures(
+        cpi_per_year=Decimal(5),
+        prime_per_year=Decimal(0),
+        cpi_like_last_years=None,
+        prime_like_last_years=None,
+        first_payment=Decimal("1887.99"),
+        max_payment=Decimal("2014.20"),
+        total_paid=Decimal("95210.44"),
+    )

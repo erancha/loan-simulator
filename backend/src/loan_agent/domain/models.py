@@ -186,6 +186,10 @@ class OptionFigures:
     worst_peak_payment: Decimal | None
     worst_start: date | None
     worst_end: date | None
+    total_paid_low: Decimal | None
+    total_paid_high: Decimal | None
+    """The lowest and highest total repaid across the historical windows; None, like the worst
+    window, for a payment that never moves."""
     balloon_due: Decimal | None
     total_paid: Decimal
     rate_as_of: date
@@ -209,6 +213,8 @@ class OptionFigures:
             "worst_peak_payment": _text_or_none(self.worst_peak_payment),
             "worst_start": _iso_or_none(self.worst_start),
             "worst_end": _iso_or_none(self.worst_end),
+            "total_paid_low": _text_or_none(self.total_paid_low),
+            "total_paid_high": _text_or_none(self.total_paid_high),
             "balloon_due": _text_or_none(self.balloon_due),
             "total_paid": str(self.total_paid),
             "rate_as_of": self.rate_as_of.isoformat(),
@@ -226,6 +232,8 @@ class OptionFigures:
             worst_peak_payment=_decimal_or_none(data["worst_peak_payment"]),
             worst_start=_date_or_none(data["worst_start"]),
             worst_end=_date_or_none(data["worst_end"]),
+            total_paid_low=_decimal_or_none(data["total_paid_low"]),
+            total_paid_high=_decimal_or_none(data["total_paid_high"]),
             balloon_due=_decimal_or_none(data["balloon_due"]),
             total_paid=Decimal(data["total_paid"]),
             rate_as_of=date.fromisoformat(data["rate_as_of"]),

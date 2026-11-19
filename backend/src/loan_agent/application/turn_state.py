@@ -75,13 +75,22 @@ def _one_line(values: Mapping[str, object]) -> str:
 
 
 def _option_clause(option: Option) -> str:
-    """The option's single track, with its first payment and total to the shekel."""
+    """The option's single track, with its first payment, its total and, for a payment that
+    moves, the range of its total across the historical windows, all to the shekel."""
     (track,) = cast(list[Mapping[str, object]], option.loan["tracks"])
+    figures = option.summary
+    if figures.total_paid_low is None or figures.total_paid_high is None:
+        history = "total_paid_in_past_periods unchanging"
+    else:
+        history = (
+            f"total_paid_in_past_periods {shekels(figures.total_paid_low)}-"
+            f"{shekels(figures.total_paid_high)}"
+        )
     return (
         f"{option.id}: source {option.source}, lender {_or_none(option.lender)}, "
         f"rate {track_text(option)}, term_months {track['term_months']}, "
-        f"first_payment {shekels(option.summary.first_payment)}, "
-        f"total_paid {shekels(option.summary.total_paid)}, price ({price_text(option)})"
+        f"first_payment {shekels(figures.first_payment)}, "
+        f"total_paid {shekels(figures.total_paid)}, {history}, price ({price_text(option)})"
     )
 
 

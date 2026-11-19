@@ -36,6 +36,7 @@ import type { QuestionEntry } from './events.ts'
 import { FieldHint } from './FieldHint.tsx'
 import { hasBothFinances } from './FinancesPanel.tsx'
 import { OfferForm } from './OfferForm.tsx'
+import { ScenarioForm } from './ScenarioForm.tsx'
 import { rejectionText } from './rejection.ts'
 
 /**
@@ -73,7 +74,7 @@ function isFinancesField(field: QuestionField): field is keyof Finances {
  * A question with a field of its own or the model's own sentence: everything but the term card,
  * the terms card and the offer form.
  */
-type FieldQuestion = Exclude<Question, { kind: 'term' | 'terms' | 'offer' }>
+type FieldQuestion = Exclude<Question, { kind: 'term' | 'terms' | 'offer' | 'scenario' }>
 
 interface Props {
   entry: QuestionEntry
@@ -139,8 +140,9 @@ function MoneyBox(props: {
 /**
  * A question the model asked, as an assistant bubble: the lead-in, the label and, while live, a
  * control fitted to the question. The term card confirms or changes the calculated term, the
- * terms card chooses among the recommendation's term and the terms beside it, and the offer form
- * takes a lender's offer; every other question is a field's, handled by FieldBubble.
+ * terms card chooses among the recommendation's term and the terms beside it, the offer form
+ * takes a lender's offer and the scenario form a movement to simulate; every other question is a
+ * field's, handled by FieldBubble.
  */
 export function QuestionBubble(props: Props) {
   const { question } = props.entry
@@ -160,6 +162,17 @@ export function QuestionBubble(props: Props) {
   if (question.kind === 'offer') {
     return (
       <OfferForm
+        entry={props.entry}
+        question={question}
+        live={props.live}
+        onAnswer={props.onAnswer}
+        onSkip={props.onSkip}
+      />
+    )
+  }
+  if (question.kind === 'scenario') {
+    return (
+      <ScenarioForm
         entry={props.entry}
         question={question}
         live={props.live}

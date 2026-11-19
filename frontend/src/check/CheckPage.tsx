@@ -35,7 +35,7 @@ import { OpeningCard } from './OpeningCard.tsx'
 import { termConfirmation, typedTerm } from './QuestionBubble.tsx'
 import { isRefusal } from './rejection.ts'
 import type { Answer } from './QuestionBubble.tsx'
-import { RecommendationCard } from './RecommendationCard.tsx'
+import { RecommendationCard, revealFigures } from './RecommendationCard.tsx'
 import {
   holdsOption,
   isArchived,
@@ -109,7 +109,8 @@ interface Props {
   showFinances: boolean
   /** Told whenever the term card starts or stops taking an answer. */
   onTermCardLive: (live: boolean) => void
-  /** Shows the recommendation's pane; the reply that presents a recommendation links to it. */
+  /** Shows the recommendation's pane, on a screen that shows one pane at a time; the reply that
+   * presents a recommendation links to its table of figures. */
   onShowCard: () => void
 }
 
@@ -306,7 +307,10 @@ export function CheckPage({
             loanAmount={state.loan === null ? null : state.loan.amount}
             onContinueOffers={continueOffers}
             cardReplyId={recommendationReplyId(state)}
-            onShowCard={onShowCard}
+            onShowCard={() => {
+              onShowCard()
+              revealFigures()
+            }}
             opening={fresh ? <OpeningCard onSubmit={submitOpening} /> : null}
             offersOpen={offersOpen}
             samplesOffered={offersOpen && !holdsOption(state)}

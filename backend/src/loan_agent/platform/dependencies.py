@@ -41,6 +41,8 @@ class Infrastructure:
     engine_tools: list[BaseTool]
     """The engine's tools as the model calls them."""
     model: BaseChatModel
+    retry_model: BaseChatModel | None
+    """The model the retry phrase switches a turn to; None without LLM_RETRY_MODEL."""
     checkpointer: BaseCheckpointSaver[Any]
     ready: Callable[[], Awaitable[None]]
     """The readiness probe: returns while the database answers, raises otherwise."""

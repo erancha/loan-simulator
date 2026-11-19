@@ -36,6 +36,7 @@ from loan_agent.application.check_tools import (
     ToolDeps,
     ToolError,
     _compared_terms,
+    scenario_offer_next,
 )
 from loan_agent.domain.errors import AwaitingOfferNotFoundError
 from loan_agent.domain.models import Check, Finances, LoanRequest, Option
@@ -43,6 +44,7 @@ from loan_agent.ports.engine import (
     EngineError,
     OfferTerm,
     ProposedTerm,
+    ScenarioFigures,
     Simulation,
 )
 from loan_agent.ports.events import (
@@ -59,6 +61,7 @@ from loan_agent.ports.events import (
     OPTION_SAVED,
     QUESTION_ASKED,
     RECOMMENDATION_PRESENTED,
+    SCENARIO_SHOWN,
     TERM_SET,
 )
 
@@ -1053,7 +1056,8 @@ async def test_a_recommendation_gives_the_named_options_current_figures(world: W
     (preferred,) = [line for line in lines if line.startswith("preferred_figures: ")]
     assert preferred == (
         "preferred_figures: term_months 48, first_payment 1888, peak_payment 1888, "
-        "worst_peak_payment 2039, worst_start 2022-04-01, worst_end 2026-03-01, balloon_due none, "
+        "worst_peak_payment 2039, worst_start 2022-04-01, worst_end 2026-03-01, "
+        "total_paid_low 90550, total_paid_high 96665, balloon_due none, "
         f"total_paid 90623, rate_as_of {PRIME_SIMULATION.figures.rate_as_of}, "
         f"cpi_as_of {PRIME_SIMULATION.figures.cpi_as_of}"
     )
@@ -1494,6 +1498,138 @@ async def test_show_chart_passes_the_engine_refusal_to_the_model(world: World) -
 
     with pytest.raises(ToolError, match="less than or equal to 120.*call show_chart again"):
         await world.tools.show_chart("prime", 500)
+
+
+def scenario_figures(
+    cpi: str, prime: str, total: str, cpi_years: int | None = None
+) -> ScenarioFigures:
+    return ScenarioFigures(
+        cpi_per_year=Decimal(cpi),
+        prime_per_year=Decimal(prime),
+        cpi_like_last_years=cpi_years,
+        prime_like_last_years=None,
+        first_payment=Decimal("1800.00"),
+        max_payment=Decimal("2100.00"),
+        total_paid=Decimal(total),
+    )
+
+
+async def test_show_scenario_shows_every_option_on_the_scenario_beside_today(
+    world: World,
+) -> None:
+    await world.tools.set_loan(None, "80000")
+    world.engine.simulations = [PRIME_SIMULATION, PRIME_SIMULATION]
+    await world.tools.save_offer([PRIME_TRACK], "Fund", "2026-10-20")
+    await world.tools.save_offer([{**PRIME_TRACK, "prime_spread": "1"}], "Bank", "2026-10-20")
+    world.engine.scenarios = [
+        scenario_figures("5", "0", "120000.00"),
+        scenario_figures("2.0", "0", "113000.00"),
+        scenario_figures("5", "0", "118000.00"),
+        scenario_figures("2.0", "0", "114000.00"),
+    ]
+
+    result = await world.tools.show_scenario("5", None)
+
+    loans = [option.loan for option in await world.options.list(CHECK)]
+    assert world.engine.calls[-4:] == [
+        ("simulate_scenario", {"loan": loans[0], "scenario": {"cpi_per_year": "5"}}),
+        ("simulate_scenario", {"loan": loans[0], "scenario": {}}),
+        ("simulate_scenario", {"loan": loans[1], "scenario": {"cpi_per_year": "5"}}),
+        ("simulate_scenario", {"loan": loans[1], "scenario": {}}),
+    ]
+    event = world.sink.events[-1]
+    assert event.type == SCENARIO_SHOWN
+    assert event.data["scenario"] == {
+        "cpi_per_year": "5",
+        "prime_per_year": "0",
+        "cpi_like_last_years": None,
+        "prime_like_last_years": None,
+    }
+    assert event.data["named"] == ["cpi_per_year"]
+    first, second = event.data["rows"]
+    assert (first["lender"], first["loan"], first["source"]) == ("Fund", loans[0], "offer")
+    assert first["scenario"] == {
+        "first_payment": "1800.00",
+        "max_payment": "2100.00",
+        "total_paid": "120000.00",
+    }
+    assert first["today"] == {"max_payment": "2100.00", "total_paid": "113000.00"}
+    assert second["scenario"]["total_paid"] == "118000.00"
+    assert "on the person's screen" in result
+    assert "cheapest on the scenario: option-2 (Bank)" in result
+    assert "120000" not in result and "113000" not in result
+    assert await scenario_offer_next(world.sink, CHECK) == "prime"
+
+
+async def one_offer_shown_on(world: World, *named: tuple[str | None, str | None]) -> None:
+    """Saves one offer, then shows it on each scenario in turn."""
+    await world.tools.set_loan(None, "80000")
+    world.engine.simulations = [PRIME_SIMULATION]
+    await world.tools.save_offer([PRIME_TRACK], "Fund", "2026-10-20")
+    for cpi, prime in named:
+        world.engine.scenarios = [
+            scenario_figures(cpi or "2.0", prime or "0", "1.00"),
+            scenario_figures("2.0", "0", "1.00"),
+        ]
+        await world.tools.show_scenario(cpi, prime)
+
+
+async def test_the_next_movement_is_none_before_any_scenario(world: World) -> None:
+    await one_offer_shown_on(world)
+    assert await scenario_offer_next(world.sink, CHECK) is None
+
+
+async def test_the_next_movement_is_the_one_not_yet_simulated_on_these_offers(
+    world: World,
+) -> None:
+    await one_offer_shown_on(world, (None, "1"))
+    assert await scenario_offer_next(world.sink, CHECK) == "cpi"
+    world.engine.scenarios = [scenario_figures("5", "0", "1.00")] * 2
+    await world.tools.show_scenario("5", None)
+    assert await scenario_offer_next(world.sink, CHECK) is None
+
+
+async def test_a_new_offer_lets_a_simulated_movement_be_offered_again(world: World) -> None:
+    await one_offer_shown_on(world, ("5", None), (None, "1"))
+    world.engine.simulations = [PRIME_SIMULATION]
+    await world.tools.save_offer([{**PRIME_TRACK, "prime_spread": "1"}], "Bank", "2026-10-20")
+    world.engine.scenarios = [scenario_figures("5", "0", "1.00")] * 4
+    await world.tools.show_scenario("5", None)
+
+    assert await scenario_offer_next(world.sink, CHECK) == "prime"
+
+
+async def test_a_scenario_takes_the_cpi_as_in_the_last_years(world: World) -> None:
+    await one_offer_shown_on(world)
+    world.engine.scenarios = [
+        scenario_figures("3.1", "0", "1.00", cpi_years=3),
+        scenario_figures("2.0", "0", "1.00"),
+    ]
+
+    await world.tools.show_scenario(None, None, cpi_like_last_years=3)
+
+    call, args = world.engine.calls[-2]
+    assert (call, args["scenario"]) == ("simulate_scenario", {"cpi_like_last_years": 3})
+    event = world.sink.events[-1]
+    assert event.data["scenario"]["cpi_like_last_years"] == 3
+    assert event.data["named"] == ["cpi_like_last_years"]
+    assert await scenario_offer_next(world.sink, CHECK) == "prime"
+
+
+async def test_show_scenario_refuses_a_check_with_no_option(world: World) -> None:
+    with pytest.raises(ToolError, match="no saved option"):
+        await world.tools.show_scenario("5", None)
+    assert world.sink.events == []
+
+
+async def test_show_scenario_passes_the_engine_refusal_to_the_model(world: World) -> None:
+    await world.tools.set_loan(None, "80000")
+    world.engine.simulations = [PRIME_SIMULATION]
+    await world.tools.save_offer([PRIME_TRACK], "Fund", "2026-10-20")
+    world.engine.scenario_error = EngineError("cpi_per_year: less than or equal to 20")
+
+    with pytest.raises(ToolError, match="less than or equal to 20.*call show_scenario again"):
+        await world.tools.show_scenario("30", None)
 
 
 async def test_save_offer_refuses_an_offer_already_saved_with_the_same_figures(

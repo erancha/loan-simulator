@@ -12,3 +12,10 @@ MAX_ANNUAL_RATE = 30
 # the Bank of Israel rate itself.
 MIN_PRIME_SPREAD = -PRIME_MARGIN
 MAX_PRIME_SPREAD = 20
+# A scenario's yearly CPI rise, in percent, and yearly prime rise, in percentage points.
+MIN_CPI_PER_YEAR = -5
+MAX_CPI_PER_YEAR = 20
+MIN_PRIME_PER_YEAR = -5
+MAX_PRIME_PER_YEAR = 5
+# A movement "as in the last N years" looks back at most the ten years of history the engine keeps.
+MAX_LIKE_LAST_YEARS = 10

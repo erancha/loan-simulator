@@ -11,7 +11,10 @@ recommendation, with the guardrail that keeps a recommendation honest.
   emitting an event for the page; ask, ask_term, ask_offer and compare_terms (the recommended
   option priced at its term and the next terms in the direction the person asked), emitting a
   question for the page and returning ASKED_RESULT, after which the turn ends; show_chart,
-  emitting a market series for the page
+  emitting a market series for the page; show_scenario, emitting every saved option priced on
+  the scenario the person named beside its total in today's calculation, as one table
+- scenario_offer_next: the movement no scenario table since the latest saved option named, which
+  the runner offers as a form after a turn that showed a table
 - Reading an offer described in words: read_offer prices its readings with the engine and, by
   offer_reading's decision, saves the one its payment fits, keeps it awaiting the lender with
   the readings its card shows, or reports its type unrecognized; an offer quoted for less than
@@ -66,6 +69,7 @@ from loan_agent.ports.engine import (
     LoanEngine,
     MarketPoint,
     ProposedTerm,
+    ScenarioFigures,
     Simulation,
 )
 from loan_agent.ports.events import (
@@ -81,6 +85,7 @@ from loan_agent.ports.events import (
     OPTION_SAVED,
     QUESTION_ASKED,
     RECOMMENDATION_PRESENTED,
+    SCENARIO_SHOWN,
     TERM_SET,
     EventSink,
 )
@@ -93,6 +98,9 @@ from loan_agent.ports.repositories import (
 
 ChartSeries = Literal["prime", "cpi"]
 _CHART_SERIES: tuple[str, ...] = get_args(ChartSeries)
+# The movements a scenario form simulates, in the order they are offered.
+ScenarioMovement = Literal["prime", "cpi"]
+_SCENARIO_MOVEMENTS: tuple[ScenarioMovement, ...] = get_args(ScenarioMovement)
 
 # The engine's shortest and longest terms (MIN_TERM and MAX_TERM of the engine's limits), which
 # the agent cannot import; the engine refuses a term outside them. TERM_STEP is the step of the
@@ -970,6 +978,63 @@ class CheckTools:
         )
         return ASKED_RESULT
 
+    async def show_scenario(
+        self,
+        cpi_per_year: str | None,
+        prime_per_year: str | None,
+        cpi_like_last_years: int | None = None,
+        prime_like_last_years: int | None = None,
+    ) -> str:
+        options = await self._deps.options.list(self._check_id)
+        if not options:
+            raise ToolError(
+                "the check has no saved option to price on a scenario yet; ask the person for an "
+                "offer first"
+            )
+        given: dict[str, object | None] = {
+            "cpi_per_year": cpi_per_year,
+            "prime_per_year": prime_per_year,
+            "cpi_like_last_years": cpi_like_last_years,
+            "prime_like_last_years": prime_like_last_years,
+        }
+        named = {key: value for key, value in given.items() if value is not None}
+        try:
+            priced = [
+                (
+                    option,
+                    await self._deps.engine.simulate_scenario(option.loan, named),
+                    await self._deps.engine.simulate_scenario(option.loan, {}),
+                )
+                for option in options
+            ]
+        except EngineError as error:
+            raise ToolError(f"{error}; correct the scenario and call show_scenario again") from None
+        chosen = priced[0][1]
+        await self._deps.sink.emit(
+            self._check_id,
+            SCENARIO_SHOWN,
+            {
+                "scenario": {
+                    "cpi_per_year": str(chosen.cpi_per_year),
+                    "prime_per_year": str(chosen.prime_per_year),
+                    "cpi_like_last_years": chosen.cpi_like_last_years,
+                    "prime_like_last_years": chosen.prime_like_last_years,
+                },
+                "named": sorted(named),
+                "rows": [_scenario_row(option, on, today) for option, on, today in priced],
+            },
+        )
+        # The figures stay off the model's result: the table shows them, and a model that has
+        # them recites them.
+        cheapest = min(priced, key=lambda row: row[1].total_paid)[0]
+        return (
+            f"The table of every option on the scenario of the CPI rising {chosen.cpi_per_year}% "
+            f"a year and prime {chosen.prime_per_year} points a year is on the person's screen "
+            f"under a title naming the scenario. The cheapest on the scenario: {cheapest.id} "
+            f"({_named(cheapest)}). Reply with one sentence only: that offer is preferred in this "
+            "scenario, and why in a few words. The screen offers the next simulation itself."
+        )
+
     async def show_chart(self, series: str, months: int) -> str:
         if series not in _CHART_SERIES:
             raise ToolError(f"series must be one of {', '.join(_CHART_SERIES)}, not {series!r}")
@@ -1736,8 +1801,15 @@ def _option_data(option: Option) -> dict[str, object]:
     }
 
 
-# The figures of the worst period history holds for a loan whose payment moves.
-_WORST_CASE_FIGURES = ("worst_peak_payment", "worst_start", "worst_end")
+# The figures history holds for a loan whose payment moves: its worst period and the range of its
+# total across all periods.
+_WORST_CASE_FIGURES = (
+    "worst_peak_payment",
+    "worst_start",
+    "worst_end",
+    "total_paid_low",
+    "total_paid_high",
+)
 
 
 def _money_figures(option: Option) -> dict[str, object]:
@@ -1797,3 +1869,36 @@ def _summary_value(value: object) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(_json_value(value))
+
+
+def _named(option: Option) -> str:
+    """The lender of a real offer; an example has none."""
+    return "example" if option.lender is None else option.lender
+
+
+def _scenario_row(option: Option, on: ScenarioFigures, today: ScenarioFigures) -> dict[str, object]:
+    """An option as the scenario table shows it: the option's own fields its card names it by,
+    its figures on the scenario, and its highest payment and total in today's calculation."""
+    return {
+        "option_id": option.id,
+        "source": option.source,
+        "lender": option.lender,
+        "offer_date": None if option.offer_date is None else option.offer_date.isoformat(),
+        "loan": option.loan,
+        "scenario": {
+            "first_payment": str(on.first_payment),
+            "max_payment": str(on.max_payment),
+            "total_paid": str(on.total_paid),
+        },
+        "today": {"max_payment": str(today.max_payment), "total_paid": str(today.total_paid)},
+    }
+
+
+async def scenario_offer_next(sink: EventSink, check_id: str) -> ScenarioMovement | None:
+    """The movement, prime first, that no scenario table since the latest saved option named;
+    None before any table, or once both were named."""
+    shown = await sink.since(check_id, SCENARIO_SHOWN, OPTION_SAVED)
+    if not shown:
+        return None
+    named = {key.split("_", 1)[0] for table in shown for key in cast(list[str], table["named"])}
+    return next((movement for movement in _SCENARIO_MOVEMENTS if movement not in named), None)

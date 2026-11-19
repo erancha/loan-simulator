@@ -236,6 +236,8 @@ def test_get_shows_the_loan_figures_options_and_the_recommendation(
                 "worst_peak_payment": "2038.63",
                 "worst_start": "2022-04-01",
                 "worst_end": "2026-03-01",
+                "total_paid_low": "90549.92",
+                "total_paid_high": "96665.48",
                 "balloon_due": None,
                 "total_paid": "90623.31",
                 "rate_as_of": "2026-10-26",

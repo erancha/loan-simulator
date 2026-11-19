@@ -94,6 +94,20 @@ _REWRITE_IN_HEBREW = (
     "wording the instructions give; keep only a name the person wrote in English as they wrote it."
 )
 
+# Phrases that put the reply's substance after the turn: an update to come, a wait, work about
+# to start or offered for later. The agent speaks only in answer to a message, so such a promise
+# is never kept.
+_LATER_RESULTS = re.compile(
+    r"\bאעדכן\b|\bאחזור אליך\b|\bאחזור ו|\bרוצה שאחשב\b|\bזה לוקח כמה (?:שניות|דקות)\b"
+    r"|\bאני (?:הולך|הולכת) ל"
+)
+_ANSWER_NOW = (
+    "Your reply was discarded and the person did not see it: it promises results or an update "
+    "later, but the person sees nothing after this reply until they write again. Make the calls "
+    "the answer needs now and write it from their results; when no tool calculates what they "
+    "asked for, say so and give what the tools do have."
+)
+
 _REWRITE_WITHOUT_NUL = (
     "Your reply was discarded and the person did not see it: its text holds a NUL character "
     "(\\u0000), which cannot be stored. Write the same reply again without that character."
@@ -355,6 +369,36 @@ class ShowChartArgs(_Args):
     months: int = Field(description="How many latest months to draw, at most 120")
 
 
+class ShowScenarioArgs(_Args):
+    cpi_per_year: str | None = Field(
+        default=None,
+        pattern=_SIGNED_DECIMAL,
+        description="How much the CPI rises each year, in percent, as the person said it, e.g. "
+        "'5' for 5% a year; omit it when they did not name the CPI",
+    )
+    prime_per_year: str | None = Field(
+        default=None,
+        pattern=_SIGNED_DECIMAL,
+        description="How much prime rises each year, in percentage points, as the person said "
+        "it, e.g. '1' for a point a year, '-0.5' for a fall; omit it when they did not name "
+        "prime",
+    )
+    cpi_like_last_years: int | None = Field(
+        default=None,
+        ge=1,
+        le=10,
+        description="In place of cpi_per_year: the CPI rises as it did on average over the last "
+        "this many years, which the engine computes; only a number of years the person gave",
+    )
+    prime_like_last_years: int | None = Field(
+        default=None,
+        ge=1,
+        le=10,
+        description="In place of prime_per_year: prime moves as it did on average over the last "
+        "this many years, which the engine computes; only a number of years the person gave",
+    )
+
+
 class AskArgs(_Args):
     question: AskQuestion
     lead_in: str | None = Field(
@@ -509,6 +553,17 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
     async def show_chart(series: str, months: int, config: RunnableConfig) -> str:
         return await _tools_for(config, deps).show_chart(series, months)
 
+    async def show_scenario(
+        config: RunnableConfig,
+        cpi_per_year: str | None = None,
+        prime_per_year: str | None = None,
+        cpi_like_last_years: int | None = None,
+        prime_like_last_years: int | None = None,
+    ) -> str:
+        return await _tools_for(config, deps).show_scenario(
+            cpi_per_year, prime_per_year, cpi_like_last_years, prime_like_last_years
+        )
+
     async def ask(
         question: AskQuestion,
         config: RunnableConfig,
@@ -656,6 +711,16 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
             "when the person asks to see how the prime or prices moved.",
             args_schema=ShowChartArgs,
         ),
+        StructuredTool.from_function(
+            coroutine=show_scenario,
+            name="show_scenario",
+            description="Show, as a table in the conversation, every saved option priced on a "
+            "future the person names: the CPI rising a given percent a year and/or prime rising "
+            "a given number of points a year, for the whole loan, beside each option's total in "
+            "today's calculation. Use it whenever the person asks what happens if the CPI or "
+            "prime moves; pass only what they named.",
+            args_schema=ShowScenarioArgs,
+        ),
     ]
 
 
@@ -733,12 +798,15 @@ def people_said(messages: Sequence[BaseMessage]) -> list[str]:
 
 def _correction_for(reply: AIMessage, messages: Sequence[BaseMessage], check_id: str) -> str | None:
     """What the model must redo before its reply reaches the conversation: a recommendation
-    written without its tool, a NUL character in its text, which Postgres cannot store in the
-    reply's event, or English words the person did not write themselves, which are
-    logged as a warning so their source can be found. A reply is redone once, whatever the
-    second one says, so a turn never loops on a correction."""
+    written without its tool, a promise of results later in place of the answer, a NUL character
+    in its text, which Postgres cannot store in the reply's event, or English words the person
+    did not write themselves, which are logged as a warning so their source can be found. A
+    reply is redone once, whatever the second one says, so a turn never loops on a correction."""
     if _recommends_without_the_tool(reply, messages):
         return _REDO_THE_RECOMMENDATION
+    if not reply.tool_calls and _LATER_RESULTS.search(reply.text):
+        log.warning("reply rejected for promising later results in check %s", check_id)
+        return _ANSWER_NOW
     if "\x00" in reply.text:
         return _REWRITE_WITHOUT_NUL
     english = english_words(reply.text, people_said(messages))

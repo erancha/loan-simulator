@@ -1,6 +1,9 @@
 import { expect, test } from 'vitest'
 import {
   ceilingFormula,
+  questionText,
+  scenarioLine,
+  scenarioTitle,
   answerLine,
   capNotice,
   amountText,
@@ -226,3 +229,31 @@ test('a derived ceiling names the lower of its two caps', () => {
     '(30% מהכנסה של 10,000 ₪)',
   )
 })
+
+function on(cpi: string, prime: string, cpiYears: number | null = null) {
+  return {
+    cpi_per_year: cpi,
+    prime_per_year: prime,
+    cpi_like_last_years: cpiYears,
+    prime_like_last_years: null,
+  }
+}
+
+test('a scenario title names both movements, a fall and no change included', () => {
+  expect(scenarioTitle(on('5', '0'))).toBe('אם המדד יעלה 5% בשנה והפריים לא ישתנה')
+  expect(scenarioTitle(on('2.0', '1'))).toBe('אם המדד יעלה 2% בשנה והפריים יעלה ב-1% בשנה')
+  expect(scenarioTitle(on('0', '-0.5'))).toBe('אם המדד לא ישתנה והפריים ירד ב-0.5% בשנה')
+  expect(scenarioTitle(on('-1', '0'))).toBe('אם המדד ירד 1% בשנה והפריים לא ישתנה')
+})
+
+test('a scenario title says a movement taken from the last years, with its yearly figure', () => {
+  expect(scenarioTitle(on('3.14', '0', 3))).toBe(
+    'אם המדד יעלה כמו ב-3 השנים האחרונות (3.14% בשנה) והפריים לא ישתנה',
+  )
+})
+
+test('a scenario form names its movement, and its line states the yearly rise', () => {
+  expect(questionText({ kind: 'scenario', movement: 'prime' })).toBe('סימולציה למקרה שהפריים יעלה')
+  expect(scenarioLine('cpi', '3')).toBe('סימולציה: המדד יעלה 3% בשנה')
+})
+

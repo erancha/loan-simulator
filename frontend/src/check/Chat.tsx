@@ -29,6 +29,7 @@ import type {
 import { formatTimestamp } from '../money.ts'
 import { withValues } from './emphasis.tsx'
 import { MarketChart } from './MarketChart.tsx'
+import { ScenarioTable } from './ScenarioTable.tsx'
 import { IdentifiedBubble, UnrecognizedBubble } from './OfferReplies.tsx'
 import { QuestionBubble } from './QuestionBubble.tsx'
 import type { Answer } from './QuestionBubble.tsx'
@@ -76,10 +77,11 @@ interface Props {
   loanAmount: string | null
   /** Asks for the offer form, to describe another offer while one waits on its lender. */
   onContinueOffers: () => Promise<boolean>
-  /** The reply that presented the check's recommendation, which leads to its pane; null when
-   * there is none. */
+  /** The reply that presented the check's recommendation, which leads to the card's table of
+   * figures; null when there is none. */
   cardReplyId: string | null
-  /** Shows the recommendation's pane, on a screen that shows one pane at a time. */
+  /** Brings the card's table of figures into view, first showing the card's pane on a screen
+   * that shows one pane at a time. */
   onShowCard: () => void
   /** The card a new check opens with; while it is given, the chat shows it alone, with no input
    * and no chips. */
@@ -315,6 +317,8 @@ export function Chat({
                 />
               ) : entry.role === 'chart' ? (
                 <MarketChart chart={entry.chart} />
+              ) : entry.role === 'scenario' ? (
+                <ScenarioTable scenario={entry.scenario} />
               ) : entry.role === 'archived' ? (
                 <ArchiveNote archive={entry.archive} />
               ) : entry.role === 'cloned' ? (

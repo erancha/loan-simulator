@@ -51,7 +51,7 @@ from loan_agent.application.agent_graph import build_agent_graph
 from loan_agent.application.check_tools import ToolDeps
 from loan_agent.application.event_sink import CheckEventSink
 from loan_agent.platform.api import auth, checks, events
-from loan_agent.platform.check_runner import CheckRunner
+from loan_agent.platform.check_runner import CheckRunner, RetryRoute
 from loan_agent.platform.checkpointer import libpq_dsn, open_checkpointer
 from loan_agent.platform.config import Settings, get_settings
 from loan_agent.platform.db import build_engine, session_factory
@@ -93,7 +93,13 @@ async def production_infrastructure(settings: Settings) -> AsyncIterator[Infrast
             f"the loan engine at {settings.engine_url} did not list its tools ({error!r}); "
             "check that it runs, and ENGINE_URL and ENGINE_BEARER_TOKEN"
         ) from error
-    model = build_chat_model(settings.llm_model, settings.llm_api_key.get_secret_value())
+    api_key = settings.llm_api_key.get_secret_value()
+    model = build_chat_model(settings.llm_model, api_key)
+    retry_model = (
+        None
+        if settings.llm_retry_model is None
+        else build_chat_model(settings.llm_retry_model, api_key)
+    )
     database_url = settings.database_url.get_secret_value()
     async with AsyncExitStack() as stack:
         checkpointer = await stack.enter_async_context(open_checkpointer(libpq_dsn(database_url)))
@@ -114,6 +120,7 @@ async def production_infrastructure(settings: Settings) -> AsyncIterator[Infrast
             engine=engine,
             engine_tools=engine_tools,
             model=model,
+            retry_model=retry_model,
             checkpointer=checkpointer,
             ready=ready,
             clock=utc_now,
@@ -195,6 +202,16 @@ def create_app(
             graph = build_agent_graph(
                 opened.model, opened.engine_tools, tool_deps, opened.checkpointer
             )
+            retry = (
+                None
+                if opened.retry_model is None
+                else RetryRoute(
+                    build_agent_graph(
+                        opened.retry_model, opened.engine_tools, tool_deps, opened.checkpointer
+                    ),
+                    settings.llm_retry_emails,
+                )
+            )
             runner = CheckRunner(
                 graph,
                 opened.checks,
@@ -205,6 +222,7 @@ def create_app(
                 turn_limit_overrides=settings.agent_turn_limit_overrides,
                 window=timedelta(hours=settings.agent_turn_window_hours),
                 clock=opened.clock,
+                retry=retry,
             )
             stack.push_async_callback(runner.aclose)
             await runner.fail_interrupted()

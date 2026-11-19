@@ -22,6 +22,8 @@ OPTIONAL = (
     "AUTH_PUBLIC_KEY_FILE",
     "AGENT_TURN_LIMIT",
     "AGENT_TURN_LIMIT_OVERRIDES",
+    "LLM_RETRY_MODEL",
+    "LLM_RETRY_EMAILS",
     "AGENT_TURN_WINDOW_HOURS",
     "AGENT_LOG_LEVEL",
     "AGENT_HTTPS_ONLY",
@@ -92,6 +94,32 @@ def test_the_model_names_a_supported_provider(
 def test_openai_is_a_supported_provider(env: pytest.MonkeyPatch) -> None:
     env.setenv("LLM_MODEL", "openai:gpt-5.4")
     assert Settings().llm_model == "openai:gpt-5.4"
+
+
+def test_the_retry_model_and_its_emails_are_read(env: pytest.MonkeyPatch) -> None:
+    env.setenv("LLM_RETRY_MODEL", "anthropic:claude-opus-5-5")
+    env.setenv("LLM_RETRY_EMAILS", '["dana@example.com"]')
+    settings = Settings()
+    assert settings.llm_retry_model == "anthropic:claude-opus-5-5"
+    assert settings.llm_retry_emails == frozenset({"dana@example.com"})
+
+
+@pytest.mark.parametrize(
+    ("model", "emails", "reason"),
+    [
+        ("openai:gpt-6.2-astra", '["dana@example.com"]', "LLM_API_KEY"),
+        (None, '["dana@example.com"]', "LLM_RETRY_MODEL"),
+        ("anthropic:claude-opus-5-5", '["Dana@Example.com"]', "lowercase"),
+    ],
+)
+def test_the_retry_settings_refuse_what_could_never_apply(
+    env: pytest.MonkeyPatch, model: str | None, emails: str, reason: str
+) -> None:
+    if model is not None:
+        env.setenv("LLM_RETRY_MODEL", model)
+    env.setenv("LLM_RETRY_EMAILS", emails)
+    with pytest.raises(ValidationError, match=reason):
+        Settings()
 
 
 @pytest.mark.parametrize("key", ["AGENT_TURN_LIMIT", "AGENT_TURN_WINDOW_HOURS"])

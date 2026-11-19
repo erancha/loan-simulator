@@ -3,7 +3,8 @@ ceiling searches (terms and the largest loan), the readings of an offer of open 
 market data, with money as Decimal.
 
 - LoanEngine: the engine calls
-- Bounds, Simulation, OfferTerm, ProposedTerm, OfferReadings, MarketSeries: their parsed results
+- Bounds, Simulation, ScenarioFigures, OfferTerm, ProposedTerm, OfferReadings, MarketSeries:
+  their parsed results
 - EngineError: a call the engine refused, or a loan of more than one track, which the agent does
   not price yet; the message names the fault
 """
@@ -40,6 +41,21 @@ class Simulation:
     figures: OptionFigures
     structured: Mapping[str, object]
     """The engine's full result, month-by-month schedules included, for the page."""
+
+
+@dataclass(frozen=True)
+class ScenarioFigures:
+    """A loan priced on a scenario, with the scenario as the engine filled it in: an unnamed
+    value is the engine's default."""
+
+    cpi_per_year: Decimal
+    prime_per_year: Decimal
+    cpi_like_last_years: int | None
+    """The years cpi_per_year averages, when the person described the CPI as the last years."""
+    prime_like_last_years: int | None
+    first_payment: Decimal
+    max_payment: Decimal
+    total_paid: Decimal
 
 
 @dataclass(frozen=True)
@@ -144,4 +160,12 @@ class LoanEngine(Protocol):
 
     async def market_series(self, months: int) -> MarketSeries:
         """The latest months of the prime and of the CPI's monthly change."""
+        ...
+
+    async def simulate_scenario(
+        self, loan: Mapping[str, object], scenario: Mapping[str, object]
+    ) -> ScenarioFigures:
+        """The loan priced on the scenario the person named: cpi_per_year and prime_per_year as
+        decimal strings, or cpi_like_last_years and prime_like_last_years as years, each left out
+        when the person did not name it."""
         ...

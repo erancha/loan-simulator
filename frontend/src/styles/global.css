@@ -1079,6 +1079,20 @@ button.primary:disabled,
   margin-block-start: 8px;
 }
 
+/* A moment's highlight on the table a reply's link brought into view. */
+.fold-flash {
+  animation: fold-flash 1.6s ease-out;
+}
+
+@keyframes fold-flash {
+  from {
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
+  }
+  to {
+    background: transparent;
+  }
+}
+
 .fold ul {
   margin: 0;
   padding-inline-start: 20px;
@@ -1100,6 +1114,67 @@ button.primary:disabled,
 
 .totals-source {
   display: block;
+}
+
+/* A scenario's table may be wider than a bubble of text: it takes the chat column's width and
+   scrolls sideways on a narrow screen rather than squeezing its five columns. */
+.scenario {
+  width: min(100%, 720px);
+  overflow-x: auto;
+}
+
+.scenario-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+/* A scenario figure against today's: red when it costs more, green when less. */
+.scenario-higher {
+  color: var(--red);
+}
+
+.scenario-lower {
+  color: var(--green);
+}
+
+.scenario-same,
+.totals th[scope='colgroup'] {
+  text-align: center;
+}
+
+/* An amount keeps its ₪ on its own line. */
+.scenario td {
+  white-space: nowrap;
+}
+
+/* A narrow screen gives the table to its figures: an option is named by its source alone, on one
+   line cut with "…", and its title holds the full track. */
+@media (max-width: 899px) {
+  .scenario-track {
+    display: none;
+  }
+
+  .scenario-name {
+    max-width: 9em;
+  }
+
+  .scenario-name .scenario-source {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+}
+
+.scenario-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.scenario-rise input {
+  width: 4em;
+  margin-inline-end: 4px;
 }
 
 /* On its own line above the track, as on the option's card. */
@@ -1328,8 +1403,9 @@ button.primary:disabled,
   color: var(--accent);
 }
 
-/* The link from a recommendation's reply to its pane, under the bubble. A wide screen shows the
-   pane beside the chat, so the link is hidden there. */
+/* The link from a recommendation's reply to the card's table of figures, under the bubble. A wide
+   screen shows the card beside the chat, but the table sits low on it, so the link shows there
+   too. */
 .to-card {
   display: block;
   margin-block-start: 6px;
@@ -1565,8 +1641,7 @@ button.primary:disabled,
 }
 
 @media (min-width: 900px) {
-  .tab-bar,
-  .to-card {
+  .tab-bar {
     display: none;
   }
 

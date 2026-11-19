@@ -34,10 +34,34 @@ interface FoldProps {
   options: OptionCard[]
 }
 
+// The card's one table of every option's figures, which a reply's link brings into view.
+const FOLD_ID = 'recommendation-figures'
+
+/**
+ * Opens the table of the figures behind the recommendation, scrolls it into view and highlights it
+ * for a moment. Runs after the pane that holds it is shown, so on a narrow screen it scrolls a
+ * visible pane.
+ */
+export function revealFigures() {
+  window.setTimeout(() => {
+    const fold = document.getElementById(FOLD_ID)
+    if (!(fold instanceof HTMLDetailsElement)) {
+      throw new Error('the recommendation card shows no table of figures')
+    }
+    fold.open = true
+    fold.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    fold.classList.remove('fold-flash')
+    fold.classList.add('fold-flash')
+    fold.addEventListener('animationend', () => fold.classList.remove('fold-flash'), {
+      once: true,
+    })
+  }, 0)
+}
+
 /** The figures behind the recommendation; open when it first renders, closable by the person. */
 function Fold({ fold, options }: FoldProps) {
   return (
-    <details className="fold" open>
+    <details id={FOLD_ID} className="fold" open>
       <summary>{FOLD_TITLE}</summary>
       <table className="totals">
         <thead>

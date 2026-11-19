@@ -39,6 +39,7 @@ OFFER_SETTLED = "offer.settled"
 OFFER_DROPPED = "offer.dropped"
 QUESTION_ASKED = "question.asked"
 CHART_SHOWN = "chart.shown"
+SCENARIO_SHOWN = "scenario.shown"
 CHECK_ARCHIVED = "check.archived"
 CHECK_RESTORED = "check.restored"
 CHECK_CLONED = "check.cloned"
@@ -56,6 +57,11 @@ class EventSink(Protocol):
 
     async def latest(self, check_id: str, type: str) -> Mapping[str, object] | None:
         """The data of the check's latest stored event of this type; None when it has none."""
+        ...
+
+    async def since(self, check_id: str, type: str, after: str) -> list[Mapping[str, object]]:
+        """The data of the check's stored events of this type after its latest event of the type
+        after, oldest first; all of them when it has none of that one."""
         ...
 
 

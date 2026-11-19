@@ -5,13 +5,20 @@ from decimal import Decimal
 
 import pytest
 
-from loan_engine.domain.assumptions import BASE_ANNUAL_INFLATION, HISTORY_MONTHS, PRIME_MARGIN
-from loan_engine.domain.history import MarketHistory, NoHistoryWindowError, rate_today, simulate
-from loan_engine.domain.models import Track
+from loan_engine.domain.assumptions import HISTORY_MONTHS, PRIME_MARGIN
+from loan_engine.domain.history import (
+    MarketHistory,
+    NoHistoryWindowError,
+    price,
+    rate_today,
+    resolved,
+    simulate,
+)
+from loan_engine.domain.models import DEFAULT_SCENARIO, Scenario, Track
 from loan_engine.domain.schedule import Schedule, schedule
 
 SPREAD = Decimal("1.0")
-BASE_MONTHLY_INFLATION = (1 + BASE_ANNUAL_INFLATION / 100) ** (Decimal(1) / 12) - 1
+BASE_MONTHLY_INFLATION = (1 + DEFAULT_SCENARIO.cpi_per_year / 100) ** (Decimal(1) / 12) - 1
 
 
 def make_track(**overrides: object) -> Track:
@@ -213,3 +220,54 @@ def test_history_months_must_be_consecutive() -> None:
     months = (history.months[0], history.months[1], date(2000, 4, 1))
     with pytest.raises(ValueError, match="2000-02 is followed by 2000-04"):
         dataclasses.replace(history, months=months)
+
+
+def monthly(cpi_per_year: str) -> Decimal:
+    return (1 + Decimal(cpi_per_year) / 100) ** (Decimal(1) / 12) - 1
+
+
+def test_the_base_path_is_the_default_scenario() -> None:
+    history = make_history(["1"] * 6)
+    for track in (make_track(), make_track(cpi_linked=True)):
+        assert simulate(track, history).base == price(track, history, DEFAULT_SCENARIO)
+
+
+def test_a_scenario_indexes_a_linked_track_by_its_yearly_cpi_rise() -> None:
+    track = make_track(
+        rate_kind="fixed", annual_rate=Decimal(3), prime_spread=None, cpi_linked=True
+    )
+    priced = price(track, make_history(["1"] * 6), Scenario(cpi_per_year=Decimal(5)))
+    assert priced == schedule(track, [Decimal(3)] * 6, [monthly("5")] * 6)
+
+
+def test_a_scenario_raises_prime_by_a_twelfth_of_its_yearly_rise_each_month() -> None:
+    track = make_track()
+    priced = price(track, make_history(["1"] * 6), Scenario(prime_per_year=Decimal("1.2")))
+    steps = [Decimal("3.25") + Decimal("0.1") * k for k in range(6)]
+    assert priced == schedule(track, prime_rates(steps), [monthly("2.0")] * 6)
+
+
+def test_a_falling_prime_scenario_stops_at_the_rate_floor() -> None:
+    track = make_track()
+    priced = price(track, make_history(["1"] * 6, current="0.5"), Scenario(prime_per_year=-5))
+    assert priced.rows[-1].annual_rate == PRIME_MARGIN + SPREAD
+
+
+def test_a_cpi_like_the_last_years_is_its_compounded_yearly_rise_over_them() -> None:
+    inflation = ["0.01"] * 12 + ["0.02"] * 12
+    history = make_history(["1"] * 24, inflation)
+    scenario = resolved(Scenario(cpi_like_last_years=2), history)
+    yearly = ((Decimal("1.01") ** 12 * Decimal("1.02") ** 12) ** (Decimal(1) / 2) - 1) * 100
+    assert scenario.cpi_per_year == yearly.quantize(Decimal("0.01"))
+    assert scenario.cpi_like_last_years == 2
+
+
+def test_a_prime_like_the_last_years_is_its_average_yearly_change_over_them() -> None:
+    history = make_history(["1"] + ["2"] * 11 + ["4"] * 13, current="4")
+    scenario = resolved(Scenario(prime_like_last_years=2), history)
+    assert scenario.prime_per_year == Decimal("1.50")
+
+
+def test_more_years_than_the_history_holds_are_refused() -> None:
+    with pytest.raises(NoHistoryWindowError, match="2 years"):
+        resolved(Scenario(cpi_like_last_years=2), make_history(["1"] * 12))

@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     llm_model: str
     """provider:model, for a provider in SUPPORTED_PROVIDERS."""
     llm_api_key: SecretStr
+    llm_retry_model: str | None = None
+    """provider:model of the model the retry phrase switches a turn to, of llm_model's provider,
+    since it calls with the same llm_api_key."""
+    llm_retry_emails: frozenset[str] = frozenset()
+    """The lowercase emails of the people whose retry phrase reruns their previous message on
+    llm_retry_model; for everyone else the phrase is an ordinary message."""
     google_client_id: str
     """The OAuth client of the page's Sign in with Google button; the audience every token must
     name."""
@@ -71,16 +77,37 @@ class Settings(BaseSettings):
             raise ValueError(f"AGENT_TURN_LIMIT_OVERRIDES keys must be lowercase: {mixed}")
         return overrides
 
+    @field_validator("llm_retry_emails")
+    @classmethod
+    def _require_lowercase_retry_emails(cls, emails: frozenset[str]) -> frozenset[str]:
+        mixed = sorted(email for email in emails if email != email.lower())
+        if mixed:
+            raise ValueError(f"LLM_RETRY_EMAILS must be lowercase: {mixed}")
+        return emails
+
     @model_validator(mode="after")
     def _require_supported_model(self) -> Self:
-        provider, separator, model = self.llm_model.partition(":")
-        if not separator or not model:
-            raise ValueError(f"LLM_MODEL={self.llm_model!r} must be provider:model")
-        if provider not in SUPPORTED_PROVIDERS:
+        provider = _provider_of("LLM_MODEL", self.llm_model)
+        if self.llm_retry_model is None:
+            if self.llm_retry_emails:
+                raise ValueError("LLM_RETRY_EMAILS needs LLM_RETRY_MODEL")
+        elif _provider_of("LLM_RETRY_MODEL", self.llm_retry_model) != provider:
             raise ValueError(
-                f"LLM_MODEL provider {provider!r} is not one of {', '.join(SUPPORTED_PROVIDERS)}"
+                f"LLM_RETRY_MODEL={self.llm_retry_model!r} must be of LLM_MODEL's provider "
+                f"{provider!r}, since it calls with the same LLM_API_KEY"
             )
         return self
+
+
+def _provider_of(key: str, spec: str) -> str:
+    provider, separator, model = spec.partition(":")
+    if not separator or not model:
+        raise ValueError(f"{key}={spec!r} must be provider:model")
+    if provider not in SUPPORTED_PROVIDERS:
+        raise ValueError(
+            f"{key} provider {provider!r} is not one of {', '.join(SUPPORTED_PROVIDERS)}"
+        )
+    return provider
 
 
 @lru_cache

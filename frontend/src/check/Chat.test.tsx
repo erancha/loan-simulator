@@ -3,7 +3,13 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { Chat } from './Chat.tsx'
 import { MARKET_SAMPLE, SHORTER_TERMS_CHIP, TO_CARD } from './copy.ts'
-import { awaitingAvis, checkArchived, cpiChart, identifiedMax } from '../test/fixtures.ts'
+import {
+  awaitingAvis,
+  checkArchived,
+  cpiChart,
+  identifiedMax,
+  scenarioCpi5,
+} from '../test/fixtures.ts'
 import { restoreScrollIntoView, stubScrollIntoView } from '../test/scrollIntoView.ts'
 import type { ChatEntry, ChatMessage, CheckState, QuestionEntry } from './events.ts'
 
@@ -321,6 +327,34 @@ test('a question that ends the conversation is announced with its lead-in and qu
   })
   const announced = document.querySelector('[aria-live="polite"]')
   expect(announced).toHaveTextContent(/^כדי להמשיך כמה צריך ללוות\?$/)
+})
+
+test('a scenario pairs each figure today with the scenario, marking how it moved', () => {
+  renderChat({ messages: [{ id: 's-2', role: 'scenario', scenario: scenarioCpi5 }] })
+
+  const table = screen.getByRole('table', { name: 'אם המדד יעלה 5% בשנה והפריים לא ישתנה' })
+  const [groups, columns, linked, prime] = within(table).getAllByRole('row')
+  expect(groups).toHaveTextContent('החזר מרביסך התשלומים')
+  expect(columns).toHaveTextContent('היוםבתרחישהיוםבתרחיש')
+  const cells = (row: HTMLElement) => within(row).getAllByRole('cell')
+  expect(cells(linked).map((cell) => cell.textContent)).toEqual([
+    '1,985 ₪',
+    '2,210 ₪',
+    '113,424 ₪',
+    '121,005 ₪',
+  ])
+  expect(cells(linked)[3]).toHaveClass('scenario-higher')
+  expect(cells(prime).map((cell) => cell.textContent)).toEqual(['1,899 ₪', '↔️', '113,916 ₪', '↔️'])
+  expect(cells(prime)[1]).toHaveAccessibleName('ללא שינוי')
+})
+
+test('a scenario names each option by its source, with the full track on its title', () => {
+  renderChat({ messages: [{ id: 's-2', role: 'scenario', scenario: scenarioCpi5 }] })
+
+  const name = within(screen.getByRole('table')).getAllByRole('rowheader')[0]
+  expect(name.querySelector('.scenario-source')).toHaveTextContent('הצעה מבנק הפועלים')
+  expect(name.querySelector('.scenario-track')).not.toBeNull()
+  expect(name.getAttribute('title')).toMatch(/^ריבית קבועה 6.9%.*\nהצעה מבנק הפועלים/s)
 })
 
 test('a chart shows its title, its source and a table of every month', () => {

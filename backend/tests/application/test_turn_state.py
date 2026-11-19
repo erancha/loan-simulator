@@ -133,7 +133,8 @@ async def test_turn_state_lists_the_saved_offers_and_the_awaiting_ones(deps: Too
 
     assert (
         "offers: option-1: source offer, lender לאומי, rate prime + 6, not linked, "
-        "term_months 60, first_payment 1888, total_paid 90623, price (interest_cost 45623 on "
+        "term_months 60, first_payment 1888, total_paid 90623, total_paid_in_past_periods "
+        "90550-96665, price (interest_cost 45623 on "
         "45000; rate_today 6.25%, below the average bank rate on consumer loans of 7.9% as of "
         "2026-08)"
     ) in lines

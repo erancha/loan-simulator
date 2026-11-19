@@ -185,14 +185,27 @@ test('replaying the reference events fills the panes', () => {
   expect(screen.getByText('מועדפת')).toBeInTheDocument()
 })
 
-test('the reply that presents the recommendation leads to the recommendation pane', async () => {
+test("the reply that presents the recommendation leads to the card's table", async () => {
+  const scrolled = stubScrollIntoView()
   const { onShowCard } = renderPage()
-  emit(userMessage(1, 'אפשר לראות דוגמאות?'), turnStatus(2, 'running'), withSeq(optionPrime36, 3))
+  emit(
+    userMessage(1, 'אפשר לראות דוגמאות?'),
+    turnStatus(2, 'running'),
+    withSeq(optionPrime36, 3),
+    withSeq(optionFixed36, 4),
+  )
   expect(screen.queryByRole('button', { name: TO_CARD })).toBeNull()
 
-  emit(withSeq(recommendationPrime, 4), assistantMessage(5, 'a1', 'הנה ההמלצה'), turnStatus(6, 'idle'))
+  emit(withSeq(recommendationPrime, 5), assistantMessage(6, 'a1', 'הנה ההמלצה'), turnStatus(7, 'idle'))
+  const fold = document.querySelector('details.fold') as HTMLDetailsElement
+  fold.open = false
   await userEvent.setup().click(screen.getByRole('button', { name: TO_CARD }))
+
   expect(onShowCard).toHaveBeenCalledTimes(1)
+  await waitFor(() => expect(fold.open).toBe(true))
+  expect(fold).toHaveClass('fold-flash')
+  expect(scrolled.mock.contexts).toContain(fold)
+  restoreScrollIntoView()
 })
 
 test('sending posts the text to the check and clears the input', async () => {

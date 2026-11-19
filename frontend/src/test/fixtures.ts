@@ -5,6 +5,7 @@
 import type {
   AwaitingOffer,
   ChartShown,
+  ScenarioShown,
   CheckEvent,
   Finances,
   LoanRequest,
@@ -437,3 +438,42 @@ export function avisReading(kind: ReadingKind): Reading {
   if (reading === undefined) throw new Error(`Avis's card has no ${kind} reading`)
   return reading
 }
+
+/** בנק הפועלים's fixed offer and the pension fund example on CPI +5% a year, prime unchanged. */
+export const scenarioCpi5: ScenarioShown = {
+  scenario: {
+    cpi_per_year: '5',
+    prime_per_year: '0',
+    cpi_like_last_years: null,
+    prime_like_last_years: null,
+  },
+  named: ['cpi_per_year'],
+  rows: [
+    {
+      option_id: 'offer-hapoalim',
+      source: 'offer',
+      lender: 'בנק הפועלים',
+      offer_date: '2026-11-02',
+      loan: optionOfferFixed.data.loan,
+      scenario: { first_payment: '1800.00', max_payment: '2210.40', total_paid: '121004.50' },
+      today: { max_payment: '1985.20', total_paid: '113424.00' },
+    },
+    {
+      option_id: 'prime-36',
+      source: 'offer',
+      lender: 'פריסבי',
+      offer_date: '2026-11-02',
+      loan: optionPrime36.data.loan,
+      scenario: { first_payment: '1899.00', max_payment: '1899.00', total_paid: '113916.00' },
+      today: { max_payment: '1899.00', total_paid: '113916.00' },
+    },
+  ],
+}
+
+export function scenarioShown(
+  seq: number,
+  scenario: ScenarioShown = scenarioCpi5,
+): EventOf<'scenario.shown'> {
+  return { type: 'scenario.shown', data: scenario, seq }
+}
+

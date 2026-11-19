@@ -47,6 +47,7 @@ from loan_agent.application.agent_graph import (
     SetCeilingArgs,
     SetLoanArgs,
     SetTermArgs,
+    ShowScenarioArgs,
     TrackArgs,
     UpdateFinancesArgs,
     _after_tools,
@@ -91,6 +92,7 @@ CHECK_TOOL_NAMES = {
     "present_recommendation",
     "ask",
     "show_chart",
+    "show_scenario",
 }
 
 
@@ -460,6 +462,7 @@ async def test_every_tool_the_system_prompt_names_is_bound(world: World) -> None
         *AskArgs.model_fields,
         *PresentRecommendationArgs.model_fields,
         *ReadOfferArgs.model_fields,
+        *ShowScenarioArgs.model_fields,
     }
     state_keys = {
         line.split(":")[0] for line in (await turn_state(PERSON, CHECK, world.deps)).splitlines()
@@ -476,6 +479,8 @@ async def test_every_tool_the_system_prompt_names_is_bound(world: World) -> None
         "only_option",
         "interest_cost",
         "rate_today",
+        "total_paid_in_past_periods",
+        "total_paid",
     }
     named_tools = (
         (identifiers - set(get_args(OptionSource)) - set(get_args(QuestionField)) - tool_fields)
@@ -822,6 +827,45 @@ async def test_a_reply_with_an_english_word_is_rewritten_once(world: World) -> N
     assert len(model.received) == 2
     assert "English" in model.received[1][-1].content
     assert state["messages"][-1].content == "מטרה: מכונית, מחיר 50,000 ₪"
+
+
+@pytest.mark.parametrize(
+    "promise",
+    [
+        "טוב — אני הולך לחשב ולעדכן את ההשוואה. זה לוקח כמה שניות. אעדכן כשתהיה התוצאה.",
+        "אחזור אליך עם ההשוואה",
+        "אני הולכת לבדוק את זה",
+        "אם תרצה, אחזור ואחשב את ההחזר בכל שנה",
+        "רוצה שאחשב את זה?",
+    ],
+)
+async def test_a_reply_promising_later_results_is_rewritten_once(
+    world: World, promise: str
+) -> None:
+    model = ScriptedChatModel(replies=[AIMessage(promise), AIMessage("אין לי דרך לחזות את המדד")])
+    graph = run(world, model)
+
+    state = await graph.ainvoke(said("תשווה"), check_config(PERSON, CHECK))
+
+    assert len(model.received) == 2
+    assert "sees nothing after" in model.received[1][-1].content
+    assert [message.content for message in state["messages"][1:]] == ["אין לי דרך לחזות את המדד"]
+
+
+async def test_a_promise_is_rewritten_only_once(world: World) -> None:
+    model = ScriptedChatModel(replies=[AIMessage("אעדכן בקרוב"), AIMessage("אעדכן בקרוב")])
+    graph = run(world, model)
+
+    state = await graph.ainvoke(said("תשווה"), check_config(PERSON, CHECK))
+
+    assert len(model.received) == 2
+    assert state["messages"][-1].content == "אעדכן בקרוב"
+
+
+def test_the_prompt_ends_every_turn_with_its_answer_and_sends_a_named_future_to_its_tool() -> None:
+    assert "## התשובה נגמרת בתור הזה" in SYSTEM_PROMPT
+    assert "show_scenario" in SYSTEM_PROMPT
+    assert "total_paid_in_past_periods" in SYSTEM_PROMPT
 
 
 async def test_a_reply_holding_a_nul_character_is_rewritten(world: World) -> None:
@@ -1236,3 +1280,16 @@ async def test_harels_offer_from_the_form_is_saved_directly(world: World) -> Non
     assert [(option.source, option.lender) for option in saved] == [("offer", "הראל פנסיה")] * 2
     assert [event.type for event in world.sink.events if event.type == QUESTION_ASKED] == []
     assert not [event for event in world.sink.events if event.type.startswith("offer.")]
+
+
+def test_the_prompt_takes_recent_years_from_the_engine_and_asks_how_many() -> None:
+    assert "cpi_like_last_years" in SYSTEM_PROMPT
+    assert '"3 שנים", "5 שנים", "10 שנים"' in SYSTEM_PROMPT
+
+
+def test_the_prompt_answers_a_scenario_in_one_sentence() -> None:
+    assert "משפט אחד בלבד" in SYSTEM_PROMPT
+
+
+def test_the_prompt_names_saved_offers_before_suggesting_a_kind_of_track() -> None:
+    assert "## לפני שאתה מציע סוג מסלול" in SYSTEM_PROMPT

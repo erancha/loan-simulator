@@ -34,6 +34,11 @@ class CheckEventSink:
         of_type = [event for event in await self._store.list(check_id, 0) if event.type == type]
         return of_type[-1].data if of_type else None
 
+    async def since(self, check_id: str, type: str, after: str) -> list[Mapping[str, object]]:
+        events = await self._store.list(check_id, 0)
+        start = max((i for i, event in enumerate(events) if event.type == after), default=-1)
+        return [event.data for event in events[start + 1 :] if event.type == type]
+
 
 def _wire(type: str, data: Mapping[str, object]) -> dict[str, Any]:
     return {"type": type, "data": dict(data)}

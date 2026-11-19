@@ -7,7 +7,7 @@
  * comparesOptions says whether the card ranks more than one option, the one rule behind both
  * the card's labels and the checks list's chip.
  */
-import type { OptionSaved, RecommendationPresented, Track } from '../api/types.ts'
+import type { OptionData, OptionSaved, RecommendationPresented, Track } from '../api/types.ts'
 import {
   decimalText,
   exceeds,
@@ -149,7 +149,15 @@ function totalRangeOf(option: OptionSaved): string | null {
   return totalRangeText(formatShekelRange(low, high), simulated.windows)
 }
 
-function sourceOf(option: OptionSaved): string {
+/** The fields an option is named by, on its card and in a scenario's table. */
+type Named = Pick<OptionData, 'source' | 'lender' | 'offer_date' | 'loan'>
+
+/** An option's name as its card shows it: its track, and where it comes from. */
+export function optionName(option: Named): { track: string; source: string } {
+  return { track: trackText(option.loan.tracks[0]), source: sourceOf(option) }
+}
+
+function sourceOf(option: Named): string {
   if (option.source === 'example') {
     // The engine's only CPI-linked example is the pension fund's.
     const { cpi_linked: linked } = option.loan.tracks[0]

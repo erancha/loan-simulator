@@ -85,6 +85,8 @@ def make_figures() -> OptionFigures:
         worst_peak_payment=Decimal("1990.10"),
         worst_start=date(2029, 3, 1),
         worst_end=date(2031, 3, 1),
+        total_paid_low=Decimal("99000.00"),
+        total_paid_high=Decimal("104000.00"),
         balloon_due=None,
         total_paid=Decimal("101234.56"),
         rate_as_of=date(2026, 9, 1),

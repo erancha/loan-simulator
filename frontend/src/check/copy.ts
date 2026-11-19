@@ -12,6 +12,8 @@ import type {
   QuestionField,
   Reading,
   ReadingKind,
+  ScenarioMovement,
+  ScenarioShown,
   TermBasis,
   Track,
   TypeWord,
@@ -486,6 +488,7 @@ export function questionText(question: Question): string {
   }
   if (question.kind === 'terms') return termsTitle(question.rows.map((row) => row.term_months))
   if (question.kind === 'offer') return OFFER_FORM_TITLE
+  if (question.kind === 'scenario') return SCENARIO_FORM[question.movement].title
   if (question.offer_clone === true) return CLONE_QUESTION
   const { field } = question
   return field === null ? question.text : FIELD_COPY[field].text
@@ -504,9 +507,9 @@ export function questionHint(question: Question): string | null {
   return FIELD_COPY[question.field].hint
 }
 
-/** Under the reply that presents a recommendation, on a screen that shows one pane at a time: the
- * way to the pane with the tracks' details, named by its tab. */
-export const TO_CARD = 'לפירוט המסלולים: מעבר ללשונית "המלצה"'
+/** Under the reply that presents a recommendation: the way to the card's table of every option's
+ * figures, named by its title. */
+export const TO_CARD = `השוואת המספרים בכרטיס: ${FOLD_TITLE}`
 
 export const OFFER_FORM_TITLE = 'פרטי ההצעה'
 export const OFFER_FORM_INTRO =
@@ -589,6 +592,80 @@ export function chartSource(series: ChartShown['series'], asOf: string): string 
   return series === 'prime'
     ? `לפי נתוני בנק ישראל, נכון ל-${formatDate(asOf)}`
     : `לפי נתוני הלשכה המרכזית לסטטיסטיקה, עד ${formatMonth(asOf)}`
+}
+
+/** A scenario table's headings: two figures, each in a column for today and one for the
+ * scenario. */
+export const SCENARIO_HEADINGS = {
+  option: 'אפשרות',
+  highest: 'החזר מרבי',
+  total: 'סך התשלומים',
+  today: 'היום',
+  scenario: 'בתרחיש',
+} as const
+
+/** In place of a scenario figure equal to today's, with the words a screen reader says. */
+export const SCENARIO_SAME = { mark: '↔️', label: 'ללא שינוי' } as const
+
+/** The scenario form of each movement: its title, its box's label and the line's subject. */
+export const SCENARIO_FORM: Record<
+  ScenarioMovement,
+  { title: string; intro: string; label: string; subject: string }
+> = {
+  prime: {
+    title: 'סימולציה למקרה שהפריים יעלה',
+    intro:
+      'הצעות בריבית פריים משתנות עם הפריים. כדי לראות מה יקרה להן, כתבו בכמה אחוזים הפריים יעלה בכל שנה, ונציג טבלה כמו זו שלמעלה.',
+    label: 'עלייה בפריים בכל שנה',
+    subject: 'הפריים',
+  },
+  cpi: {
+    title: 'סימולציה למקרה שהמדד יעלה',
+    intro:
+      'הצעות צמודות למדד משתנות עם המדד. כדי לראות מה יקרה להן, כתבו בכמה אחוזים המדד יעלה בכל שנה, ונציג טבלה כמו זו שלמעלה.',
+    label: 'עלייה במדד בכל שנה',
+    subject: 'המדד',
+  },
+}
+export const SCENARIO_RUN = 'בדיקה'
+export const SCENARIO_RISE_REFUSED = 'יש לכתוב מספר, למשל 1 או 2.5'
+
+/** The line a scenario form sends, which the agent prices as a scenario. */
+export function scenarioLine(movement: ScenarioMovement, rise: string): string {
+  return `סימולציה: ${SCENARIO_FORM[movement].subject} יעלה ${rise}% בשנה`
+}
+
+/** How a yearly change reads: a rise, a fall or none, its size to two decimals at most. */
+function yearlyMove(change: string, rise: string, fall: string, none: string): string {
+  const negative = change.startsWith('-')
+  const magnitude = roundedPercent(negative ? change.slice(1) : change, 2)
+  if (magnitude === '0') return none
+  return `${negative ? fall : rise}${magnitude}% בשנה`
+}
+
+/**
+ * A movement taken from the last years, with the yearly figure the engine computed from them:
+ * "יעלה" for a rise, "ישתנה" with the figure's sign for a fall or none.
+ */
+function likeLastYears(subject: string, years: number, change: string): string {
+  const rising = !change.startsWith('-') && roundedPercent(change, 2) !== '0'
+  const figure = change.startsWith('-')
+    ? `-${roundedPercent(change.slice(1), 2)}`
+    : roundedPercent(change, 2)
+  return `${subject} ${rising ? 'יעלה' : 'ישתנה'} כמו ב-${years} השנים האחרונות (${figure}% בשנה)`
+}
+
+/** A scenario's title, naming how it moves the CPI and prime. */
+export function scenarioTitle(scenario: ScenarioShown['scenario']): string {
+  const cpi =
+    scenario.cpi_like_last_years === null
+      ? yearlyMove(scenario.cpi_per_year, 'המדד יעלה ', 'המדד ירד ', 'המדד לא ישתנה')
+      : likeLastYears('המדד', scenario.cpi_like_last_years, scenario.cpi_per_year)
+  const prime =
+    scenario.prime_like_last_years === null
+      ? yearlyMove(scenario.prime_per_year, 'הפריים יעלה ב-', 'הפריים ירד ב-', 'הפריים לא ישתנה')
+      : likeLastYears('הפריים', scenario.prime_like_last_years, scenario.prime_per_year)
+  return `אם ${cpi} ו${prime}`
 }
 
 /** The column headings of a chart's table for screen readers. */

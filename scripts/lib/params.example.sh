@@ -7,6 +7,14 @@
 # hand, e.g. anthropic:claude-sonnet-5-5.
 export LLM_MODEL=""
 
+# Optional: provider:model of a stronger model, of LLM_MODEL's provider since it calls with the
+# same LLM_API_KEY. A person listed in LLM_RETRY_EMAILS who sends "נסה שוב, אח שלי" (commas,
+# periods, exclamation and question marks ignored) gets their last other message answered again
+# by it, over the whole conversation; the old reply stays.
+# export LLM_RETRY_MODEL="openai:gpt-6.2-astra"
+# Optional, with LLM_RETRY_MODEL: JSON list of the lowercase emails allowed the retry phrase.
+# export LLM_RETRY_EMAILS='["person@example.com"]'
+
 # Required: the OAuth client ID of the page's Sign in with Google button, which every ID token
 # must name as its audience. Fill in by hand (docs/sign-in.md).
 export GOOGLE_CLIENT_ID=""

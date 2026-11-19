@@ -3,8 +3,10 @@
 - MarketHistory: aligned monthly Bank of Israel rate and CPI series plus the latest market values
 - Window: the outcome of one replayed window
 - TrackOutcome: the base schedule, the worst window and the range across all windows
-- simulate(): prices the track on the base path (today's rate held flat, BASE_ANNUAL_INFLATION
-  each month) and replays each window's rate changes and inflation
+- simulate(): prices the track on the base path (DEFAULT_SCENARIO) and replays each window's
+  rate changes and inflation
+- price(): prices the track on a scenario, with no historical window
+- resolved(): a scenario with each movement given as the last years turned into its yearly figure
 - rate_today(): the annual rate the track charges in its first month on the base path
 """
 
@@ -14,16 +16,11 @@ from datetime import date
 from decimal import Decimal
 from itertools import pairwise
 
-from loan_engine.domain.assumptions import (
-    BASE_ANNUAL_INFLATION,
-    BOI_RATE_FLOOR,
-    HISTORY_MONTHS,
-    PRIME_MARGIN,
-)
-from loan_engine.domain.models import Track
+from loan_engine.domain.assumptions import BOI_RATE_FLOOR, HISTORY_MONTHS, PRIME_MARGIN
+from loan_engine.domain.models import DEFAULT_SCENARIO, Scenario, Track
 from loan_engine.domain.schedule import Schedule, schedule
 
-_BASE_MONTHLY_INFLATION = (1 + BASE_ANNUAL_INFLATION / 100) ** (Decimal(1) / 12) - 1
+_HUNDREDTH = Decimal("0.01")
 
 
 class NoHistoryWindowError(ValueError):
@@ -93,7 +90,7 @@ def simulate(track: Track, history: MarketHistory) -> TrackOutcome:
     balloon each window clears in its last month is reported beside it, not counted in the peak.
     """
     n = track.term_months
-    base = schedule(track, _rates(track, history, [Decimal(0)] * n), [_BASE_MONTHLY_INFLATION] * n)
+    base = price(track, history, DEFAULT_SCENARIO)
     if track.rate_kind == "fixed" and not track.cpi_linked:
         return TrackOutcome(base, None, None, None, 0)
 
@@ -107,6 +104,42 @@ def simulate(track: Track, history: MarketHistory) -> TrackOutcome:
         total_paid_range=(min(totals), max(totals)),
         windows=len(windows),
     )
+
+
+def price(track: Track, history: MarketHistory, scenario: Scenario) -> Schedule:
+    """The CPI rises by cpi_per_year compounded monthly; the Bank of Israel rate, and prime with
+    it, by a twelfth of prime_per_year more each month from today's, floored as in a window."""
+    n = track.term_months
+    inflation = (1 + scenario.cpi_per_year / 100) ** (Decimal(1) / 12) - 1
+    deltas = [scenario.prime_per_year * k / 12 for k in range(n)]
+    return schedule(track, _rates(track, history, deltas), [inflation] * n)
+
+
+def resolved(scenario: Scenario, history: MarketHistory) -> Scenario:
+    """The CPI's yearly rise over the last years is its compounded rise over those months, to the
+    hundredth of a percent; prime's is its change over them divided by the years, to the
+    hundredth of a point. Both come from the history's latest months."""
+    figures: dict[str, Decimal] = {}
+    if scenario.cpi_like_last_years is not None:
+        years = scenario.cpi_like_last_years
+        months = _last_months(history.monthly_inflation, 12 * years, years)
+        rise = Decimal(1)
+        for change in months:
+            rise *= 1 + change
+        figures["cpi_per_year"] = ((rise ** (Decimal(1) / years) - 1) * 100).quantize(_HUNDREDTH)
+    if scenario.prime_like_last_years is not None:
+        years = scenario.prime_like_last_years
+        rates = _last_months(history.boi_rate, 12 * years + 1, years)
+        figures["prime_per_year"] = ((rates[-1] - rates[0]) / years).quantize(_HUNDREDTH)
+    return scenario.model_copy(update=figures)
+
+
+def _last_months(series: Sequence[Decimal], count: int, years: int) -> Sequence[Decimal]:
+    if len(series) < count:
+        raise NoHistoryWindowError(
+            f"the last {years} years need {count} months of history; it holds {len(series)}"
+        )
+    return series[-count:]
 
 
 def rate_today(track: Track, history: MarketHistory) -> Decimal:

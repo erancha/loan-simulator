@@ -2,7 +2,9 @@
 
 Core building blocks:
 - CheckRunner.create: a new, empty check for the signed-in person
-- CheckRunner.send: records the person's message and runs the turn as a background task
+- CheckRunner.send: records the person's message and runs the turn as a background task; the
+  retry phrase of a person RetryRoute lists reruns their last other message on its stronger
+  model
 - CheckRunner.send_term_ceiling: records the payment ceiling the person typed on the term card,
   saves it and shows a term card for it, with no model call
 - CheckRunner.send_offer_sample: records the page's offer chip sentence and answers it with the
@@ -37,10 +39,12 @@ costs model calls, so a person may send at most turn_limit messages, or their ov
 across all their checks, in any rolling window of the configured length, and deleting a check gives
 none of them back. Turns live in this process's memory, so the agent runs as one replica.
 
-A model turn that leaves the check with a recommendation and no payment ceiling ends with the
-ceiling question, asked once per check by the runner rather than left to the model, so the
-person meets it after the first recommendation; a turn that ends on a question of the model's or
-on an offer's reading leaves it to a later turn, since the person answers that first.
+A model turn that showed a scenario table ends with the form of the movement not yet simulated on
+the check's offers, offered by the runner rather than left to the model. A model turn that leaves
+the check with a recommendation and no payment ceiling ends with the ceiling question, asked once
+per check by the runner rather than left to the model, so the person meets it after the first
+recommendation; a turn that ends on a question of the model's or on an offer's reading leaves it to
+a later turn, since the person answers that first.
 
 A turn streams the model's text to open pages as live message.delta events, each carrying the
 whole text of its message so far, so a page that joins mid-reply catches up from the next one.
@@ -74,7 +78,13 @@ from loan_agent.application.agent_graph import (
     people_said,
     record_exchange,
 )
-from loan_agent.application.check_tools import CheckTools, ToolDeps, ToolError, english_words
+from loan_agent.application.check_tools import (
+    CheckTools,
+    ToolDeps,
+    ToolError,
+    english_words,
+    scenario_offer_next,
+)
 from loan_agent.application.finances_saving import save_finances
 from loan_agent.application.market_answer import PRIME_MONTHS, market_answer
 from loan_agent.domain.errors import (
@@ -96,6 +106,7 @@ from loan_agent.ports.events import (
     OFFER_AWAITING,
     OFFER_UNRECOGNIZED,
     QUESTION_ASKED,
+    SCENARIO_SHOWN,
     TURN_FAILED,
     TURN_STATUS,
     EventSink,
@@ -142,8 +153,16 @@ CEILING_ASKED = (
     "The screen asked the person for their payment ceiling (field payment_ceiling), with a skip "
     "and a 'לא יודע/ת' choice; their answer arrives as the next message."
 )
+# What the model's conversation records of the runner's scenario form, by the movement it offers.
+SCENARIO_OFFERED = (
+    "The screen offered the person a form to simulate {movement} rising each year, with a skip; "
+    "their answer arrives as the next message, starting 'סימולציה:'."
+)
 # The model reads this as the result of each unanswered tool call. The tool node runs one model
 # message's calls concurrently, so another call from that message may have saved before one failed.
+RETRY_PHRASE = "נסה שוב אח שלי"
+"""Compared with commas, periods, exclamation and question marks dropped and spaces collapsed."""
+
 TOOL_CALL_OUTCOME_UNKNOWN = (
     "The outcome of this tool call is unknown: the previous turn ended with an error before its "
     "results were recorded, and the call may have completed. Before repeating a call that saves "
@@ -168,6 +187,23 @@ class _Draft:
     retracted: set[str] = field(default_factory=set)
 
 
+@dataclass(frozen=True)
+class RetryRoute:
+    """A graph on a stronger model over the same conversations, and the lowercase emails of the
+    people whose retry phrase reruns their previous message on it. The old reply stays; the
+    rerun answers below it."""
+
+    graph: AgentGraph
+    emails: frozenset[str]
+
+
+_RETRY_PUNCTUATION = str.maketrans(",.!?", "    ")
+
+
+def _is_retry_phrase(text: str) -> bool:
+    return " ".join(text.translate(_RETRY_PUNCTUATION).split()) == RETRY_PHRASE
+
+
 class CheckRunner:
     def __init__(
         self,
@@ -180,8 +216,10 @@ class CheckRunner:
         turn_limit_overrides: Mapping[str, int],
         window: timedelta,
         clock: Callable[[], datetime],
+        retry: RetryRoute | None,
     ) -> None:
         self._graph = graph
+        self._retry_route = retry
         self._checks = checks
         self._events = events
         self._sink = sink
@@ -206,7 +244,16 @@ class CheckRunner:
         """Raises CheckNotFoundError for an unknown check or another person's, CheckArchivedError
         for an archived one, TurnConflictError while the check runs a turn, and TurnLimitError
         when the person's messages are used up."""
-        await self._start(user, check_id, text, self._run)
+        answer = self._retry if self._may_retry(user, text) else self._run
+        await self._start(user, check_id, text, answer)
+
+    def _may_retry(self, user: User, text: str) -> bool:
+        return (
+            self._retry_route is not None
+            and user.email is not None
+            and user.email.lower() in self._retry_route.emails
+            and _is_retry_phrase(text)
+        )
 
     async def send_term_ceiling(
         self, user: User, check_id: str, text: str, payment_ceiling: Decimal
@@ -442,13 +489,28 @@ class CheckRunner:
             turn.add_done_callback(lambda done: self._forget(check_id, done))
 
     async def _run(self, user_id: str, check_id: str, text: str) -> None:
+        await self._run_on(self._graph, user_id, check_id, text)
+
+    async def _retry(self, user_id: str, check_id: str, text: str) -> None:
+        """Sends the person's last message that is not itself the retry phrase again, on the retry
+        route's graph; with no such message the phrase is an ordinary one."""
+        assert self._retry_route is not None
+        config = check_config(user_id, check_id)
+        messages = (await self._graph.aget_state(config)).values.get("messages", [])
+        said = [line for line in people_said(messages) if not _is_retry_phrase(line)]
+        if not said:
+            await self._run(user_id, check_id, text)
+            return
+        await self._run_on(self._retry_route.graph, user_id, check_id, said[-1])
+
+    async def _run_on(self, graph: AgentGraph, user_id: str, check_id: str, text: str) -> None:
         config = check_config(user_id, check_id)
         try:
             unfinished = await self._close_unfinished_tool_calls(config)
             turn_input = MessagesState(messages=[*unfinished, HumanMessage(text)])
-            earlier = (await self._graph.aget_state(config)).values.get("messages", [])
+            earlier = (await graph.aget_state(config)).values.get("messages", [])
             draft = _Draft(people=[*people_said(earlier), text])
-            async for part in self._graph.astream(
+            async for part in graph.astream(
                 turn_input, config, stream_mode=["messages", "updates"], version="v2"
             ):
                 if part["type"] == "messages":
@@ -458,12 +520,33 @@ class CheckRunner:
                     await self._store_replies(check_id, part["data"])
                 else:
                     raise AssertionError(f"unrequested stream part {part['type']!r}")
+            await self._offer_scenario_when_due(check_id, config)
             await self._ask_ceiling_when_due(user_id, check_id, config)
         except Exception:
             log.exception("turn failed", check_id=check_id)
             await self._report_failure(check_id)
             return
         await self._sink.emit(check_id, TURN_STATUS, IDLE)
+
+    async def _offer_scenario_when_due(self, check_id: str, config: RunnableConfig) -> None:
+        """After a turn that showed a scenario table, offers the form of the movement no table on
+        the current offers simulated yet, unless the turn already ends with a question the person
+        answers first. The code, not the model, decides, so a simulation is never offered twice
+        on the same offers."""
+        events = await self._events.list(check_id, 0)
+        start = max(i for i, event in enumerate(events) if event.type == MESSAGE_USER)
+        if SCENARIO_SHOWN not in {event.type for event in events[start:]}:
+            return
+        if events[-1].type in _ANSWERED_ON_SCREEN:
+            return
+        movement = await scenario_offer_next(self._sink, check_id)
+        if movement is None:
+            return
+        question = {"kind": "scenario", "movement": movement}
+        await self._sink.emit(check_id, QUESTION_ASKED, {"question": question, "lead_in": None})
+        await record_exchange(
+            self._graph, config, [AIMessage(SCENARIO_OFFERED.format(movement=movement))]
+        )
 
     async def _ask_ceiling_when_due(
         self, user_id: str, check_id: str, config: RunnableConfig

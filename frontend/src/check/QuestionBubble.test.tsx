@@ -716,3 +716,47 @@ it('an answered terms card keeps its table without the buttons', () => {
   expect(screen.getAllByRole('row')).toHaveLength(4)
   expect(screen.queryByRole('button')).toBeNull()
 })
+
+function renderScenarioForm(movement: 'prime' | 'cpi', onAnswer = vi.fn().mockResolvedValue(true)) {
+  render(
+    <QuestionBubble
+      entry={entryFor({ kind: 'scenario', movement })}
+      live
+      finances={null}
+      ceiling={null}
+      ceilingFormula={null}
+      onAnswer={onAnswer}
+      onSkip={vi.fn()}
+      onClone={vi.fn()}
+    />,
+  )
+  return onAnswer
+}
+
+it('the scenario form sends the yearly rise it is given as a simulation line', async () => {
+  const onAnswer = renderScenarioForm('prime')
+  const user = userEvent.setup()
+  expect(screen.getByText('סימולציה למקרה שהפריים יעלה')).toBeInTheDocument()
+  expect(screen.getByText(/הצעות בריבית פריים/)).toBeInTheDocument()
+
+  await user.type(screen.getByRole('textbox', { name: 'עלייה בפריים בכל שנה' }), '1.5')
+  await user.click(screen.getByRole('button', { name: 'בדיקה' }))
+
+  expect(onAnswer).toHaveBeenCalledWith({
+    line: 'סימולציה: הפריים יעלה 1.5% בשנה',
+    update: null,
+  })
+})
+
+it('the scenario form refuses a rise that is not a number and sends nothing', async () => {
+  const onAnswer = renderScenarioForm('cpi')
+  const user = userEvent.setup()
+  expect(screen.getByText('סימולציה למקרה שהמדד יעלה')).toBeInTheDocument()
+
+  await user.type(screen.getByRole('textbox', { name: 'עלייה במדד בכל שנה' }), 'הרבה')
+  await user.click(screen.getByRole('button', { name: 'בדיקה' }))
+
+  expect(onAnswer).not.toHaveBeenCalled()
+  expect(screen.getByRole('alert')).toBeInTheDocument()
+})
+

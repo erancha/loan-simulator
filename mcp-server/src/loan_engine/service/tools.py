@@ -1,9 +1,9 @@
 """The loan-engine tools, described for a language model, with money rounded to agorot
 (hundredths of a shekel).
 
-- Output models: Bounds, LoanSimulation (TrackSimulation, MonthRow), ComfortableTerm,
-  OfferTerm, ProposedTerm, LargestLoan, TrackSuggestions, MarketSeries (PrimeMonth, CpiMonth),
-  OfferReadings (Reading)
+- Output models: Bounds, LoanSimulation (TrackSimulation, MonthRow), ScenarioSimulation
+  (PricedScenario, ScenarioTrack), ComfortableTerm, OfferTerm, ProposedTerm, LargestLoan,
+  TrackSuggestions, MarketSeries (PrimeMonth, CpiMonth), OfferReadings (Reading)
 - register_tools(): adds the tools to a server; each reads market data from history_provider
 
 simulate_loan returns its LoanSimulation as structured content and only a short summary as text,
@@ -26,7 +26,6 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
 from loan_engine.domain import affordability, history, policy, readings, schedule
 from loan_engine.domain.assumptions import (
-    BASE_ANNUAL_INFLATION,
     HISTORY_MONTHS,
     PRIME_MARGIN,
     SIMILAR_RATE_POINTS,
@@ -41,7 +40,7 @@ from loan_engine.domain.limits import (
     MIN_PRINCIPAL,
     MIN_TERM,
 )
-from loan_engine.domain.models import Loan, Profile, Track
+from loan_engine.domain.models import DEFAULT_SCENARIO, Loan, Profile, Scenario, Track
 from loan_engine.market.boi import CONSUMER_RATE_SERIES
 
 _AGOROT = Decimal("0.01")
@@ -55,7 +54,16 @@ Money = Annotated[Decimal, AfterValidator(_to_agorot)]
 
 _BASE_PATH = (
     f"the base path: today's rates held flat and, for CPI-linked tracks, "
-    f"{BASE_ANNUAL_INFLATION}% annual inflation"
+    f"{DEFAULT_SCENARIO.cpi_per_year}% annual inflation"
+)
+
+_SCENARIO = (
+    "The future to price the loan on, held for the whole loan: cpi_per_year, how much the CPI "
+    "rises each year in percent (5 means 5%), and prime_per_year, how much prime rises each year "
+    "in percentage points. For a movement the person describes as in recent years, give "
+    "cpi_like_last_years or prime_like_last_years, the number of years, in its place. Omit a "
+    "movement the person did not name: it keeps today's assumption, "
+    f"{DEFAULT_SCENARIO.cpi_per_year}% and {DEFAULT_SCENARIO.prime_per_year}."
 )
 
 _PROFILE = (
@@ -205,6 +213,50 @@ class LoanSimulation(_Output):
     consumer_rate_month: date = Field(description="Month of consumer_rate")
 
 
+class ScenarioTrack(_Output):
+    first_payment: Money = Field(description="Payment in month 1 on the scenario, ₪")
+    max_payment: Money = Field(
+        description="Highest recurring monthly payment on the scenario, without the balloon, ₪"
+    )
+    balloon_due: Money | None = Field(description=f"{_BALLOON_DUE}; on the scenario")
+    total_paid: Money = Field(
+        description="Total repaid on the scenario, including fees and the balloon, ₪"
+    )
+
+    @classmethod
+    def of(cls, priced: schedule.Schedule) -> "ScenarioTrack":
+        return cls(
+            first_payment=priced.first_payment,
+            max_payment=priced.max_payment,
+            balloon_due=priced.balloon_due,
+            total_paid=priced.total_paid,
+        )
+
+
+class PricedScenario(_Output):
+    """The scenario as priced: every movement as its yearly figure, and the years it was taken
+    from when the person described it as the last years."""
+
+    cpi_per_year: Decimal = Field(description="The CPI's yearly rise priced, percent")
+    prime_per_year: Decimal = Field(description="Prime's yearly rise priced, percentage points")
+    cpi_like_last_years: int | None = Field(description="The years cpi_per_year averages, if any")
+    prime_like_last_years: int | None = Field(
+        description="The years prime_per_year averages, if any"
+    )
+
+
+class ScenarioSimulation(_Output):
+    scenario: PricedScenario = Field(description="The scenario priced, with its defaults filled in")
+    tracks: list[ScenarioTrack] = Field(description="One result per track, in input order")
+    first_payment: Money = Field(description="Today's monthly payment of the whole loan, ₪")
+    max_payment: Money = Field(
+        description="Highest recurring monthly payment of the whole loan on the scenario, "
+        "without the tracks' balloons, ₪"
+    )
+    total_paid: Money = Field(description="Total repaid for the whole loan on the scenario, ₪")
+    rate_as_of: date = Field(description="Date of the Bank of Israel rate the scenario starts at")
+
+
 class ComfortableTerm(_Output):
     term_months: int | None = Field(
         description="The shortest comfortable term, months; null when no term up to the longest "
@@ -328,6 +380,12 @@ def _track_summary(number: int, track: TrackSimulation, loan: LoanSimulation) ->
         if worst.balloon_due is not None:
             risk += f" and a balloon of {worst.balloon_due} ₪"
         parts.append(risk)
+        assert track.total_paid_range is not None and track.max_payment_range is not None
+        totals, peaks = track.total_paid_range, track.max_payment_range
+        parts.append(
+            f"total repaid across the historical windows {totals.low} to {totals.high} ₪, "
+            f"peak recurring payment across them {peaks.low} to {peaks.high} ₪"
+        )
     return f"Track {number}: " + "; ".join(parts) + "."
 
 
@@ -402,6 +460,42 @@ def register_tools(
         )
         return CallToolResult(
             content=[TextContent(type="text", text=_summary(simulation))],
+            structured_content=simulation.model_dump(mode="json"),
+        )
+
+    @server.tool()
+    def simulate_scenario(
+        loan: Annotated[Loan, Field(description=_LOAN)],
+        scenario: Annotated[Scenario, Field(description=_SCENARIO)],
+    ) -> Annotated[CallToolResult, ScenarioSimulation]:
+        """Call this to price a loan on a future the person names: the CPI rising cpi_per_year
+        percent a year and prime rising prime_per_year points a year, for the whole loan. Returns
+        today's payment, the highest recurring payment and the total repaid, for the loan and per
+        track. It replays no historical window; simulate_loan gives those.
+        """
+        market = history_provider()
+        try:
+            scenario = history.resolved(scenario, market)
+        except history.NoHistoryWindowError as error:
+            raise ToolError(str(error)) from error
+        priced = [history.price(track, market, scenario) for track in loan.tracks]
+        monthly = _monthly_totals(priced)
+        simulation = ScenarioSimulation(
+            scenario=PricedScenario.model_validate(scenario.model_dump()),
+            tracks=[ScenarioTrack.of(one) for one in priced],
+            first_payment=monthly[0],
+            max_payment=max(monthly),
+            total_paid=sum((one.total_paid for one in priced), Decimal(0)),
+            rate_as_of=market.rate_as_of,
+        )
+        text = (
+            f"On the scenario of the CPI rising {scenario.cpi_per_year}% a year and prime "
+            f"{scenario.prime_per_year} points a year from {market.rate_as_of}: first payment "
+            f"{simulation.first_payment} ₪; peak recurring payment {simulation.max_payment} ₪; "
+            f"total repaid {simulation.total_paid} ₪."
+        )
+        return CallToolResult(
+            content=[TextContent(type="text", text=text)],
             structured_content=simulation.model_dump(mode="json"),
         )
 

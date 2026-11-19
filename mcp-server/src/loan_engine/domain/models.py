@@ -3,6 +3,8 @@
 - Track: one slice of a loan with its own rate, term and repayment method
 - Loan: one or more tracks borrowed together
 - Profile: the borrower's monthly income and fixed expenses
+- Scenario: a future the person names, as a yearly CPI rise and a yearly prime rise;
+  DEFAULT_SCENARIO is the one today's figures assume
 """
 
 from decimal import Decimal
@@ -10,12 +12,18 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from loan_engine.domain.assumptions import DEFAULT_CPI_PER_YEAR, DEFAULT_PRIME_PER_YEAR
 from loan_engine.domain.limits import (
     MAX_ANNUAL_RATE,
+    MAX_CPI_PER_YEAR,
+    MAX_LIKE_LAST_YEARS,
+    MAX_PRIME_PER_YEAR,
     MAX_PRIME_SPREAD,
     MAX_PRINCIPAL,
     MAX_TERM,
     MIN_ANNUAL_RATE,
+    MIN_CPI_PER_YEAR,
+    MIN_PRIME_PER_YEAR,
     MIN_PRIME_SPREAD,
     MIN_PRINCIPAL,
     MIN_TERM,
@@ -96,3 +104,49 @@ class Loan(_Model):
 class Profile(_Model):
     net_fixed_income: Decimal = Field(ge=0)
     fixed_expenses: Decimal = Field(ge=0)
+
+
+class Scenario(_Model):
+    """A future held for the whole loan; a value left out keeps the default. A movement may be
+    given instead as the last N years of history, which history.resolved turns into its yearly
+    figure."""
+
+    cpi_per_year: Decimal = Field(
+        default=DEFAULT_CPI_PER_YEAR,
+        ge=MIN_CPI_PER_YEAR,
+        le=MAX_CPI_PER_YEAR,
+        description="How much the CPI rises each year, percent; moves CPI-linked tracks",
+    )
+    prime_per_year: Decimal = Field(
+        default=DEFAULT_PRIME_PER_YEAR,
+        ge=MIN_PRIME_PER_YEAR,
+        le=MAX_PRIME_PER_YEAR,
+        description="How much prime rises each year, percentage points; moves prime tracks",
+    )
+    cpi_like_last_years: int | None = Field(
+        default=None,
+        ge=1,
+        le=MAX_LIKE_LAST_YEARS,
+        description="The CPI rises each year as it did on average over the last this many "
+        "years; given in place of cpi_per_year",
+    )
+    prime_like_last_years: int | None = Field(
+        default=None,
+        ge=1,
+        le=MAX_LIKE_LAST_YEARS,
+        description="Prime moves each year as it did on average over the last this many years; "
+        "given in place of prime_per_year",
+    )
+
+    @model_validator(mode="after")
+    def _one_way_per_movement(self) -> Self:
+        for movement in ("cpi", "prime"):
+            given = {f"{movement}_per_year", f"{movement}_like_last_years"} & self.model_fields_set
+            if len(given) == 2:
+                raise ValueError(
+                    f"give {movement}_per_year or {movement}_like_last_years, not both"
+                )
+        return self
+
+
+DEFAULT_SCENARIO = Scenario()

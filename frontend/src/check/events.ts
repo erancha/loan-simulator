@@ -25,6 +25,7 @@ import type {
   Question,
   Reading,
   RecommendationPresented,
+  ScenarioShown,
 } from '../api/types.ts'
 import { exceeds } from '../money.ts'
 import { TERM_MAX_MONTHS, TERM_MIN_MONTHS } from './copy.ts'
@@ -54,6 +55,13 @@ export interface ChartEntry {
   id: string
   role: 'chart'
   chart: ChartShown
+}
+
+/** Every option priced on a future the person named; it sits where the model showed it. */
+export interface ScenarioEntry {
+  id: string
+  role: 'scenario'
+  scenario: ScenarioShown
 }
 
 /** The note that closes an archived check's conversation. */
@@ -103,6 +111,7 @@ export type ChatEntry =
   | ChatMessage
   | QuestionEntry
   | ChartEntry
+  | ScenarioEntry
   | ArchiveEntry
   | CloneEntry
   | ReadingsEntry
@@ -312,6 +321,14 @@ function apply(state: CheckState, event: CheckEvent): CheckState {
       return {
         ...state,
         messages: [...state.messages, { id: `c-${event.seq}`, role: 'chart', chart: event.data }],
+      }
+    case 'scenario.shown':
+      return {
+        ...state,
+        messages: [
+          ...state.messages,
+          { id: `s-${event.seq}`, role: 'scenario', scenario: event.data },
+        ],
       }
     case 'question.asked':
       return {

@@ -5,6 +5,8 @@ import {
   checkArchived,
   chartShown,
   cpiChart,
+  scenarioCpi5,
+  scenarioShown,
   delta,
   ceilingSet,
   examplesRemoved,
@@ -249,6 +251,11 @@ test('a chart becomes an entry where it was shown and survives its turn ending',
     { id: 'u-1', role: 'user', text: 'מה המדד?', complete: true },
     { id: 'c-3', role: 'chart', chart: cpiChart },
   ])
+})
+
+test('a scenario table becomes an entry where it was shown', () => {
+  const state = play([userMessage(1, 'ואם המדד יעלה 5%?'), scenarioShown(2)])
+  expect(state.messages.at(-1)).toEqual({ id: 's-2', role: 'scenario', scenario: scenarioCpi5 })
 })
 
 test('a question is not live while a turn runs', () => {
