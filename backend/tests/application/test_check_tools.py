@@ -1020,7 +1020,7 @@ async def test_room_under_the_ceiling_offers_the_shortest_term_that_still_fits(
     (next_step,) = [line for line in result.splitlines() if line.startswith("next_step")]
     assert "at 24 months" in next_step
     assert "635 less in total than at 48 months" in next_step
-    assert "ask_term with term_months 24" in next_step
+    assert "a term card for 24 months" in next_step
     assert "the reply says nothing of them" in next_step
 
 

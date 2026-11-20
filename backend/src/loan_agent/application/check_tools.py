@@ -12,7 +12,8 @@ recommendation, with the guardrail that keeps a recommendation honest.
   option priced at its term and the next terms in the direction the person asked), emitting a
   question for the page and returning ASKED_RESULT, after which the turn ends; show_chart,
   emitting a market series for the page; show_scenario, emitting every saved option priced on
-  the scenario the person named beside its total in today's calculation, as one table
+  the scenario the person named beside its total in today's calculation, as one table;
+  suggested_shorter_term, the shorter term at which the recommended option still fits the ceiling
 - holds_option: whether a check holds an option or an offer awaiting its lender
 - scenario_offer_next: the movement no scenario table since the latest saved option named, which
   the runner offers as a form after a turn that showed a table
@@ -405,22 +406,31 @@ class CheckTools:
     async def _typed_or_suggested(self, check: Check, term_months: int) -> dict[str, object]:
         """The basis of a card for an explicit term: the shorter term the check's recommendation
         suggests when the term is that one, so the card states what it saves; otherwise typed."""
+        shorter = await self._suggested_shorter_term(check)
+        if shorter is not None and shorter.term_months == term_months:
+            return {
+                "kind": "shorter",
+                "amount": str(check.payment_ceiling),
+                "from_term_months": shorter.from_term_months,
+                "worst_payment": str(shorter.worst_payment),
+                "saving": str(shorter.saving),
+            }
+        return {"kind": "typed"}
+
+    async def suggested_shorter_term(self) -> int | None:
+        """The shortest term at which the check's recommended option still fits its ceiling, when
+        that is shorter than the option's term; None otherwise, and without a ceiling or a
+        recommendation."""
+        shorter = await self._suggested_shorter_term(await self._check())
+        return None if shorter is None else shorter.term_months
+
+    async def _suggested_shorter_term(self, check: Check) -> _ShorterTerm | None:
         ceiling = check.payment_ceiling
         recommendation = await self._deps.recommendations.latest(self._check_id)
-        if ceiling is not None and recommendation is not None:
-            preferred = await self._deps.options.get(
-                self._check_id, recommendation.preferred_option_id
-            )
-            shorter = await self._shorter_term(preferred, ceiling)
-            if shorter is not None and shorter.term_months == term_months:
-                return {
-                    "kind": "shorter",
-                    "amount": str(ceiling),
-                    "from_term_months": shorter.from_term_months,
-                    "worst_payment": str(shorter.worst_payment),
-                    "saving": str(shorter.saving),
-                }
-        return {"kind": "typed"}
+        if ceiling is None or recommendation is None:
+            return None
+        preferred = await self._deps.options.get(self._check_id, recommendation.preferred_option_id)
+        return await self._shorter_term(preferred, ceiling)
 
     async def _last_card_term(self) -> int | None:
         """The term of the check's latest question when it is a term card."""
@@ -1602,12 +1612,11 @@ def _shorter_term_step(shorter: _ShorterTerm) -> str:
     return (
         f"the preferred option also fits the ceiling at {shorter.term_months} months, with a "
         f"worst-case monthly payment of {shorter.worst_payment} and "
-        f"{shorter.saving} less in total than at {shorter.from_term_months} months. End the "
-        f"turn with ask_term with term_months {shorter.term_months}: its card states these "
-        "figures, so the person confirms the shorter term there or keeps theirs, and the "
-        "reply says nothing of them. Once they confirm, it is simply the check's term: never "
-        "call it shorter or cheaper, or say the option 'also' fits at it. If they keep their "
-        "term, do not offer it again"
+        f"{shorter.saving} less in total than at {shorter.from_term_months} months. After your "
+        f"reply the screen shows a term card for {shorter.term_months} months that states these "
+        "figures, so the person confirms the shorter term there or keeps theirs: call no "
+        "ask_term for it, and the reply says nothing of them. Once they confirm, it is simply "
+        "the check's term: never call it shorter or cheaper, or say the option 'also' fits at it"
     )
 
 

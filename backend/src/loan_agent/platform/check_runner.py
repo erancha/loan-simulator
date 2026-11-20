@@ -39,12 +39,14 @@ costs model calls, so a person may send at most turn_limit messages, or their ov
 across all their checks, in any rolling window of the configured length, and deleting a check gives
 none of them back. Turns live in this process's memory, so the agent runs as one replica.
 
-A model turn that showed a scenario table ends with the form of the movement not yet simulated on
-the check's offers, offered by the runner rather than left to the model. A model turn that leaves
-the check with a recommendation and no payment ceiling ends with the ceiling question, asked once
-per check by the runner rather than left to the model, so the person meets it after the first
-recommendation; a turn that ends on a question of the model's or on an offer's reading leaves it to
-a later turn, since the person answers that first.
+A model turn that recommended an option whose term may move ends with the term card for the
+shortest term at which it still fits the ceiling, when that is shorter and no card showed it yet. A
+model turn that showed a scenario table ends with the form of the movement not yet simulated on
+the check's offers. The runner offers both rather than leaving them to the model. A model turn
+that leaves the check with a recommendation and no payment ceiling ends with the ceiling question,
+asked once per check by the runner rather than left to the model, so the person meets it after the
+first recommendation. A turn that ends on a question of the model's or on an offer's reading
+leaves these to a later turn, since the person answers that first.
 
 A turn streams the model's text to open pages as live message.delta events, each carrying the
 whole text of its message so far, so a page that joins mid-reply catches up from the next one.
@@ -59,7 +61,7 @@ turn continues from there.
 
 import asyncio
 import uuid
-from collections.abc import Awaitable, Callable, Coroutine, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -108,12 +110,13 @@ from loan_agent.ports.events import (
     OFFER_AWAITING,
     OFFER_UNRECOGNIZED,
     QUESTION_ASKED,
+    RECOMMENDATION_PRESENTED,
     SCENARIO_SHOWN,
     TURN_FAILED,
     TURN_STATUS,
     EventSink,
 )
-from loan_agent.ports.repositories import CheckEventStore, CheckRepository
+from loan_agent.ports.repositories import CheckEventStore, CheckRepository, StoredEvent
 
 log = structlog.get_logger(__name__)
 
@@ -149,6 +152,12 @@ OPENING_CARD_ANSWERED = (
 CEILING_ASKED = (
     "The screen asked the person for their payment ceiling (field payment_ceiling), with a skip "
     "and a 'תכנון ההחזר' choice for help working it out; their answer arrives as the next message."
+)
+# What the model's conversation records of the runner's shorter-term card, by its term.
+SHORTER_TERM_OFFERED = (
+    "The screen showed a term card for {term_months} months, the shortest term at which the "
+    "recommended option still fits the payment ceiling, with its worst-case payment and what it "
+    "saves; the person's answer to that card arrives as the next message."
 )
 # What the model's conversation records of the runner's scenario form, by the movement it offers.
 SCENARIO_OFFERED = (
@@ -202,6 +211,15 @@ _RETRY_PUNCTUATION = str.maketrans(",.!?", "    ")
 
 def _is_retry_phrase(text: str) -> bool:
     return " ".join(text.translate(_RETRY_PUNCTUATION).split()) == RETRY_PHRASE
+
+
+def _term_card_terms(events: Sequence[StoredEvent]) -> set[int]:
+    questions = [
+        cast(Mapping[str, object], event.data["question"])
+        for event in events
+        if event.type == QUESTION_ASKED
+    ]
+    return {cast(int, q["term_months"]) for q in questions if q.get("kind") == "term"}
 
 
 class CheckRunner:
@@ -531,6 +549,7 @@ class CheckRunner:
                     await self._store_replies(check_id, part["data"])
                 else:
                     raise AssertionError(f"unrequested stream part {part['type']!r}")
+            await self._offer_shorter_term_when_due(user_id, check_id, config)
             await self._offer_scenario_when_due(check_id, config)
             await self._ask_ceiling_when_due(user_id, check_id, config)
         except Exception:
@@ -552,6 +571,28 @@ class CheckRunner:
                 seconds=round(elapsed.total_seconds()),
                 model_calls=model_calls,
             )
+
+    async def _offer_shorter_term_when_due(
+        self, user_id: str, check_id: str, config: RunnableConfig
+    ) -> None:
+        """After a turn that recommended, shows the term card for the shorter term at which the
+        recommended option still fits the ceiling, unless the turn already ends with a question
+        the person answers first or a card already showed that term, whatever the person
+        answered there. The code, not the model, shows it, so the person always sees it."""
+        events = await self._events.list(check_id, 0)
+        start = max(i for i, event in enumerate(events) if event.type == MESSAGE_USER)
+        if RECOMMENDATION_PRESENTED not in {event.type for event in events[start:]}:
+            return
+        if events[-1].type in _ANSWERED_ON_SCREEN:
+            return
+        tools = CheckTools(user_id, check_id, self._tool_deps)
+        term_months = await tools.suggested_shorter_term()
+        if term_months is None or term_months in _term_card_terms(events):
+            return
+        await tools.ask_term(term_months)
+        await record_exchange(
+            self._graph, config, [AIMessage(SHORTER_TERM_OFFERED.format(term_months=term_months))]
+        )
 
     async def _offer_scenario_when_due(self, check_id: str, config: RunnableConfig) -> None:
         """After a turn that showed a scenario table, offers the form of the movement no table on

@@ -41,7 +41,7 @@ from loan_agent.application.agent_graph import (
     TURN_STEP_LIMIT,
     build_agent_graph,
 )
-from loan_agent.application.check_tools import ToolDeps, ToolError
+from loan_agent.application.check_tools import CheckTools, ToolDeps, ToolError
 from loan_agent.application.event_sink import CheckEventSink, check_channel
 from loan_agent.domain.errors import (
     CheckArchivedError,
@@ -55,6 +55,7 @@ from loan_agent.platform.check_runner import (
     FAILURE_MESSAGE,
     OFFER_FORM_SHOWN,
     OPENING_CARD_ANSWERED,
+    SHORTER_TERM_OFFERED,
     TERM_CARD_FOR_CEILING,
     TOOL_CALL_OUTCOME_UNKNOWN,
     CheckRunner,
@@ -1241,6 +1242,74 @@ async def test_no_ceiling_question_with_a_ceiling_or_without_a_recommendation(
         await checks.send(PERSON, check.id, "שלום")
         await checks.drain()
         assert "question.asked" not in [type for type, _ in await stored(world, check.id)]
+
+
+async def open_offer_under_the_ceiling(world: World, checks: CheckRunner) -> Check:
+    """A check of 80,000 at 48 months with a ceiling of 3,000 and one offer that leaves its term
+    open up to 84 months; the engine's search finds it fits the ceiling at 24 months too."""
+    check = await checks.create(PERSON)
+    tools = CheckTools(PERSON.id, check.id, world.deps)
+    await tools.set_loan(None, "80000")
+    await tools.set_term(48)
+    await tools.set_ceiling("3000")
+    world.engine.simulations = [PRIME_SIMULATION]
+    await tools.save_offer([PRIME_TRACK], "בנק", max_term_months=84)
+    # The recommendation's shorter term, the runner's, and the card's examples and shorter term.
+    world.engine.simulations = [PRIME_SIMULATION] * 5
+    return check
+
+
+def recommends_option_1() -> AIMessage:
+    args = {"preferred_option_id": "option-1", "reasoning": "הזולה ביותר"}
+    call = {"name": "present_recommendation", "args": args, "id": "call-rec", "type": "tool_call"}
+    return AIMessage(content="", tool_calls=[call])
+
+
+def term_cards(events: list[tuple[str, dict[str, Any]]]) -> list[dict[str, Any]]:
+    return [
+        data["question"]
+        for type, data in events
+        if type == "question.asked" and data["question"].get("kind") == "term"
+    ]
+
+
+async def test_a_recommendation_with_room_under_the_ceiling_ends_with_the_shorter_term_card(
+    world: World,
+) -> None:
+    model = ScriptedChatModel(replies=[recommends_option_1(), AIMessage(REPLY), AIMessage(REPLY)])
+    checks = runner(world, model)
+    check = await open_offer_under_the_ceiling(world, checks)
+
+    await checks.send(PERSON, check.id, "מה כדאי?")
+    await checks.drain()
+
+    events = await stored(world, check.id)
+    types = [type for type, _ in events[-3:]]
+    assert types == ["message.assistant", "question.asked", "turn.status"]
+    (card,) = term_cards(events)
+    assert (card["term_months"], card["basis"]["kind"]) == (24, "shorter")
+    await checks.send(PERSON, check.id, "אישור: 24 חודשים")
+    await checks.drain()
+    said = [m for m in model.received[-1] if isinstance(m, AIMessage)]
+    assert said[-1].content == SHORTER_TERM_OFFERED.format(term_months=24)
+
+
+async def test_a_term_a_card_already_offered_is_not_offered_again(world: World) -> None:
+    model = ScriptedChatModel(
+        replies=[recommends_option_1(), AIMessage(REPLY), recommends_option_1(), AIMessage(REPLY)]
+    )
+    checks = runner(world, model)
+    check = await open_offer_under_the_ceiling(world, checks)
+    await checks.send(PERSON, check.id, "מה כדאי?")
+    await checks.drain()
+    world.engine.simulations = [PRIME_SIMULATION] * 2
+
+    await checks.send(PERSON, check.id, "נשאר עם 48 חודשים")
+    await checks.drain()
+
+    events = await stored(world, check.id)
+    assert len(term_cards(events)) == 1
+    assert events[-2][0] == "message.assistant"
 
 
 def read_avis_offer() -> AIMessage:
