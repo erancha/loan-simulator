@@ -35,6 +35,7 @@ const noQuestion = {
   opening: null,
   offersOpen: false,
   samplesOffered: false,
+  scenarioOffered: false,
   termChips: { shorter: false, longer: false },
   focusAwaiting: null,
   cardReplyId: null,
@@ -50,6 +51,7 @@ interface Options {
   onSend?: (text: string) => Promise<boolean>
   offersOpen?: boolean
   samplesOffered?: boolean
+  scenarioOffered?: boolean
   termChips?: { shorter: boolean; longer: boolean }
 }
 
@@ -62,6 +64,7 @@ function renderChat({
   onSend = vi.fn(() => Promise.resolve(true)),
   offersOpen = false,
   samplesOffered = false,
+  scenarioOffered = false,
   termChips = { shorter: false, longer: false },
 }: Options = {}) {
   const { unmount } = render(
@@ -75,6 +78,7 @@ function renderChat({
       onSend={onSend}
       offersOpen={offersOpen}
       samplesOffered={samplesOffered}
+      scenarioOffered={scenarioOffered}
       termChips={termChips}
     />,
   )
@@ -447,6 +451,19 @@ test('the samples chip shows with a loan and a term and no offer, and fills the 
 test('no samples chip once an offer is saved or awaits', () => {
   renderChat({ offersOpen: true, samplesOffered: false })
   expect(chipLabels()).toEqual(['הצעה מגוף מלווה', 'פריים ומדדים'])
+})
+
+test('the simulation chip shows between the offer and market chips, and fills the input', async () => {
+  const { onSend } = renderChat({ offersOpen: true, scenarioOffered: true })
+  expect(chipLabels()).toEqual(['הצעה מגוף מלווה', 'סימולציה', 'פריים ומדדים'])
+  await userEvent.click(screen.getByRole('button', { name: 'סימולציה' }))
+
+  expect(onSend).not.toHaveBeenCalled()
+  expect(screen.getByRole('textbox')).toHaveValue(
+    'אני רוצה סימולציה של ההצעות שקיבלתי למקרה שהמדד לצרכן וריבית הפריים ישתנו כמו בשנתיים' +
+      ' האחרונות. ',
+  )
+  expect(screen.getByRole('textbox')).toHaveFocus()
 })
 
 test('the terms chips show as offered and send their sentence at once', async () => {

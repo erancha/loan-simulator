@@ -8,6 +8,7 @@ import {
   MARKET_SAMPLE,
   OFFER_SAMPLE,
   SAMPLES_CHIP,
+  SCENARIO_SAMPLE,
   SEND_BUTTON,
   SHORTER_TERMS_CHIP,
   THINKING,
@@ -91,6 +92,8 @@ interface Props {
   /** The check has a loan, a term, no option and no awaiting offer, so its examples can be
    * asked for. */
   samplesOffered: boolean
+  /** The check holds an option, example or offer, so a scenario has something to price. */
+  scenarioOffered: boolean
   /** The terms cards the chips offer, shorter and longer than the recommendation's term. */
   termChips: { shorter: boolean; longer: boolean }
   /** The awaiting offer whose card the checks list asked to bring into view. */
@@ -151,6 +154,7 @@ export function Chat({
   opening,
   offersOpen,
   samplesOffered,
+  scenarioOffered,
   termChips,
   focusAwaiting,
   cardReplyId,
@@ -181,6 +185,7 @@ export function Chat({
     ...(termChips.shorter ? [SHORTER_TERMS_CHIP] : []),
     ...(termChips.longer ? [LONGER_TERMS_CHIP] : []),
     ...(offersOpen ? [OFFER_SAMPLE] : []),
+    ...(scenarioOffered ? [SCENARIO_SAMPLE] : []),
     MARKET_SAMPLE,
   ]
   const input = useRef<HTMLTextAreaElement>(null)

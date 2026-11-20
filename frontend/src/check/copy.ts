@@ -235,6 +235,16 @@ export const OFFER_SAMPLE = {
   sendsAtOnce: true,
 }
 
+/** The simulation sample, offered once a check holds an option, example or offer: every option
+ * priced on the CPI and prime moving as over the last two years. A tap fills the input, for the
+ * person to send or to change the years, since the model answers it. */
+export const SCENARIO_SAMPLE = {
+  label: 'סימולציה',
+  text:
+    'אני רוצה סימולציה של ההצעות שקיבלתי למקרה שהמדד לצרכן וריבית הפריים ישתנו כמו בשנתיים' +
+    ' האחרונות.',
+}
+
 export const NEXT_STEP_TITLE = 'מה הלאה'
 export const NEXT_STEP =
   `להביא הצעות אמיתיות מ${OFFER_SOURCES}, ולהזין אותן כאן בשיחה עם "${OFFER_SAMPLE.label}".`

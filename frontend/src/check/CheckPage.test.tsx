@@ -163,6 +163,16 @@ test('the examples chip shows only while the check holds no option and no awaiti
   expect(examplesChip()).not.toBeInTheDocument()
 })
 
+test('the simulation chip shows once the check holds an option, example or offer', () => {
+  stubApi()
+  renderPage()
+  const simulationChip = () => screen.queryByRole('button', { name: 'סימולציה' })
+  emit(userMessage(1, 'רכב, 45,000 ₪'), loanSet, withSeq(termSet, 4), turnStatus(5, 'idle'))
+  expect(simulationChip()).not.toBeInTheDocument()
+  emit(withSeq(optionPrime36, 6))
+  expect(simulationChip()).toBeInTheDocument()
+})
+
 test('replaying the reference events fills the panes', () => {
   stubApi()
   renderPage()

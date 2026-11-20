@@ -314,6 +314,7 @@ export function CheckPage({
             opening={fresh ? <OpeningCard onSubmit={submitOpening} /> : null}
             offersOpen={offersOpen}
             samplesOffered={offersOpen && !holdsOption(state)}
+            scenarioOffered={state.options.size > 0}
             termChips={termComparisons(state)}
             focusAwaiting={focusAwaiting}
           />
