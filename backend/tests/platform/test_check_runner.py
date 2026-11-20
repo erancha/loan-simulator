@@ -12,6 +12,7 @@ from itertools import pairwise
 from typing import Any
 
 import pytest
+import structlog.testing
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.outputs import ChatGenerationChunk
@@ -67,6 +68,7 @@ PERSON = User("1001", "dana@example.com", "Dana")
 OTHER_PERSON = User("2002", "omer@example.com", "Omer")
 TURN_LIMIT = 2
 WINDOW = timedelta(hours=24)
+RETRY_MODEL = "openai:stronger"
 REPLY = "שלום, נתחיל בהכנסה החודשית שלך"
 LOAN = LoanRequest("רכב", Decimal(55000))
 FINANCES = Finances(Decimal(8000), Decimal(6000))
@@ -133,6 +135,7 @@ def runner(
                 tool_deps=world.deps,
                 checkpointer=checkpointer,
             ),
+            RETRY_MODEL,
             frozenset({PERSON.email}),
         )
     )
@@ -293,6 +296,26 @@ async def test_the_retry_phrase_reruns_the_previous_message_on_the_whole_convers
     events = await stored(world, check.id)
     assert ("message.user", {"text": phrase}) in events
     assert events[-2][1]["text"] == "תשובה מלאה"
+
+
+async def test_a_retry_is_logged_as_a_warning_naming_its_check_and_model(world: World) -> None:
+    model = ScriptedChatModel(replies=[AIMessage(REPLY)])
+    strong = ScriptedChatModel(replies=[AIMessage("תשובה מלאה")])
+    checks = runner(world, model, retry_model=strong)
+    check = await checks.create(PERSON)
+    await checks.send(PERSON, check.id, "תשווה את ההצעות")
+    await checks.drain()
+
+    with structlog.testing.capture_logs() as logs:
+        await checks.send(PERSON, check.id, "נסה שוב, אח שלי")
+        await checks.drain()
+
+    assert {
+        "event": "retrying the previous message on the stronger model",
+        "check_id": check.id,
+        "model": RETRY_MODEL,
+        "log_level": "warning",
+    } in logs
 
 
 async def test_a_turn_after_a_retry_sees_the_whole_conversation(world: World) -> None:

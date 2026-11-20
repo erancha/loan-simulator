@@ -189,11 +189,12 @@ class _Draft:
 
 @dataclass(frozen=True)
 class RetryRoute:
-    """A graph on a stronger model over the same conversations, and the lowercase emails of the
-    people whose retry phrase reruns their previous message on it. The old reply stays; the
-    rerun answers below it."""
+    """A graph on a stronger model over the same conversations, the provider:model name of that
+    model, and the lowercase emails of the people whose retry phrase reruns their previous
+    message on it. The old reply stays; the rerun answers below it."""
 
     graph: AgentGraph
+    model: str
     emails: frozenset[str]
 
 
@@ -501,6 +502,12 @@ class CheckRunner:
         if not said:
             await self._run(user_id, check_id, text)
             return
+        # A warning, so the shipped log level shows it: a retry means the person rejected a reply.
+        log.warning(
+            "retrying the previous message on the stronger model",
+            check_id=check_id,
+            model=self._retry_route.model,
+        )
         await self._run_on(self._retry_route.graph, user_id, check_id, said[-1])
 
     async def _run_on(self, graph: AgentGraph, user_id: str, check_id: str, text: str) -> None:

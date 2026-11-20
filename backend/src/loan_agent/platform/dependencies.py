@@ -1,7 +1,8 @@
 """What the HTTP app runs on, and the request dependencies that hand it out.
 
-- Infrastructure: the storage, engine, model and checkpointer the lifespan opens; production
+- Infrastructure: the storage, engine, models and checkpointer the lifespan opens; production
   opens the real ones, tests hand in fakes
+- RetryModel: the stronger model of the retry phrase, with the name its log line gives
 - AppDeps: what a request touches
 - Deps, Runner, Shutdown: the request dependencies
 """
@@ -31,6 +32,14 @@ from loan_agent.ports.repositories import (
 
 
 @dataclass(frozen=True)
+class RetryModel:
+    """The model the retry phrase switches a turn to, with its provider:model name."""
+
+    name: str
+    chat: BaseChatModel
+
+
+@dataclass(frozen=True)
 class Infrastructure:
     checks: CheckRepository
     options: OptionRepository
@@ -41,8 +50,8 @@ class Infrastructure:
     engine_tools: list[BaseTool]
     """The engine's tools as the model calls them."""
     model: BaseChatModel
-    retry_model: BaseChatModel | None
-    """The model the retry phrase switches a turn to; None without LLM_RETRY_MODEL."""
+    retry_model: RetryModel | None
+    """None without LLM_RETRY_MODEL."""
     checkpointer: BaseCheckpointSaver[Any]
     ready: Callable[[], Awaitable[None]]
     """The readiness probe: returns while the database answers, raises otherwise."""

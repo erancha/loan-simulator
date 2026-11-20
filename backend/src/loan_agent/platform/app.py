@@ -55,7 +55,7 @@ from loan_agent.platform.check_runner import CheckRunner, RetryRoute
 from loan_agent.platform.checkpointer import libpq_dsn, open_checkpointer
 from loan_agent.platform.config import Settings, get_settings
 from loan_agent.platform.db import build_engine, session_factory
-from loan_agent.platform.dependencies import AppDeps, Deps, Infrastructure
+from loan_agent.platform.dependencies import AppDeps, Deps, Infrastructure, RetryModel
 from loan_agent.platform.logging import configure_logging
 
 log = structlog.get_logger(__name__)
@@ -98,7 +98,9 @@ async def production_infrastructure(settings: Settings) -> AsyncIterator[Infrast
     retry_model = (
         None
         if settings.llm_retry_model is None
-        else build_chat_model(settings.llm_retry_model, api_key)
+        else RetryModel(
+            settings.llm_retry_model, build_chat_model(settings.llm_retry_model, api_key)
+        )
     )
     database_url = settings.database_url.get_secret_value()
     async with AsyncExitStack() as stack:
@@ -207,8 +209,12 @@ def create_app(
                 if opened.retry_model is None
                 else RetryRoute(
                     build_agent_graph(
-                        opened.retry_model, opened.engine_tools, tool_deps, opened.checkpointer
+                        opened.retry_model.chat,
+                        opened.engine_tools,
+                        tool_deps,
+                        opened.checkpointer,
                     ),
+                    opened.retry_model.name,
                     settings.llm_retry_emails,
                 )
             )
