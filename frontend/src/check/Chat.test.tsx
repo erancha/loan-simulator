@@ -435,6 +435,18 @@ function chipLabels(): string[] {
   return [...document.querySelectorAll('.chat-samples button')].map((chip) => chip.textContent)
 }
 
+test('the chat box takes the height its text needs, borders included', async () => {
+  renderChat({ offersOpen: true, scenarioOffered: true })
+  const box = screen.getByRole('textbox')
+  // jsdom lays nothing out: the text needs 70px with the padding, and the borders take 2px.
+  Object.defineProperty(box, 'scrollHeight', { configurable: true, get: () => 70 })
+  Object.defineProperty(box, 'offsetHeight', { configurable: true, get: () => 54 })
+  Object.defineProperty(box, 'clientHeight', { configurable: true, get: () => 52 })
+  await userEvent.click(screen.getByRole('button', { name: 'סימולציה' }))
+
+  expect(box.style.height).toBe('72px')
+})
+
 test('the samples chip shows with a loan and a term and no offer, and fills the input', async () => {
   const { onSend } = renderChat({ offersOpen: true, samplesOffered: true })
   expect(chipLabels()).toEqual(['דוגמאות', 'הצעה מגוף מלווה', 'פריים ומדדים'])

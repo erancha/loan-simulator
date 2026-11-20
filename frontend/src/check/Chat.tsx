@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { FormEvent, KeyboardEvent, ReactNode } from 'react'
 import type { AwaitingOffer, Finances, Reading } from '../api/types.ts'
 import {
@@ -189,6 +189,15 @@ export function Chat({
     MARKET_SAMPLE,
   ]
   const input = useRef<HTMLTextAreaElement>(null)
+  // The chat box grows with its text, from its two rows up to the stylesheet's cap of three. Its
+  // height resets first, so a shorter text shrinks it back; the borders are its offset height
+  // beyond its client height. Before paint, so the box never shows at the wrong size.
+  useLayoutEffect(() => {
+    const box = input.current
+    if (box === null) return
+    box.style.height = 'auto'
+    box.style.height = `${box.scrollHeight + box.offsetHeight - box.clientHeight}px`
+  }, [draft])
   const log = useRef<HTMLDivElement>(null)
   const following = useRef(true)
   // The log's scrollTop as last set by the code or seen in a scroll event. A scroll event arrives

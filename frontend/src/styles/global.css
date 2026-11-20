@@ -870,17 +870,24 @@ fieldset.field.changed {
   border-radius: 8px;
 }
 
+/* Two rows when empty, growing with its text up to three, so a sample request shows whole on a
+   phone; the code sets the height, the cap is here. The text is smaller than the conversation's
+   and its rows 2px closer than the font's own spacing (1.47em in Heebo). */
 .chat-input textarea {
+  --pad: 8px;
+  --edge: 1px;
+  box-sizing: border-box;
   flex: 1;
   min-width: 0;
-  padding: 8px;
-  border: 1px solid var(--mute);
+  max-height: calc(3lh + 2 * var(--pad) + 2 * var(--edge));
+  padding: var(--pad);
+  border: var(--edge) solid var(--mute);
   border-radius: 8px;
   background: var(--panel);
   color: var(--ink);
   font: inherit;
-  /* The longest sample request fits the two rows on a phone at this size. */
-  font-size: calc(1em - 2px);
+  font-size: calc(1em - 3px);
+  line-height: calc(1.47em - 2px);
   resize: vertical;
 }
 
