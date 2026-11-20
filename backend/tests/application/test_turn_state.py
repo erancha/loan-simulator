@@ -32,10 +32,18 @@ from loan_agent.domain.models import (
     Finances,
     LoanRequest,
     Option,
+    OptionFigures,
     Recommendation,
 )
+from loan_agent.ports.events import OPTION_SAVED, SCENARIO_SHOWN
 
 PERSON = "1001"
+SCENARIO_DEFAULTS = {
+    "cpi_per_year": "2.0",
+    "prime_per_year": "0",
+    "cpi_like_last_years": None,
+    "prime_like_last_years": None,
+}
 CHECK = "check-1"
 EARLIER_CHECK = "check-0"
 
@@ -91,6 +99,8 @@ async def test_turn_state_of_a_new_check_has_nothing_yet(deps: ToolDeps) -> None
         "offers: none",
         "awaiting_offers: none",
         "recommendation: none",
+        "scenarios_shown: none",
+        "certainty_price: none",
     ]
 
 
@@ -133,8 +143,8 @@ async def test_turn_state_lists_the_saved_offers_and_the_awaiting_ones(deps: Too
 
     assert (
         "offers: option-1: source offer, lender לאומי, rate prime + 6, not linked, "
-        "term_months 60, first_payment 1888, total_paid 90623, total_paid_in_past_periods "
-        "90550-96665, price (interest_cost 45623 on "
+        "term_months 60, first_payment 1888, worst_past_payment 2039 (2022-04 to 2026-03), "
+        "total_paid 90623, total_paid_in_past_periods 90550-96665, price (interest_cost 45623 on "
         "45000; rate_today 6.25%, below the average bank rate on consumer loans of 7.9% as of "
         "2026-08)"
     ) in lines
@@ -268,3 +278,112 @@ async def test_turn_state_says_a_recommendation_of_one_option_alone_evaluates_it
     await deps.options.add(replace(offer, id="option-2", lender="מקס"))
     lines = (await turn_state(PERSON, CHECK, deps)).splitlines()
     assert "recommendation: unchecked" in lines
+
+
+def scenario_row(option_id: str, lender: str | None, total: str) -> dict[str, object]:
+    return {"option_id": option_id, "lender": lender, "scenario": {"total_paid": total}}
+
+
+async def test_turn_state_names_each_scenario_shown_since_the_latest_option_with_its_cheapest(
+    deps: ToolDeps,
+) -> None:
+    await deps.sink.emit(
+        CHECK,
+        SCENARIO_SHOWN,
+        {
+            "scenario": SCENARIO_DEFAULTS | {"cpi_per_year": "7"},
+            "named": ["cpi_per_year"],
+            "rows": [scenario_row("option-0", "ישן", "1")],
+        },
+    )
+    await deps.sink.emit(CHECK, OPTION_SAVED, {})
+    await deps.sink.emit(
+        CHECK,
+        SCENARIO_SHOWN,
+        {
+            "scenario": SCENARIO_DEFAULTS | {"cpi_per_year": "5"},
+            "named": ["cpi_per_year"],
+            "rows": [
+                scenario_row("option-1", "פריסבי", "113915.90"),
+                scenario_row("option-2", "הפועלים", "122348.85"),
+                scenario_row("option-3", None, "121658.37"),
+            ],
+        },
+    )
+    await deps.sink.emit(
+        CHECK,
+        SCENARIO_SHOWN,
+        {
+            "scenario": SCENARIO_DEFAULTS | {"cpi_per_year": "2.38", "cpi_like_last_years": 3},
+            "named": ["cpi_like_last_years"],
+            "rows": [
+                scenario_row("option-1", "פריסבי", "113915.90"),
+                scenario_row("option-2", "הפועלים", "114519.99"),
+            ],
+        },
+    )
+
+    lines = (await turn_state(PERSON, CHECK, deps)).splitlines()
+
+    assert (
+        "scenarios_shown: cpi_per_year 5, prime_per_year 0 (default): cheapest option-1 "
+        "(פריסבי), ahead of option-3 (example) by a ברור gap; cpi_per_year 2.38 (as over the "
+        "last 3 years), prime_per_year 0 (default): cheapest option-1 (פריסבי), ahead of "
+        "option-2 (הפועלים) by a במקצת gap"
+    ) in lines
+
+
+async def test_turn_state_says_when_every_past_period_costs_more_than_the_expected_total(
+    deps: ToolDeps,
+) -> None:
+    figures = replace(PRIME_SIMULATION.figures, total_paid=Decimal(90000))
+    await deps.options.add(
+        Option(
+            "option-1", CHECK, {"tracks": [PRIME_TRACK]}, "offer", "לאומי", None, None, figures, NOW
+        )
+    )
+
+    (offers,) = [
+        line
+        for line in (await turn_state(PERSON, CHECK, deps)).splitlines()
+        if line.startswith("offers:")
+    ]
+
+    assert "total_paid_in_past_periods 90550-96665, every one above total_paid" in offers
+
+
+def steady(figures: OptionFigures, total: str) -> OptionFigures:
+    """The figures of a payment that never moves, with the given total."""
+    return replace(
+        figures,
+        total_paid=Decimal(total),
+        worst_peak_payment=None,
+        worst_start=None,
+        worst_end=None,
+        total_paid_low=None,
+        total_paid_high=None,
+    )
+
+
+async def test_turn_state_prices_a_steady_payment_against_each_moving_option_of_its_term(
+    deps: ToolDeps,
+) -> None:
+    moving = PRIME_SIMULATION.figures
+    for option_id, lender, track, figures in (
+        ("option-1", "הפועלים", PRIME_TRACK, moving),
+        ("option-2", "לאומי", PRIME_TRACK, steady(moving, "95000.40")),
+        ("option-3", "מקס", PRIME_TRACK, steady(moving, "96665.48")),
+        ("option-4", "כאל", {**PRIME_TRACK, "term_months": 36}, steady(moving, "99000")),
+    ):
+        await deps.options.add(
+            Option(option_id, CHECK, {"tracks": [track]}, "offer", lender, None, None, figures, NOW)
+        )
+
+    lines = (await turn_state(PERSON, CHECK, deps)).splitlines()
+
+    assert (
+        "certainty_price: option-2 (לאומי) total_paid is 4377 above the total_paid of option-1 "
+        "(הפועלים) and 1665 below its highest total in past periods; option-3 (מקס) total_paid "
+        "is 6042 above the total_paid of option-1 (הפועלים) and equal to its highest total in "
+        "past periods"
+    ) in lines

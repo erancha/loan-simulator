@@ -481,6 +481,8 @@ async def test_every_tool_the_system_prompt_names_is_bound(world: World) -> None
         "rate_today",
         "total_paid_in_past_periods",
         "total_paid",
+        "worst_past_payment",
+        "peak_payment",
     }
     named_tools = (
         (identifiers - set(get_args(OptionSource)) - set(get_args(QuestionField)) - tool_fields)

@@ -1556,7 +1556,10 @@ async def test_show_scenario_shows_every_option_on_the_scenario_beside_today(
     assert first["today"] == {"max_payment": "2100.00", "total_paid": "113000.00"}
     assert second["scenario"]["total_paid"] == "118000.00"
     assert "on the person's screen" in result
-    assert "cheapest on the scenario: option-2 (Bank)" in result
+    assert (
+        "cheapest on the scenario: option-2 (Bank), ahead of option-1 (Fund) by a במקצת gap. "
+        "Its track: prime + 1, not linked."
+    ) in result
     assert "120000" not in result and "113000" not in result
     assert await scenario_offer_next(world.sink, CHECK) == "prime"
 

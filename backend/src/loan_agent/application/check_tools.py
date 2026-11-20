@@ -15,6 +15,8 @@ recommendation, with the guardrail that keeps a recommendation honest.
   the scenario the person named beside its total in today's calculation, as one table
 - scenario_offer_next: the movement no scenario table since the latest saved option named, which
   the runner offers as a form after a turn that showed a table
+- scenario_outcome: which option a scenario table found cheapest in total and how clearly, with
+  no figure, which the scenario's result and the turn state give the model
 - Reading an offer described in words: read_offer prices its readings with the engine and, by
   offer_reading's decision, saves the one its payment fits, keeps it awaiting the lender with
   the readings its card shows, or reports its type unrecognized; an offer quoted for less than
@@ -1010,6 +1012,7 @@ class CheckTools:
         except EngineError as error:
             raise ToolError(f"{error}; correct the scenario and call show_scenario again") from None
         chosen = priced[0][1]
+        rows = [_scenario_row(option, on, today) for option, on, today in priced]
         await self._deps.sink.emit(
             self._check_id,
             SCENARIO_SHOWN,
@@ -1021,7 +1024,7 @@ class CheckTools:
                     "prime_like_last_years": chosen.prime_like_last_years,
                 },
                 "named": sorted(named),
-                "rows": [_scenario_row(option, on, today) for option, on, today in priced],
+                "rows": rows,
             },
         )
         # The figures stay off the model's result: the table shows them, and a model that has
@@ -1030,9 +1033,11 @@ class CheckTools:
         return (
             f"The table of every option on the scenario of the CPI rising {chosen.cpi_per_year}% "
             f"a year and prime {chosen.prime_per_year} points a year is on the person's screen "
-            f"under a title naming the scenario. The cheapest on the scenario: {cheapest.id} "
-            f"({_named(cheapest)}). Reply with one sentence only: that offer is preferred in this "
-            "scenario, and why in a few words. The screen offers the next simulation itself."
+            f"under a title naming the scenario. The cheapest on the scenario: "
+            f"{scenario_outcome(rows)}. Its track: {track_text(cheapest)}. Reply with one "
+            "sentence only: that offer is preferred in this scenario, slightly when the gap is "
+            "במקצת, and why in a few words, from its track. The screen offers the next "
+            "simulation itself."
         )
 
     async def show_chart(self, series: str, months: int) -> str:
@@ -1779,14 +1784,46 @@ def _comparison(option: Option, other: Option) -> str:
 
 
 def _gap(mine: Decimal, theirs: Decimal, share: Decimal, small: str) -> str:
-    """The gap with its direction and class: small below the share of the larger figure. The
-    words are Hebrew, since the model quotes them in the person's reply."""
+    """The gap with its direction and class. The words are Hebrew, since the model quotes them
+    in the person's reply."""
     gap = mine - theirs
     if gap == 0:
         return f"שווה ({small})"
     direction = "נמוך" if gap < 0 else "גבוה"
-    weight = small if abs(gap) < share * max(mine, theirs) else "ברור"
-    return f"{abs(gap).quantize(Decimal(1))} {direction} ({weight})"
+    return f"{abs(gap).quantize(Decimal(1))} {direction} ({_weight(mine, theirs, share, small)})"
+
+
+def _weight(mine: Decimal, theirs: Decimal, share: Decimal, small: str) -> str:
+    """Small below the share of the larger figure, clear otherwise."""
+    return small if abs(mine - theirs) < share * max(mine, theirs) else "ברור"
+
+
+def scenario_outcome(rows: Sequence[Mapping[str, object]]) -> str:
+    """The option a scenario table's rows find cheapest in total, the earliest on a tie, and the
+    class of its lead over the next one, as SLIGHT_TOTAL_SHARE classes a gap between saved
+    options."""
+    ranked = sorted(rows, key=_scenario_total)
+    cheapest = ranked[0]
+    outcome = f"{cheapest['option_id']} ({_row_name(cheapest)})"
+    if len(ranked) == 1:
+        return outcome
+    following = ranked[1]
+    weight = _weight(
+        _scenario_total(cheapest), _scenario_total(following), SLIGHT_TOTAL_SHARE, "במקצת"
+    )
+    return (
+        f"{outcome}, ahead of {following['option_id']} ({_row_name(following)}) by a {weight} gap"
+    )
+
+
+def _scenario_total(row: Mapping[str, object]) -> Decimal:
+    return Decimal(cast(Mapping[str, str], row["scenario"])["total_paid"])
+
+
+def _row_name(row: Mapping[str, object]) -> str:
+    """The lender of a real offer's row; an example's row has none."""
+    lender = row["lender"]
+    return "example" if lender is None else str(lender)
 
 
 def _option_data(option: Option) -> dict[str, object]:
