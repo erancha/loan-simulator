@@ -26,7 +26,7 @@ import logging
 import re
 from collections.abc import Sequence
 from importlib.resources import files
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Any, Final, Literal, Self
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
@@ -52,6 +52,9 @@ from loan_agent.application.turn_state import turn_state
 from loan_agent.domain.models import ReadingKind, TypeWord
 
 log = logging.getLogger(__name__)
+
+# The graph node that calls the chat model; each of its updates in a turn is one model call.
+MODEL_NODE: Final = "model"
 
 SYSTEM_PROMPT = (files(__package__) / "prompts" / "system_he.md").read_text(encoding="utf-8")
 
@@ -434,7 +437,7 @@ async def copy_conversation(graph: AgentGraph, source_id: str, target_id: str) -
     source = await graph.aget_state({"configurable": {_CHECK_ID: source_id}})
     if source.values:
         target: RunnableConfig = {"configurable": {_CHECK_ID: target_id}}
-        await graph.aupdate_state(target, source.values, as_node="model")
+        await graph.aupdate_state(target, source.values, as_node=MODEL_NODE)
 
 
 async def record_exchange(
@@ -442,7 +445,7 @@ async def record_exchange(
 ) -> None:
     """Appends messages answered outside the model to the check's conversation, as if a turn had
     said them, so the model's next turn reads them."""
-    await graph.aupdate_state(config, {"messages": messages}, as_node="model")
+    await graph.aupdate_state(config, {"messages": messages}, as_node=MODEL_NODE)
 
 
 async def last_message(graph: AgentGraph, check_id: str) -> BaseMessage | None:
@@ -834,7 +837,7 @@ def _after_tools(state: MessagesState) -> Literal["model", "__end__"]:
         result.status != "error" and result.content == READING_ON_SCREEN for result in results
     ):
         return "__end__"
-    return "model"
+    return MODEL_NODE
 
 
 def _tool_error_text(error: ToolError | ToolException) -> str:
@@ -927,11 +930,11 @@ def build_agent_graph(
         return {"messages": [reply]}
 
     builder = StateGraph(MessagesState)
-    builder.add_node("model", call_model)
+    builder.add_node(MODEL_NODE, call_model)
     builder.add_node("tools", ToolNode(tools, handle_tool_errors=_tool_error_text))
     builder.add_node("refuse_nul", _refuse_nul)
-    builder.add_edge(START, "model")
-    builder.add_conditional_edges("model", _after_model, ["tools", "refuse_nul", END])
-    builder.add_edge("refuse_nul", "model")
-    builder.add_conditional_edges("tools", _after_tools, ["model", END])
+    builder.add_edge(START, MODEL_NODE)
+    builder.add_conditional_edges(MODEL_NODE, _after_model, ["tools", "refuse_nul", END])
+    builder.add_edge("refuse_nul", MODEL_NODE)
+    builder.add_conditional_edges("tools", _after_tools, [MODEL_NODE, END])
     return builder.compile(checkpointer=checkpointer)

@@ -71,6 +71,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import MessagesState
 
 from loan_agent.application.agent_graph import (
+    MODEL_NODE,
     AgentGraph,
     check_config,
     copy_conversation,
@@ -158,11 +159,13 @@ SCENARIO_OFFERED = (
     "The screen offered the person a form to simulate {movement} rising each year, with a skip; "
     "their answer arrives as the next message, starting 'סימולציה:'."
 )
-# The model reads this as the result of each unanswered tool call. The tool node runs one model
-# message's calls concurrently, so another call from that message may have saved before one failed.
+# A turn this long or longer is logged with its time and model calls.
+SLOW_TURN = timedelta(seconds=15)
 RETRY_PHRASE = "נסה שוב אח שלי"
 """Compared with commas, periods, exclamation and question marks dropped and spaces collapsed."""
 
+# The model reads this as the result of each unanswered tool call. The tool node runs one model
+# message's calls concurrently, so another call from that message may have saved before one failed.
 TOOL_CALL_OUTCOME_UNKNOWN = (
     "The outcome of this tool call is unknown: the previous turn ended with an error before its "
     "results were recorded, and the call may have completed. Before repeating a call that saves "
@@ -512,6 +515,8 @@ class CheckRunner:
 
     async def _run_on(self, graph: AgentGraph, user_id: str, check_id: str, text: str) -> None:
         config = check_config(user_id, check_id)
+        started = self._clock()
+        model_calls = 0
         try:
             unfinished = await self._close_unfinished_tool_calls(config)
             turn_input = MessagesState(messages=[*unfinished, HumanMessage(text)])
@@ -524,6 +529,7 @@ class CheckRunner:
                     message, _metadata = part["data"]
                     await self._publish_text_so_far(check_id, message, draft)
                 elif part["type"] == "updates":
+                    model_calls += MODEL_NODE in part["data"]
                     await self._store_replies(check_id, part["data"])
                 else:
                     raise AssertionError(f"unrequested stream part {part['type']!r}")
@@ -533,7 +539,21 @@ class CheckRunner:
             log.exception("turn failed", check_id=check_id)
             await self._report_failure(check_id)
             return
+        finally:
+            self._log_if_slow(check_id, started, model_calls)
         await self._sink.emit(check_id, TURN_STATUS, IDLE)
+
+    def _log_if_slow(self, check_id: str, started: datetime, model_calls: int) -> None:
+        """A warning, so the shipped log level shows it: a slow turn keeps the person waiting,
+        and its model calls tell a long tool chain from one slow call."""
+        elapsed = self._clock() - started
+        if elapsed >= SLOW_TURN:
+            log.warning(
+                "slow turn",
+                check_id=check_id,
+                seconds=round(elapsed.total_seconds()),
+                model_calls=model_calls,
+            )
 
     async def _offer_scenario_when_due(self, check_id: str, config: RunnableConfig) -> None:
         """After a turn that showed a scenario table, offers the form of the movement no table on

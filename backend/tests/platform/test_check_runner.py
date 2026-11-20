@@ -1475,6 +1475,39 @@ async def test_a_confirmed_term_with_an_awaiting_offer_runs_the_model(world: Wor
     assert "question.asked" not in [type for type, _ in await stored(world, check.id)]
 
 
+async def test_a_slow_turn_is_logged_with_its_time_and_model_calls(world: World) -> None:
+    async def slow() -> str:
+        world.clock.value += timedelta(seconds=20)
+        return "loan_amount: 80000"
+
+    model = ScriptedChatModel(replies=[calls_size_loan(), AIMessage(REPLY)])
+    checks = runner(world, model, [engine_tool(slow)])
+    check = await checks.create(PERSON)
+
+    with structlog.testing.capture_logs() as logs:
+        await checks.send(PERSON, check.id, "כמה ללוות?")
+        await checks.drain()
+
+    assert {
+        "event": "slow turn",
+        "check_id": check.id,
+        "seconds": 20,
+        "model_calls": 2,
+        "log_level": "warning",
+    } in logs
+
+
+async def test_a_quick_turn_logs_nothing(world: World) -> None:
+    checks = runner(world, ScriptedChatModel(replies=[AIMessage(REPLY)]))
+    check = await checks.create(PERSON)
+
+    with structlog.testing.capture_logs() as logs:
+        await checks.send(PERSON, check.id, "שלום")
+        await checks.drain()
+
+    assert [entry for entry in logs if entry["event"] == "slow turn"] == []
+
+
 OFFER_SKIP = "דילוג"
 
 
