@@ -1131,9 +1131,10 @@ button.primary:disabled,
 }
 
 /* A scenario's table may be wider than a bubble of text: it grows to its content up to the chat
-   column's width, and scrolls sideways on a narrow screen rather than squeezing its five
-   columns. */
+   column's width, padding and border included, and scrolls sideways on a narrow screen rather
+   than squeezing its five columns. */
 .scenario {
+  box-sizing: border-box;
   width: fit-content;
   max-width: 100%;
   overflow-x: auto;
