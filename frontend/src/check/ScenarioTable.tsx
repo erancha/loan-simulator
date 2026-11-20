@@ -26,13 +26,19 @@ function ScenarioCell({ today, scenario }: { today: string; scenario: string }) 
   )
 }
 
+interface Props {
+  scenario: ScenarioShown
+  onShowOption: (optionId: string) => void
+}
+
 /**
  * Every saved option priced on a future the person named, as a table in the conversation: its
  * name as its card shows it, then its highest payment and its total, each today and on the
  * scenario. The title names the scenario, so its figures are never read as the options' own. A
- * narrow screen names an option by its lender alone, the full track on its title.
+ * narrow screen names an option by its lender alone, the full track on its title. A real offer's
+ * lender chip opens that offer's card.
  */
-export function ScenarioTable({ scenario }: { scenario: ScenarioShown }) {
+export function ScenarioTable({ scenario, onShowOption }: Props) {
   const titleId = useId()
   return (
     <div className="bubble bubble-assistant scenario">
@@ -67,7 +73,11 @@ export function ScenarioTable({ scenario }: { scenario: ScenarioShown }) {
                 <th scope="row" className="scenario-name" title={`${track}\n${lender}`}>
                   <span className="scenario-track">{withValues(track)}</span>
                   <span className="option-lender totals-lender scenario-lender">
-                    <OptionLender lender={lender} isExample={row.source === 'example'} />
+                    <OptionLender
+                      lender={lender}
+                      isExample={row.source === 'example'}
+                      onOpen={() => onShowOption(row.option_id)}
+                    />
                   </span>
                 </th>
                 <td>{formatShekels(row.today.max_payment)}</td>

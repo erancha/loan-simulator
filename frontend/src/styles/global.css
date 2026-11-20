@@ -1046,6 +1046,17 @@ button.primary:disabled,
   font-weight: 600;
 }
 
+/* A lender's chip that opens its offer's card: a button that keeps the chip's look. */
+.chip-link {
+  background: none;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.chip-link:hover {
+  background: var(--panel);
+}
+
 .option-label + .chip-example {
   margin-inline-start: 8px;
 }

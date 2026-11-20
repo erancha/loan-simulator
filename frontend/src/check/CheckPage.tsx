@@ -35,7 +35,7 @@ import { OpeningCard } from './OpeningCard.tsx'
 import { termConfirmation, typedTerm } from './QuestionBubble.tsx'
 import { isRefusal } from './rejection.ts'
 import type { Answer } from './QuestionBubble.tsx'
-import { RecommendationCard, revealFigures } from './RecommendationCard.tsx'
+import { RecommendationCard, revealFigures, revealOption } from './RecommendationCard.tsx'
 import {
   holdsOption,
   isArchived,
@@ -310,6 +310,10 @@ export function CheckPage({
             onShowCard={() => {
               onShowCard()
               revealFigures()
+            }}
+            onShowOption={(optionId) => {
+              onShowCard()
+              revealOption(optionId)
             }}
             opening={fresh ? <OpeningCard onSubmit={submitOpening} /> : null}
             offersOpen={offersOpen}

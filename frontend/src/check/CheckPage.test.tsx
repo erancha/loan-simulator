@@ -23,6 +23,7 @@ import {
   turnStatus,
   userMessage,
   withSeq,
+  scenarioShown,
 } from '../test/fixtures.ts'
 import { restoreScrollIntoView, stubScrollIntoView } from '../test/scrollIntoView.ts'
 import type { AwaitingFocus } from './Chat.tsx'
@@ -216,6 +217,34 @@ test("the reply that presents the recommendation leads to the card's table", asy
   expect(fold).toHaveClass('fold-flash')
   expect(scrolled.mock.contexts).toContain(fold)
   restoreScrollIntoView()
+})
+
+test("a scenario table's lender chip shows the card and brings its offer into view", async () => {
+  const scrolled = stubScrollIntoView()
+  const { onShowCard } = renderPage()
+  emit(
+    userMessage(1, 'ומה אם המדד יעלה?'),
+    withSeq(optionPrime36, 2),
+    withSeq(optionFixed36, 3),
+    withSeq(recommendationPrime, 4),
+    scenarioShown(5),
+    turnStatus(6, 'idle'),
+  )
+  await userEvent.setup().click(screen.getByRole('button', { name: /פריסבי/ }))
+
+  expect(onShowCard).toHaveBeenCalledTimes(1)
+  const card = document.getElementById('option-prime-36')
+  await waitFor(() => expect(card).toHaveClass('card-focus'))
+  expect(scrolled.mock.contexts).toContain(card)
+  restoreScrollIntoView()
+})
+
+test('a lender chip of an offer the card does not show still shows the card', async () => {
+  const { onShowCard } = renderPage()
+  emit(userMessage(1, 'ומה אם המדד יעלה?'), scenarioShown(2), turnStatus(3, 'idle'))
+  await userEvent.setup().click(screen.getByRole('button', { name: /פריסבי/ }))
+
+  expect(onShowCard).toHaveBeenCalledTimes(1)
 })
 
 test('sending posts the text to the check and clears the input', async () => {

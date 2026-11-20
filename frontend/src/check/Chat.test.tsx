@@ -40,6 +40,7 @@ const noQuestion = {
   focusAwaiting: null,
   cardReplyId: null,
   onShowCard: vi.fn(),
+  onShowOption: vi.fn(),
 }
 
 interface Options {
@@ -52,6 +53,7 @@ interface Options {
   offersOpen?: boolean
   samplesOffered?: boolean
   scenarioOffered?: boolean
+  onShowOption?: (optionId: string) => void
   termChips?: { shorter: boolean; longer: boolean }
 }
 
@@ -65,6 +67,7 @@ function renderChat({
   offersOpen = false,
   samplesOffered = false,
   scenarioOffered = false,
+  onShowOption = vi.fn(),
   termChips = { shorter: false, longer: false },
 }: Options = {}) {
   const { unmount } = render(
@@ -79,6 +82,7 @@ function renderChat({
       offersOpen={offersOpen}
       samplesOffered={samplesOffered}
       scenarioOffered={scenarioOffered}
+      onShowOption={onShowOption}
       termChips={termChips}
     />,
   )
@@ -434,6 +438,24 @@ test('a cloned check ends with the handoff note, whose button opens the copy', a
 function chipLabels(): string[] {
   return [...document.querySelectorAll('.chat-samples button')].map((chip) => chip.textContent)
 }
+
+test("a scenario table's lender chip asks for its offer's card", async () => {
+  const onShowOption = vi.fn()
+  renderChat({ messages: [{ id: 's-2', role: 'scenario', scenario: scenarioCpi5 }], onShowOption })
+  await userEvent.click(screen.getByRole('button', { name: /פריסבי/ }))
+
+  expect(onShowOption).toHaveBeenCalledExactlyOnceWith('prime-36')
+})
+
+test("an example's lender in a scenario table is plain text, with nothing to open", () => {
+  const [offer] = scenarioCpi5.rows
+  const example = { ...offer, source: 'example' as const, lender: null, offer_date: null }
+  renderChat({
+    messages: [{ id: 's-2', role: 'scenario', scenario: { ...scenarioCpi5, rows: [example] } }],
+  })
+
+  expect(document.querySelector('.scenario button')).toBeNull()
+})
 
 test('the chat box takes the height its text needs, borders included', async () => {
   renderChat({ offersOpen: true, scenarioOffered: true })

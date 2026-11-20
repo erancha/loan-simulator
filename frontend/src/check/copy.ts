@@ -521,6 +521,8 @@ export function questionHint(question: Question): string | null {
 /** Under the reply that presents a recommendation: the way to the card's table of every option's
  * figures, named by its title. */
 export const TO_CARD = `השוואת המספרים בכרטיס: ${FOLD_TITLE}`
+/** What a tap on a lender's chip in a scenario's table does, as the chip's tooltip. */
+export const TO_OFFER = 'להצעה בכרטיס ההמלצה'
 
 export const OFFER_FORM_TITLE = 'פרטי ההצעה'
 export const OFFER_FORM_INTRO =

@@ -13,7 +13,8 @@ import {
   TOTALS_HEADINGS,
 } from './copy.ts'
 import { withValues } from './emphasis.tsx'
-import { ExampleChip, OptionCardView, OptionLender } from './OptionCardView.tsx'
+import { highlight } from './highlight.ts'
+import { ExampleChip, optionCardId, OptionCardView, OptionLender } from './OptionCardView.tsx'
 
 function OthersGroup({ title, options }: NonNullable<CardModel['others']>) {
   const titleId = useId()
@@ -58,6 +59,21 @@ export function revealFigures() {
   }, 0)
 }
 
+/**
+ * Scrolls an option's card into view and highlights it for a moment. Runs after the pane that
+ * holds it is shown, as revealFigures does. The card shows the options of its latest
+ * recommendation, so a scenario's table may name an offer it does not show: the pane is then
+ * left as it opened.
+ */
+export function revealOption(optionId: string) {
+  window.setTimeout(() => {
+    const card = document.getElementById(optionCardId(optionId))
+    if (card === null) return
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    highlight(card)
+  }, 0)
+}
+
 /** The figures behind the recommendation; open when it first renders, closable by the person. */
 function Fold({ fold, options }: FoldProps) {
   return (
@@ -78,7 +94,7 @@ function Fold({ fold, options }: FoldProps) {
                 {option.isExample && <ExampleChip />}
                 {withValues(option.track)}
                 <span className="option-lender totals-lender">
-                  <OptionLender lender={option.lender} isExample={option.isExample} />
+                  <OptionLender lender={option.lender} isExample={option.isExample} onOpen={null} />
                 </span>
               </th>
               <td>{withValues(option.totalToday)}</td>

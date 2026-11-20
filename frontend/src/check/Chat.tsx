@@ -30,6 +30,7 @@ import type {
 import { formatTimestamp } from '../money.ts'
 import { withValues } from './emphasis.tsx'
 import { MarketChart } from './MarketChart.tsx'
+import { highlight } from './highlight.ts'
 import { ScenarioTable } from './ScenarioTable.tsx'
 import { IdentifiedBubble, UnrecognizedBubble } from './OfferReplies.tsx'
 import { QuestionBubble } from './QuestionBubble.tsx'
@@ -38,9 +39,6 @@ import { ReadingsCard } from './ReadingsCard.tsx'
 
 /** How far from the end of the log (px) a reader still counts as following the conversation. */
 const FOLLOW_DISTANCE = 80
-
-/** The class that highlights a card for a few seconds each time it is added (global.css). */
-const CARD_FOCUS = 'card-focus'
 
 /** A request of the checks list to bring an awaiting offer's card into view. `request` counts the
  * list's taps, so a second tap on the same link is a new request. */
@@ -84,6 +82,8 @@ interface Props {
   /** Brings the card's table of figures into view, first showing the card's pane on a screen
    * that shows one pane at a time. */
   onShowCard: () => void
+  /** Shows the recommendation card with the card of the option a lender's chip names. */
+  onShowOption: (optionId: string) => void
   /** The card a new check opens with; while it is given, the chat shows it alone, with no input
    * and no chips. */
   opening: ReactNode | null
@@ -159,6 +159,7 @@ export function Chat({
   focusAwaiting,
   cardReplyId,
   onShowCard,
+  onShowOption,
 }: Props) {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
@@ -252,10 +253,7 @@ export function Chat({
     held.current = true
     following.current = false
     card.scrollIntoView({ block: 'center' })
-    // Removing the class and reading the layout restarts the highlight for a second request.
-    card.classList.remove(CARD_FOCUS)
-    void card.offsetWidth
-    card.classList.add(CARD_FOCUS)
+    highlight(card)
     if (log.current !== null) lastTop.current = log.current.scrollTop
   }, [focusAwaiting, entries.length])
 
@@ -332,7 +330,7 @@ export function Chat({
               ) : entry.role === 'chart' ? (
                 <MarketChart chart={entry.chart} />
               ) : entry.role === 'scenario' ? (
-                <ScenarioTable scenario={entry.scenario} />
+                <ScenarioTable scenario={entry.scenario} onShowOption={onShowOption} />
               ) : entry.role === 'archived' ? (
                 <ArchiveNote archive={entry.archive} />
               ) : entry.role === 'cloned' ? (
