@@ -391,7 +391,7 @@ async def test_ask_offer_with_nothing_missing_names_save_offer(world: World) -> 
     await world.tools.set_loan("רכב", "60000")
     track = {"rate_kind": "prime", "rate": "1", "cpi_linked": False}
 
-    with pytest.raises(ToolError, match="save_offer"):
+    with pytest.raises(ToolError, match="save_offer and max_term_months=84"):
         await world.tools.ask_offer("קרן הפנסיה", [track], 84)
 
     assert world.events_of(QUESTION_ASKED) == []

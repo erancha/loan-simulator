@@ -327,7 +327,9 @@ class CheckTools:
         ):
             raise ToolError(
                 "the offer already names its lender, every track's rate and its term, so the "
-                "form has nothing to ask; save it with save_offer"
+                "form has nothing to ask; save it with save_offer and "
+                f"max_term_months={max_term_months}, since the offer leaves the term open up to "
+                "that"
             )
         question = {
             "kind": "offer",
