@@ -2,9 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   confirmReading,
   saveFinances,
-  sendOfferSkip,
   sendOpening,
   sendTermConfirmation,
+  sendUnanswered,
 } from './checks.ts'
 import { ApiException, SIGNED_OUT_EVENT, apiDelete, apiGet, apiPost, apiPut } from './client.ts'
 
@@ -160,7 +160,7 @@ describe('the offers-first calls', () => {
       'POST',
       { text: 'אישור' },
     )
-    await reaches(() => sendOfferSkip('c1', 'דילוג'), '/api/checks/c1/offer-skip', 'POST', {
+    await reaches(() => sendUnanswered('c1', 'דילוג'), '/api/checks/c1/unanswered', 'POST', {
       text: 'דילוג',
     })
     await reaches(

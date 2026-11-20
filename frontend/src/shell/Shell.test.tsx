@@ -302,11 +302,40 @@ test('the link under a recommendation names the table it leads to', () => {
   expect(TO_CARD).toContain(FOLD_TITLE)
 })
 
+/** Gives the open check a saved option, which enables the recommendation tab. */
+async function holdAnOption() {
+  await waitFor(() => expect(openedStreams()).not.toEqual([]))
+  const event = withSeq(optionPrime36, 1)
+  act(() => {
+    FakeEventSource.last().emit(event.type, JSON.stringify(event.data), String(event.seq))
+  })
+}
+
+test('the recommendation tab is disabled until the check holds an option', async () => {
+  stubApi([[summary('a', '2026-01-01T00:00:00Z')]])
+  const user = userEvent.setup()
+  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  await screen.findByRole('navigation', { name: 'הבדיקות שלי' })
+  const page = document.querySelector('.check-page')!
+  const card = screen.getByRole('tab', { name: 'המלצה' })
+
+  expect(card).toBeDisabled()
+  await user.click(card)
+  expect(page).toHaveAttribute('data-active-pane', 'chat')
+  fireEvent.touchStart(page, { touches: [{ clientX: 500, clientY: 300 }] })
+  fireEvent.touchEnd(page, { changedTouches: [{ clientX: 600, clientY: 300 }] })
+  expect(page).toHaveAttribute('data-active-pane', 'side')
+
+  await holdAnOption()
+  expect(card).toBeEnabled()
+})
+
 test('the tab bar switches the active pane', async () => {
   stubApi([[summary('a', '2026-01-01T00:00:00Z')]])
   const user = userEvent.setup()
   render(<Shell user={dana} onSignOut={vi.fn()} />)
   await screen.findByRole('navigation', { name: 'הבדיקות שלי' })
+  await holdAnOption()
   const page = document.querySelector('.check-page')!
 
   expect(page).toHaveAttribute('data-active-pane', 'chat')
@@ -322,6 +351,7 @@ test('a sideways swipe moves through the panes in Hebrew order, around the tab b
   stubApi([[summary('a', '2026-01-01T00:00:00Z')]])
   render(<Shell user={dana} onSignOut={vi.fn()} />)
   await screen.findByRole('navigation', { name: 'הבדיקות שלי' })
+  await holdAnOption()
   const page = document.querySelector('.check-page')!
   const swipe = (dx: number, dy = 0, at: Element = page, x = 500) => {
     fireEvent.touchStart(at, { touches: [{ clientX: x, clientY: 300 }] })

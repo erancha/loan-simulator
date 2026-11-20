@@ -18,7 +18,8 @@ import {
   offerLine,
   offerRateBox,
   offerRateInvalid,
-  SKIP,
+  NO_OFFER_YET,
+  OFFER_IN_WORDS,
 } from './copy.ts'
 import type { QuestionEntry } from './events.ts'
 import { QuestionBubble } from './QuestionBubble.tsx'
@@ -31,7 +32,12 @@ const PENSION_FUND_LINE =
   'קיבלתי הצעה. הגוף המלווה: קרן הפנסיה. (1) פריים פלוס 0.5%, לא צמוד למדד (2) ריבית קבועה 3.5%,' +
   ' צמוד למדד. לתקופה של עד 84 חודשים, בתשלומים חודשיים שווים.'
 
-function form(question: OfferQuestion, live = true, onSkip = vi.fn().mockResolvedValue(true)) {
+function form(
+  question: OfferQuestion,
+  live = true,
+  onSkip = vi.fn().mockResolvedValue(true),
+  onNoOffer: (() => void) | null = vi.fn(),
+) {
   const entry: QuestionEntry = { id: 'q-1', role: 'question', question, leadIn: null, answered: !live }
   const onAnswer = vi.fn().mockResolvedValue(true)
   render(
@@ -43,6 +49,7 @@ function form(question: OfferQuestion, live = true, onSkip = vi.fn().mockResolve
       ceilingFormula={null}
       onAnswer={onAnswer}
       onSkip={onSkip}
+      onNoOffer={onNoOffer}
       onClone={vi.fn()}
     />,
   )
@@ -254,19 +261,32 @@ test('rows are added up to the limit and a single row has no remove button', asy
   expect(screen.getAllByRole('combobox')).toHaveLength(OFFER_MAX_TRACKS - 1)
 })
 
-test('דילוג sends its line whatever the boxes hold', async () => {
+test('the form invites an offer in words and has no skip', () => {
+  form(EMPTY)
+  expect(screen.getByText(OFFER_IN_WORDS)).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'דילוג' })).toBeNull()
+})
+
+test('אין לי עדיין הצעה points to the examples and sends nothing', async () => {
   const user = userEvent.setup()
   const onSkip = vi.fn().mockResolvedValue(true)
-  const onAnswer = form(EMPTY, true, onSkip)
-  await user.click(screen.getByRole('button', { name: SKIP }))
-  expect(onSkip).toHaveBeenCalledWith('דילוג')
-  expect(screen.queryByText(OFFER_FIX_ABOVE)).toBeNull()
+  const onNoOffer = vi.fn()
+  const onAnswer = form(EMPTY, true, onSkip, onNoOffer)
+  await user.click(screen.getByRole('button', { name: 'אין לי עדיין הצעה' }))
+  expect(onNoOffer).toHaveBeenCalledTimes(1)
+  expect(onSkip).not.toHaveBeenCalled()
   expect(onAnswer).not.toHaveBeenCalled()
+  expect(screen.queryByText(OFFER_FIX_ABOVE)).toBeNull()
+})
+
+test('with no examples chip to point to, the form has no such button', () => {
+  form(EMPTY, true, vi.fn().mockResolvedValue(true), null)
+  expect(screen.queryByRole('button', { name: NO_OFFER_YET })).toBeNull()
 })
 
 test('an answered form shows neither button', () => {
   form({ ...EMPTY, lender: 'הבנק' }, false)
-  expect(screen.queryByRole('button', { name: SKIP })).toBeNull()
+  expect(screen.queryByRole('button', { name: NO_OFFER_YET })).toBeNull()
   expect(screen.queryByRole('textbox')).toBeNull()
   expect(screen.queryByRole('button', { name: CONTINUE })).toBeNull()
 })

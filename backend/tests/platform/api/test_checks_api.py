@@ -378,6 +378,22 @@ def test_an_opening_with_a_blank_purpose_or_no_amount_is_422(client: TestClient)
         assert client.post(f"/api/checks/{check_id}/opening", json=body).status_code == 422
 
 
+def test_a_skipped_ceiling_question_is_accepted_with_202_and_gets_no_reply(
+    world: World, client: TestClient
+) -> None:
+    check_id = client.post("/api/checks").json()["id"]
+
+    response = client.post(f"/api/checks/{check_id}/unanswered", json={"text": "דילוג על: תקרה"})
+    world.drain(client)
+
+    assert response.status_code == 202
+    assert [event.type for event in world.events.rows[check_id]] == [
+        "message.user",
+        "turn.status",
+        "turn.status",
+    ]
+
+
 def test_a_confirmed_term_is_accepted_with_202_and_opens_the_offer_form(
     world: World, client: TestClient
 ) -> None:
@@ -392,21 +408,13 @@ def test_a_confirmed_term_is_accepted_with_202_and_opens_the_offer_form(
     assert (asked.type, asked.data["question"]["kind"]) == ("question.asked", "offer")
 
 
-def test_a_skipped_offer_form_is_accepted_with_202_and_answered_without_the_model(
-    world: World, client: TestClient
-) -> None:
+def test_the_offer_form_has_no_skip_route(world: World, client: TestClient) -> None:
     check_id = client.post("/api/checks").json()["id"]
 
     response = client.post(f"/api/checks/{check_id}/offer-skip", json={"text": "דילוג"})
-    world.drain(client)
 
-    assert response.status_code == 202
-    assert [event.type for event in world.events.rows[check_id]] == [
-        "message.user",
-        "turn.status",
-        "message.assistant",
-        "turn.status",
-    ]
+    assert response.status_code == 404
+    assert check_id not in world.events.rows
 
 
 def test_the_runners_replies_on_another_persons_check_are_404(
@@ -418,7 +426,6 @@ def test_the_runners_replies_on_another_persons_check_are_404(
         for route, body in (
             ("opening", OPENING),
             ("term-confirmation", {"text": "אישור"}),
-            ("offer-skip", {"text": "דילוג"}),
         ):
             assert dana.post(f"/api/checks/{omers}/{route}", json=body).status_code == 404
     assert world.checks.rows[omers].loan is None

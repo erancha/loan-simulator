@@ -4,8 +4,10 @@ import type { AwaitingOffer, Finances, Reading } from '../api/types.ts'
 import {
   INPUT_LABEL, INPUT_PLACEHOLDER,
   questionText,
+  CEILING_CHIP,
   LONGER_TERMS_CHIP,
   MARKET_SAMPLE,
+  NO_OFFER_YET,
   OFFER_SAMPLE,
   SAMPLES_CHIP,
   SCENARIO_SAMPLE,
@@ -30,7 +32,7 @@ import type {
 import { formatTimestamp } from '../money.ts'
 import { withValues } from './emphasis.tsx'
 import { MarketChart } from './MarketChart.tsx'
-import { highlight } from './highlight.ts'
+import { drawAttention, highlight } from './highlight.ts'
 import { ScenarioTable } from './ScenarioTable.tsx'
 import { IdentifiedBubble, UnrecognizedBubble } from './OfferReplies.tsx'
 import { QuestionBubble } from './QuestionBubble.tsx'
@@ -94,6 +96,8 @@ interface Props {
   samplesOffered: boolean
   /** The check holds an option, example or offer, so a scenario has something to price. */
   scenarioOffered: boolean
+  /** The check has no ceiling yet, so the person may state one. */
+  ceilingOffered: boolean
   /** The terms cards the chips offer, shorter and longer than the recommendation's term. */
   termChips: { shorter: boolean; longer: boolean }
   /** The awaiting offer whose card the checks list asked to bring into view. */
@@ -155,6 +159,7 @@ export function Chat({
   offersOpen,
   samplesOffered,
   scenarioOffered,
+  ceilingOffered,
   termChips,
   focusAwaiting,
   cardReplyId,
@@ -187,9 +192,12 @@ export function Chat({
     ...(termChips.longer ? [LONGER_TERMS_CHIP] : []),
     ...(offersOpen ? [OFFER_SAMPLE] : []),
     ...(scenarioOffered ? [SCENARIO_SAMPLE] : []),
+    ...(ceilingOffered ? [CEILING_CHIP] : []),
     MARKET_SAMPLE,
   ]
   const input = useRef<HTMLTextAreaElement>(null)
+  const samplesChip = useRef<HTMLButtonElement>(null)
+  const offerChip = useRef<HTMLButtonElement>(null)
   // The chat box grows with its text, from its two rows up to the stylesheet's cap of three. Its
   // height resets first, so a shorter text shrinks it back; the borders are its offset height
   // beyond its client height. Before paint, so the box never shows at the wrong size.
@@ -266,6 +274,18 @@ export function Chat({
   }
 
   const fillMarketSample = () => fillInput(MARKET_SAMPLE.text)
+
+  /** The offer form's no-offer button: the choice shows as the person's line, which nothing
+   * answers, and an arc sweeps the edges of the two ways forward, the examples chip and the offer
+   * chip, so the person decides which to take. The form offers the button only while the examples
+   * chip shows, and the offer chip shows whenever it does. */
+  function pointToWaysForward() {
+    for (const chip of [samplesChip.current, offerChip.current]) {
+      if (chip === null) throw new Error('the examples and offer chips are not both shown')
+      drawAttention(chip)
+    }
+    void onSkip(NO_OFFER_YET)
+  }
   // A card or a reply takes no answer while a turn runs or once the check is archived.
   const answerable = !running && !archived
 
@@ -325,6 +345,7 @@ export function Chat({
                   ceilingFormula={ceilingFormula}
                   onAnswer={onAnswer}
                   onSkip={onSkip}
+                  onNoOffer={samplesOffered ? pointToWaysForward : null}
                   onClone={() => onClone(cloneLine(requestBefore(entries, index)))}
                 />
               ) : entry.role === 'chart' ? (
@@ -390,6 +411,9 @@ export function Chat({
           {samples.map((sample) => (
             <button
               key={sample.label}
+              ref={
+                sample === SAMPLES_CHIP ? samplesChip : sample === OFFER_SAMPLE ? offerChip : undefined
+              }
               type="button"
               className="sample-chip"
               disabled={locked}

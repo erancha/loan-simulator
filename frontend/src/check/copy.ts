@@ -293,8 +293,6 @@ export const PURPOSE_CHOICES = ['רכב', 'שיפוץ', GENERAL_PURPOSE]
 export const SKIP = 'דילוג'
 export const ANSWER = 'אישור'
 export const CONTINUE = 'המשך'
-/** Sent as the person's message, as it is, when they cannot name a comfortable payment. */
-export const DONT_KNOW = 'לא יודע/ת'
 
 export const TERM_MIN_MONTHS = 6
 export const TERM_MAX_MONTHS = 84
@@ -404,7 +402,7 @@ const SHORTER_TERM = 'אפשר לקצר: '
  * has no title.
  */
 export function termLine(termMonths: number, firstPayment: string, basis?: TermBasis): string {
-  const line = `${termText(termMonths)} · החזר ראשון כ-${formatShekels(firstPayment)}`
+  const line = `${termText(termMonths)} · החזר מ-${formatShekels(firstPayment)}`
   if (basis?.kind === 'first_payment_target') return `${INITIAL_CALCULATION}${line}`
   return basis?.kind === 'shorter' ? `${SHORTER_TERM}${line}` : line
 }
@@ -434,11 +432,11 @@ export function termBasisLine(basis: TermBasis, firstPayment: string): string {
   }
   if (basis.kind === 'first_payment_target') {
     return basis.fits
-      ? `בהנחה ראשונית שההחזר החודשי יהיה עד כ-${amount}, זה מספר החודשים המתאים, לפי` +
-          ` הריבית הממוצעת בבנקים. ${CHANGE_TERM_OR_CEILING}`
+      ? `בהנחה ראשונית שההחזר החודשי יהיה עד כ-${amount}, זה מספר החודשים המתאים.` +
+          ` ${CHANGE_TERM_OR_CEILING}`
       : `${termText(TERM_MAX_MONTHS)} היא התקופה הארוכה ביותר שהסימולטור מחשב. בתקופה כזו` +
-          ` ההחזר החודשי הנמוך ביותר הוא כ-${formatShekels(firstPayment)} בהתחלה, לפי הריבית` +
-          ` הממוצעת בבנקים. ${SHORTEN_TERM_OR_NAME_CEILING}`
+          ` ההחזר החודשי הנמוך ביותר הוא כ-${formatShekels(firstPayment)} בהתחלה.` +
+          ` ${SHORTEN_TERM_OR_NAME_CEILING}`
   }
   return basis.fits
     ? `לפי ההחזר החודשי המרבי שלך, ${amount}, זה מספר החודשים המתאים, גם אם הריבית תעלה כמו` +
@@ -525,6 +523,8 @@ export const TO_CARD = `השוואת המספרים בכרטיס: ${FOLD_TITLE}`
 export const TO_OFFER = 'להצעה בכרטיס ההמלצה'
 
 export const OFFER_FORM_TITLE = 'פרטי ההצעה'
+/** Under the offer form's boxes: the chat box takes an offer in words as well. */
+export const OFFER_IN_WORDS = 'אפשר גם לתאר את ההצעה במילים בתיבה למטה.'
 export const OFFER_FORM_INTRO =
   'קיבלת הצעות להלוואה מגופים מלווים? אפשר לתאר אותן כאן, או בצ\'אט למטה, והסימולטור ישווה אותן.'
 export const OFFER_LENDER_LABEL = 'מי הגוף המלווה?'
@@ -761,13 +761,34 @@ export function openingLine(purpose: string, amount: string): string {
   return `${purpose}: הלוואה בסך ${formatShekels(amount)}`
 }
 
-export const PAYMENT_PLANNING = 'תכנון החזר חודשי'
+/** Beside the term card's confirm button: its figures are a calculation, not an offer. The
+ * first words are set apart in bold, so they are what the eye catches. */
+export const NOT_AN_OFFER = 'לא הצעה:'
+export function termMarketLine(rate: string, month: string): string {
+  return `חישוב לפי הריבית הממוצעת להלוואות, ${rate}% (בנק ישראל, ${formatMonth(month)})`
+}
+
+/** The control for a person who cannot name a comfortable payment, a link on the term card and a
+ * button on the ceiling question; sent as their message, as it is, it starts the help with the
+ * ceiling. */
+export const PAYMENT_PLANNING = 'תכנון ההחזר'
 /** The chip that asks the model for example loans of the check's amount and term. */
 export const SAMPLES_CHIP = {
   label: 'דוגמאות',
   text:
     'אפשר לראות דוגמאות להלוואה כזו? פריים, ריבית קבועה לא צמודה, וריבית קבועה צמודה למדד כמו' +
     ' בהלוואה מקרן פנסיה או השתלמות',
+}
+
+/** The offer form's button for a person with no offer yet, and the line it answers the form with:
+ * it draws the eye to the examples and offer chips, and the person decides which way to go. */
+export const NO_OFFER_YET = 'אין לי עדיין הצעה'
+
+/** The chip that lets a person with no ceiling yet state one; a tap fills the input for them to
+ * finish with the amount. */
+export const CEILING_CHIP = {
+  label: 'החזר חודשי',
+  text: 'ההחזר החודשי המקסימלי שלי הוא:',
 }
 
 /** The margin of a prime reading; a prime reading always carries one. */

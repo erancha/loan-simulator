@@ -384,6 +384,7 @@ async def test_market_series_parses_both_series(engine: McpLoanEngine, stub: Stu
     assert market.prime[-1] == MarketPoint(date(2026, 10, 1), Decimal("4.75"))
     assert market.cpi_change[-1] == MarketPoint(date(2026, 9, 1), Decimal("-0.5"))
     assert (market.rate_as_of, market.cpi_as_of) == (date(2026, 10, 30), date(2026, 9, 1))
+    assert (market.consumer_rate, market.consumer_rate_month) == (Decimal("7.9"), date(2026, 8, 1))
 
 
 async def test_offer_readings_sends_the_offer_and_parses_its_readings(

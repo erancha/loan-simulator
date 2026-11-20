@@ -20,7 +20,8 @@ Each file holds the result of one call:
   2026-11-17, which takes nothing from market data
 - `market_series.json`: prime_months 60, cpi_months 12, captured on 2026-10-30 from the engine's
   stored market data (rate as of 2026-10-30, CPI as of 2026-09); the prime ends at 2026-10 with
-  today's prime, the CPI at 2026-09
+  today's prime, the CPI at 2026-09. Its `consumer_rate` and `consumer_rate_month` are the
+  average consumer loan rate of the same market data, as the simulate_loan files above carry it
 - `offer_readings.json`: principal 45000, term_months 60, monthly_payment 969, captured on
   2026-11-16 from the engine's test history in `mcp-server/tests/service/conftest.py` (Bank of
   Israel rate 3.25, rate as of 2026-10-20), not from market data

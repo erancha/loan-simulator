@@ -242,7 +242,8 @@ async def test_ask_term_proposes_a_cars_term_from_the_first_payment_target(world
 
     assert result == ASKED_RESULT
     assert world.engine.calls == [
-        ("propose_term", {"principal": Decimal(60000), "payment_limit": Decimal(1000)})
+        ("propose_term", {"principal": Decimal(60000), "payment_limit": Decimal(1000)}),
+        ("market_series", {"months": 1}),
     ]
     assert world.events_of(QUESTION_ASKED) == [
         {
@@ -251,6 +252,7 @@ async def test_ask_term_proposes_a_cars_term_from_the_first_payment_target(world
                 "term_months": 66,
                 "first_payment": "998.40",
                 "basis": {"kind": "first_payment_target", "amount": "1000", "fits": True},
+                "market": {"rate": "7.9", "month": "2026-08-01"},
             },
             "lead_in": None,
         }
@@ -278,7 +280,8 @@ async def test_ask_term_proposes_the_first_payment_term_without_a_ceiling(world:
     await world.tools.ask_term(None)
 
     assert world.engine.calls == [
-        ("propose_term", {"principal": Decimal(100000), "payment_limit": Decimal(1000)})
+        ("propose_term", {"principal": Decimal(100000), "payment_limit": Decimal(1000)}),
+        ("market_series", {"months": 1}),
     ]
     assert world.events_of(QUESTION_ASKED) == [
         {
@@ -287,6 +290,7 @@ async def test_ask_term_proposes_the_first_payment_term_without_a_ceiling(world:
                 "term_months": 84,
                 "first_payment": "1554.00",
                 "basis": {"kind": "first_payment_target", "amount": "1000", "fits": False},
+                "market": {"rate": "7.9", "month": "2026-08-01"},
             },
             "lead_in": None,
         }
@@ -484,6 +488,20 @@ async def test_update_finances_passes_an_engine_refusal_to_the_model(world: Worl
         await world.tools.update_finances(net_fixed_income="18000", fixed_expenses="9000")
 
     assert (await world.check()).finances == Finances()
+
+
+async def test_a_ceiling_after_a_confirmed_term_with_no_option_asks_for_the_term_card(
+    world: World,
+) -> None:
+    await world.tools.set_loan("רכב", "40000")
+    before_term = await world.tools.set_ceiling("1500")
+    await world.checks.set_term(CHECK, 48)
+
+    after_term = await world.tools.set_ceiling("2000")
+
+    assert "ask_term" not in before_term
+    assert "next_step: The term is confirmed" in after_term
+    assert "ask_term without term_months" in after_term
 
 
 async def test_a_ceiling_change_asks_to_recheck_the_recommendation(world: World) -> None:

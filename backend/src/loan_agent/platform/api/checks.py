@@ -4,8 +4,9 @@ check's panel, and send a message that starts a turn.
 Core building blocks:
 - router: POST/GET /api/checks, GET/DELETE /api/checks/{id}, POST /api/checks/{id}/clone,
   /archive and /restore, POST /api/checks/{id}/messages, /market-sample, /offer-sample,
-  /term-ceiling, /opening, /term-confirmation and /offer-skip, PUT /api/checks/{id}/finances and
-  /term, PUT /api/checks/{id}/awaiting-offers/{awaiting_id} and its /amount
+  /term-ceiling, /opening, /term-confirmation and /unanswered, PUT /api/checks/{id}/finances and
+  /term,
+  PUT /api/checks/{id}/awaiting-offers/{awaiting_id} and its /amount
 - register_error_handlers: another person's check answers 404 like an unknown one, as does an
   awaiting offer the check does not hold; a message, a clone, an archive, a delete, a finances
   save, a term save, a reading or an amount answer while a turn runs answers 409, as do a
@@ -218,11 +219,11 @@ async def send_term_confirmation(
     await runner.send_term_confirmation(user, check_id, body.text)
 
 
-@router.post("/{check_id}/offer-skip", status_code=status.HTTP_202_ACCEPTED)
-async def send_offer_skip(check_id: str, body: Message, user: CurrentUser, runner: Runner) -> None:
-    """The offer form's skip, answered with an invitation to describe the offer and no model
-    call; the reply arrives on the event stream, and the errors are a message's."""
-    await runner.send_offer_skip(user, check_id, body.text)
+@router.post("/{check_id}/unanswered", status_code=status.HTTP_202_ACCEPTED)
+async def send_unanswered(check_id: str, body: Message, user: CurrentUser, runner: Runner) -> None:
+    """A line nothing answers (a skip of the ceiling question, the offer form's no-offer choice),
+    stored as the person's message with no model call and no reply; the errors are a message's."""
+    await runner.send_unanswered(user, check_id, body.text)
 
 
 def register_error_handlers(app: FastAPI) -> None:

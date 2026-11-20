@@ -27,6 +27,7 @@ it('a money answer is saved and sent as a labelled line', async () => {
       ceilingFormula={null}
       onAnswer={onAnswer}
       onSkip={vi.fn()}
+      onNoOffer={null}
       onClone={vi.fn()}
     />,
   )
@@ -48,6 +49,7 @@ it('a money box starts from the stored amount', () => {
       ceilingFormula={null}
       onAnswer={vi.fn()}
       onSkip={vi.fn()}
+      onNoOffer={null}
       onClone={vi.fn()}
     />,
   )
@@ -66,6 +68,7 @@ it('normalises the typed amount; empty does not answer', async () => {
       ceilingFormula={null}
       onAnswer={onAnswer}
       onSkip={vi.fn()}
+      onNoOffer={null}
       onClone={vi.fn()}
     />,
   )
@@ -93,6 +96,7 @@ it('a fixed expenses answer is saved before its line is sent', async () => {
       ceilingFormula={null}
       onAnswer={onAnswer}
       onSkip={vi.fn()}
+      onNoOffer={null}
       onClone={vi.fn()}
     />,
   )
@@ -116,6 +120,7 @@ it('a purpose choice sends no finances save', async () => {
       ceilingFormula={null}
       onAnswer={onAnswer}
       onSkip={vi.fn()}
+      onNoOffer={null}
       onClone={vi.fn()}
     />,
   )
@@ -135,6 +140,7 @@ it('a loan with no particular purpose is a choice, with no text box', async () =
       ceilingFormula={null}
       onAnswer={onAnswer}
       onSkip={vi.fn()}
+      onNoOffer={null}
       onClone={vi.fn()}
     />,
   )
@@ -157,6 +163,7 @@ it('a loan amount answer is a shekel line without a finances save', async () => 
       ceilingFormula={null}
       onAnswer={onAnswer}
       onSkip={vi.fn()}
+      onNoOffer={null}
       onClone={vi.fn()}
     />,
   )
@@ -177,6 +184,7 @@ it('a free question with choices renders them as buttons', async () => {
       ceilingFormula={null}
       onAnswer={onAnswer}
       onSkip={vi.fn()}
+      onNoOffer={null}
       onClone={vi.fn()}
     />,
   )
@@ -199,6 +207,7 @@ it('a free question without choices takes typed text', async () => {
       ceilingFormula={null}
       onAnswer={onAnswer}
       onSkip={vi.fn()}
+      onNoOffer={null}
       onClone={vi.fn()}
     />,
   )
@@ -220,6 +229,7 @@ it('a free question with choices has no skip', () => {
       ceilingFormula={null}
       onAnswer={vi.fn()}
       onSkip={vi.fn()}
+      onNoOffer={null}
       onClone={vi.fn()}
     />,
   )
@@ -240,6 +250,7 @@ it('skip sends the skip line', async () => {
       ceilingFormula={null}
       onAnswer={onAnswer}
       onSkip={onSkip}
+      onNoOffer={null}
       onClone={vi.fn()}
     />,
   )
@@ -262,6 +273,7 @@ it('a refused save stays on the question with its reason', async () => {
       ceilingFormula={null}
       onAnswer={onAnswer}
       onSkip={vi.fn()}
+      onNoOffer={null}
       onClone={vi.fn()}
     />,
   )
@@ -286,6 +298,7 @@ it('text that is not a number is refused before anything is sent', async () => {
       ceilingFormula={null}
       onAnswer={onAnswer}
       onSkip={vi.fn()}
+      onNoOffer={null}
       onClone={vi.fn()}
     />,
   )
@@ -308,6 +321,7 @@ it('an unsaved answer keeps the question open without a message', async () => {
       ceilingFormula={null}
       onAnswer={onAnswer}
       onSkip={vi.fn()}
+      onNoOffer={null}
       onClone={vi.fn()}
     />,
   )
@@ -329,6 +343,7 @@ it('a closed bubble shows the question without controls', () => {
       ceilingFormula={null}
       onAnswer={vi.fn()}
       onSkip={vi.fn()}
+      onNoOffer={null}
       onClone={vi.fn()}
     />,
   )
@@ -349,6 +364,7 @@ it('a live bubble shows the lead-in, the label and its hint', () => {
       ceilingFormula={null}
       onAnswer={vi.fn()}
       onSkip={vi.fn()}
+      onNoOffer={null}
       onClone={vi.fn()}
     />,
   )
@@ -369,6 +385,7 @@ it('a term question shows its proposed term and first payment', () => {
       ceilingFormula={null}
       onAnswer={vi.fn()}
       onSkip={vi.fn()}
+      onNoOffer={null}
       onClone={vi.fn()}
     />,
   )
@@ -395,6 +412,32 @@ it('only the card of the assumed payment is titled a first calculation', () => {
   expect(screen.getByText(wholeText(TERM_LINE))).toBeInTheDocument()
 })
 
+it('a live term card says it is a calculation on the Bank of Israel average, not an offer', () => {
+  render(
+    <QuestionBubble
+      entry={entryFor({
+        ...termQuestion,
+        market: { rate: '7.9', month: '2026-08-01' },
+      } as Question)}
+      live
+      finances={null}
+      ceiling={null}
+      ceilingFormula={null}
+      onAnswer={vi.fn()}
+      onSkip={vi.fn()}
+      onNoOffer={null}
+      onClone={vi.fn()}
+    />,
+  )
+  const line = screen.getByText(
+    wholeText('לא הצעה: חישוב לפי הריבית הממוצעת להלוואות, 7.9% (בנק ישראל, 08/2026)'),
+  )
+  expect(line.closest('.question-actions')).toContainElement(
+    screen.getByRole('button', { name: 'אישור' }),
+  )
+  expect(line.closest('.bubble')).toHaveClass('term-card')
+})
+
 it('a term card stored without its basis shows the title alone', () => {
   render(
     <QuestionBubble
@@ -405,6 +448,7 @@ it('a term card stored without its basis shows the title alone', () => {
       ceilingFormula={null}
       onAnswer={vi.fn()}
       onSkip={vi.fn()}
+      onNoOffer={null}
       onClone={vi.fn()}
     />,
   )
@@ -425,7 +469,7 @@ it('the payment planning chip sends its sentence and saves nothing', async () =>
   const onSkip = vi.fn().mockResolvedValue(true)
   renderTerm(null, onAnswer, onSkip)
   await user.click(screen.getByRole('button', { name: PAYMENT_PLANNING }))
-  expect(onSkip).toHaveBeenCalledWith('תכנון החזר חודשי')
+  expect(onSkip).toHaveBeenCalledWith('תכנון ההחזר')
   expect(onAnswer).not.toHaveBeenCalled()
 })
 
@@ -451,7 +495,7 @@ it('the term card offers payment planning while a finances figure is missing', (
 })
 
 const termBasis = { kind: 'first_payment_target', amount: '1000', fits: true } as const
-const TERM_LINE = '60 חודשים · החזר ראשון כ-812 ₪'
+const TERM_LINE = '60 חודשים · החזר מ-812 ₪'
 const TERM_TITLE = `חישוב ראשוני: ${TERM_LINE}`
 const termQuestion: Question = {
   kind: 'term',
@@ -470,6 +514,7 @@ function termCard(basis: TermBasis) {
       ceilingFormula={null}
       onAnswer={vi.fn()}
       onSkip={vi.fn()}
+      onNoOffer={null}
       onClone={vi.fn()}
     />
   )
@@ -491,6 +536,7 @@ function renderTerm(
       ceilingFormula={formula}
       onAnswer={onAnswer}
       onSkip={onSkip}
+      onNoOffer={null}
       onClone={vi.fn()}
     />,
   )
@@ -590,7 +636,7 @@ it('the term card offers no skip', () => {
   expect(screen.queryByRole('button', { name: 'דילוג' })).not.toBeInTheDocument()
 })
 
-it('the ceiling question offers לא יודע/ת', async () => {
+it('the ceiling question offers the same help as the term card, תכנון ההחזר', async () => {
   const user = userEvent.setup()
   const onSkip = vi.fn().mockResolvedValue(true)
   render(
@@ -602,12 +648,13 @@ it('the ceiling question offers לא יודע/ת', async () => {
       ceilingFormula={null}
       onAnswer={vi.fn()}
       onSkip={onSkip}
+      onNoOffer={null}
       onClone={vi.fn()}
     />,
   )
   expect(screen.getByRole('button', { name: 'דילוג' })).toBeInTheDocument()
-  await user.click(screen.getByRole('button', { name: 'לא יודע/ת' }))
-  expect(onSkip).toHaveBeenCalledWith('לא יודע/ת')
+  await user.click(screen.getByRole('button', { name: 'תכנון ההחזר' }))
+  expect(onSkip).toHaveBeenCalledWith('תכנון ההחזר')
 })
 
 it('an income answer hands its update with its line', async () => {
@@ -622,6 +669,7 @@ it('an income answer hands its update with its line', async () => {
       ceilingFormula={null}
       onAnswer={onAnswer}
       onSkip={vi.fn()}
+      onNoOffer={null}
       onClone={vi.fn()}
     />,
   )
@@ -676,6 +724,7 @@ function renderTerms(live: boolean, onAnswer = vi.fn().mockResolvedValue(true)) 
       ceilingFormula={null}
       onAnswer={onAnswer}
       onSkip={vi.fn()}
+      onNoOffer={null}
       onClone={vi.fn()}
     />,
   )
@@ -727,6 +776,7 @@ function renderScenarioForm(movement: 'prime' | 'cpi', onAnswer = vi.fn().mockRe
       ceilingFormula={null}
       onAnswer={onAnswer}
       onSkip={vi.fn()}
+      onNoOffer={null}
       onClone={vi.fn()}
     />,
   )

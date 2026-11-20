@@ -7,8 +7,8 @@ import {
   saveTerm,
   sendMarketSample,
   sendMessage,
+  sendUnanswered,
   sendOfferSample,
-  sendOfferSkip,
   sendOpening,
   sendTermCeiling,
   sendTermConfirmation,
@@ -26,9 +26,11 @@ import {
   ceilingFormula,
   CONTINUE_TO_ANOTHER_OFFER,
   confirmedReadingLine,
+  NO_OFFER_YET,
   openingLine,
+  questionLabel,
   sendFailed,
-  SKIP,
+  skipLine,
 } from './copy.ts'
 import { FinancesPanel, hasFinancialDetails } from './FinancesPanel.tsx'
 import { OpeningCard } from './OpeningCard.tsx'
@@ -109,6 +111,9 @@ interface Props {
   showFinances: boolean
   /** Told whenever the term card starts or stops taking an answer. */
   onTermCardLive: (live: boolean) => void
+  /** Told whether the check holds an option or an offer awaiting its lender: until it does, the
+   * recommendation pane has nothing to show. */
+  onCardReady: (ready: boolean) => void
   /** Shows the recommendation's pane, on a screen that shows one pane at a time; the reply that
    * presents a recommendation links to its table of figures. */
   onShowCard: () => void
@@ -132,6 +137,7 @@ export function CheckPage({
   focusAwaiting,
   showFinances,
   onTermCardLive,
+  onCardReady,
   onShowCard,
 }: Props) {
   const { state } = useCheckEvents(checkId)
@@ -146,6 +152,8 @@ export function CheckPage({
   const termCardLive = live !== null && live.question.kind === 'term'
 
   useEffect(() => onTermCardLive(termCardLive), [termCardLive, onTermCardLive])
+  const cardReady = holdsOption(state)
+  useEffect(() => onCardReady(cardReady), [cardReady, onCardReady])
 
   useEffect(() => {
     const after = awaitedAfter.current
@@ -160,6 +168,16 @@ export function CheckPage({
     if (stale) onChecksChanged()
   }, [stale, onChecksChanged])
 
+  /** A line nothing answers: the skip of a live ceiling question, or the live offer form's
+   * no-offer choice. The server stores it with no reply, and the person goes on as they choose. */
+  function isUnanswered(text: string): boolean {
+    if (live === null) return false
+    const { question } = live
+    if (question.kind === 'offer') return text === NO_OFFER_YET
+    if (question.kind !== undefined) return false
+    return question.field === 'payment_ceiling' && text === skipLine(questionLabel(question))
+  }
+
   /** Resolves true when the server accepted the text; a 409 means a turn is already running. */
   function send(text: string): Promise<boolean> {
     // The offer form needs the check's loan, so before one the sentence goes to the model, which
@@ -168,8 +186,8 @@ export function CheckPage({
       ? sendMarketSample
       : isOfferSample(text) && state.loan !== null
         ? sendOfferSample
-        : text === SKIP && live?.question.kind === 'offer'
-          ? sendOfferSkip
+        : isUnanswered(text)
+          ? sendUnanswered
           : sendMessage
     return deliver(() => request(checkId, text))
   }
@@ -319,6 +337,7 @@ export function CheckPage({
             offersOpen={offersOpen}
             samplesOffered={offersOpen && !holdsOption(state)}
             scenarioOffered={state.options.size > 0}
+            ceilingOffered={state.ceiling === null}
             termChips={termComparisons(state)}
             focusAwaiting={focusAwaiting}
           />

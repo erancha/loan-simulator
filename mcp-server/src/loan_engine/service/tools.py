@@ -317,6 +317,11 @@ class MarketSeries(_Output):
     )
     cpi_as_of: date = Field(description="Month of the latest consumer price index")
     cpi: list[CpiMonth] = Field(description="The latest months, oldest first")
+    consumer_rate: Decimal = Field(
+        description="The Bank of Israel's latest average rate on new household consumer loans, "
+        "annual percent"
+    )
+    consumer_rate_month: date = Field(description="Month of consumer_rate")
 
 
 class Reading(_Output):
@@ -512,7 +517,8 @@ def register_tools(
         """Call this when the person asks about the prime rate or the consumer price index: today's
         prime, how it moved, or how prices rose. Returns today's prime and, oldest first, the prime
         and the CPI's monthly change for the latest months, from the Bank of Israel and the
-        Central Bureau of Statistics data the loans are priced with.
+        Central Bureau of Statistics data the loans are priced with, and the Bank of Israel's
+        latest average rate on new consumer loans.
         """
         market = history_provider()
         # The aligned months end at the latest published CPI, which trails the daily rate by
@@ -537,6 +543,8 @@ def register_tools(
                 )
                 for month, inflation in list(cpi_window)[-cpi_months:]
             ],
+            consumer_rate=market.consumer_rate,
+            consumer_rate_month=market.consumer_rate_month,
         )
 
     @server.tool()

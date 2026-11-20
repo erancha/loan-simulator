@@ -5,10 +5,12 @@ export type Pane = (typeof TABS)[number]['pane']
 interface Props {
   active: Pane
   onChange: (pane: Pane) => void
+  /** Panes with nothing to show yet, whose tabs take no tap. */
+  disabled: readonly Pane[]
 }
 
 /** The phone-width switch between the check page's panes; hidden by CSS on wide screens. */
-export function TabBar({ active, onChange }: Props) {
+export function TabBar({ active, onChange, disabled }: Props) {
   return (
     <div className="tab-bar" role="tablist" aria-label={TABS_LABEL}>
       {TABS.map(({ pane, label }) => (
@@ -17,6 +19,7 @@ export function TabBar({ active, onChange }: Props) {
           type="button"
           role="tab"
           aria-selected={pane === active}
+          disabled={disabled.includes(pane)}
           onClick={() => onChange(pane)}
         >
           {label}

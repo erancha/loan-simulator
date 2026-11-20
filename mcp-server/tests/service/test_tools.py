@@ -411,6 +411,8 @@ async def test_market_series_returns_the_latest_months_ending_with_today_s_prime
             {"month": "2009-11-01", "change_percent": "0.2"},
             {"month": "2009-12-01", "change_percent": "0.2"},
         ],
+        "consumer_rate": "7.9",
+        "consumer_rate_month": "2026-08-01",
     }
 
 

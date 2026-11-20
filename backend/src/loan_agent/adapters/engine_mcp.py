@@ -194,6 +194,8 @@ def market_series_of(result: Mapping[str, Any]) -> MarketSeries:
         rate_as_of=date.fromisoformat(result["rate_as_of"]),
         cpi_change=tuple(_point(row, "change_percent") for row in result["cpi"]),
         cpi_as_of=date.fromisoformat(result["cpi_as_of"]),
+        consumer_rate=_money(result, "consumer_rate"),
+        consumer_rate_month=date.fromisoformat(result["consumer_rate_month"]),
     )
 
 

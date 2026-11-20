@@ -26,7 +26,8 @@ import {
   offerRateBox,
   offerRateInvalid,
   questionText,
-  SKIP,
+  NO_OFFER_YET,
+  OFFER_IN_WORDS,
   TERM_MIN_MONTHS,
 } from './copy.ts'
 import type { QuestionEntry } from './events.ts'
@@ -113,8 +114,9 @@ interface Props {
   live: boolean
   /** Resolves false when nothing was sent; rejects with an ApiException on a refused send. */
   onAnswer: (answer: Answer) => Promise<boolean>
-  /** Sends a line alone, saving nothing; the skip button's way to leave the form unfilled. */
-  onSkip: (line: string) => Promise<boolean>
+  /** Answers the form with the no-offer choice and draws the eye to the chat's examples and offer
+   * chips; null when the chat shows no examples chip, and the form then has no no-offer button. */
+  onNoOffer: (() => void) | null
 }
 
 /**
@@ -122,9 +124,11 @@ interface Props {
  * percentage and, for fixed interest, whether it is linked to the index), and the longest period.
  * The boxes start with what the person already said. Sending marks every box that is empty or out
  * of range and sends nothing; a valid form goes as one worded message, which the model saves the
- * offer from. A skip button leaves the form unfilled, sending its own line and saving nothing.
+ * offer from. A line says an offer may be described in words in the chat box instead; a person
+ * with no offer yet has a button that answers the form with that choice and points them to the
+ * chat's examples and offer chips.
  */
-export function OfferForm({ entry, question, live, onAnswer, onSkip }: Props) {
+export function OfferForm({ entry, question, live, onAnswer, onNoOffer }: Props) {
   const [lender, setLender] = useState(question.lender ?? '')
   const [rows, setRows] = useState<Row[]>(() =>
     (question.tracks.length > 0 ? question.tracks.map(rowOf) : [EMPTY_ROW]).map((row, key) => ({
@@ -160,15 +164,6 @@ export function OfferForm({ entry, question, live, onAnswer, onSkip }: Props) {
     const last = rows[rows.length - 1]
     setRows([...rows, { ...last, rate: '', key: nextKey }])
     setNextKey(nextKey + 1)
-  }
-
-  async function skip() {
-    setBusy(true)
-    try {
-      await onSkip(SKIP)
-    } finally {
-      setBusy(false)
-    }
   }
 
   async function submit(event: FormEvent) {
@@ -292,10 +287,13 @@ export function OfferForm({ entry, question, live, onAnswer, onSkip }: Props) {
             <button type="submit" className="primary" disabled={busy}>
               {CONTINUE}
             </button>
-            <button type="button" disabled={busy} onClick={() => void skip()}>
-              {SKIP}
-            </button>
+            {onNoOffer !== null && (
+              <button type="button" disabled={busy} onClick={onNoOffer}>
+                {NO_OFFER_YET}
+              </button>
+            )}
           </div>
+          <p className="offer-note">{OFFER_IN_WORDS}</p>
           <p className="offer-note">{OFFER_NOTE}</p>
         </form>
       )}

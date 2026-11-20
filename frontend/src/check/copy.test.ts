@@ -53,7 +53,7 @@ test('a question is labelled from the field copy, the term card or the model', (
     'חדש או משומש?',
   )
   expect(questionLabel({ kind: 'term', term_months: 60, first_payment: '812.4' })).toBe(
-    '60 חודשים · החזר ראשון כ-812 ₪',
+    '60 חודשים · החזר מ-812 ₪',
   )
   expect(
     questionLabel({
@@ -62,13 +62,13 @@ test('a question is labelled from the field copy, the term card or the model', (
       first_payment: '812.4',
       basis: { kind: 'first_payment_target', amount: '1000', fits: true },
     }),
-  ).toBe('חישוב ראשוני: 60 חודשים · החזר ראשון כ-812 ₪')
+  ).toBe('חישוב ראשוני: 60 חודשים · החזר מ-812 ₪')
 })
 
 test('the term card states the assumption its term was worked out from', () => {
   expect(termBasisLine({ kind: 'first_payment_target', amount: '1000', fits: true }, '992.9')).toBe(
-    'בהנחה ראשונית שההחזר החודשי יהיה עד כ-1,000 ₪, זה מספר החודשים המתאים, לפי הריבית' +
-      ' הממוצעת בבנקים. אפשר לשנות כאן את מספר החודשים, או לכתוב החזר חודשי מרבי אחר.',
+    'בהנחה ראשונית שההחזר החודשי יהיה עד כ-1,000 ₪, זה מספר החודשים המתאים. אפשר לשנות כאן' +
+      ' את מספר החודשים, או לכתוב החזר חודשי מרבי אחר.',
   )
   expect(termBasisLine({ kind: 'ceiling', amount: '1750.00', fits: true }, '1096.4')).toBe(
     'לפי ההחזר החודשי המרבי שלך, 1,750 ₪, זה מספר החודשים המתאים, גם אם הריבית תעלה כמו בעבר.' +
@@ -89,7 +89,7 @@ test('with no payment from the person, the longest term states the lowest paymen
   // the card that cannot meet it says what the longest term gives and names no assumed amount.
   expect(termBasisLine({ kind: 'first_payment_target', amount: '1000', fits: false }, '1553.64')).toBe(
     '84 חודשים היא התקופה הארוכה ביותר שהסימולטור מחשב. בתקופה כזו ההחזר החודשי הנמוך ביותר הוא' +
-      ' כ-1,554 ₪ בהתחלה, לפי הריבית הממוצעת בבנקים. אפשר לקצר כאן את מספר החודשים, או לכתוב החזר' +
+      ' כ-1,554 ₪ בהתחלה. אפשר לקצר כאן את מספר החודשים, או לכתוב החזר' +
       ' חודשי מרבי.',
   )
 })
@@ -104,7 +104,7 @@ test('a suggested shorter term is titled as one and states what it saves', () =>
   } as const
   expect(
     questionLabel({ kind: 'term', term_months: 66, first_payment: '1872.99', basis }),
-  ).toBe('אפשר לקצר: 66 חודשים · החזר ראשון כ-1,873 ₪')
+  ).toBe('אפשר לקצר: 66 חודשים · החזר מ-1,873 ₪')
   expect(termBasisLine(basis, '1872.99')).toBe(
     'זה מספר החודשים המיטבי לפי ההחזר החודשי המרבי שלך, 2,000 ₪: במקום 72 חודשים, ההחזר נשאר' +
       ' עד כ-1,936 ₪ גם אם הריבית תעלה כמו בעבר, והסכום הכולל להחזר קטן ב-1,595 ₪.' +

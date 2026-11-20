@@ -13,6 +13,7 @@ recommendation, with the guardrail that keeps a recommendation honest.
   question for the page and returning ASKED_RESULT, after which the turn ends; show_chart,
   emitting a market series for the page; show_scenario, emitting every saved option priced on
   the scenario the person named beside its total in today's calculation, as one table
+- holds_option: whether a check holds an option or an offer awaiting its lender
 - scenario_offer_next: the movement no scenario table since the latest saved option named, which
   the runner offers as a form after a turn that showed a table
 - scenario_outcome: which option a scenario table found cheapest in total and how clearly, with
@@ -145,6 +146,13 @@ _COMPARE_THE_OFFER = (
 _RECHECK_THE_RECOMMENDATION = (
     "the check's recommendation was made before this ceiling; call present_recommendation in this "
     "turn to check it against the ceiling; the person's card changes only through that call"
+)
+
+# Before any option, the term card is where a ceiling shows what it changes: the shortest term
+# whose worst case fits it, which the person confirms or keeps.
+_SHOW_THE_TERM_CARD = (
+    "The term is confirmed and the check holds no option yet: call ask_term without term_months "
+    "in this turn, so the person sees the term this ceiling fits and confirms it"
 )
 
 # One option alone has nothing to be ranked against, so the card evaluates it: its price is what
@@ -282,11 +290,17 @@ class CheckTools:
         else:
             proposed = ProposedTerm(term_months, await self._first_payment(loan, term_months))
             basis = await self._typed_or_suggested(check, term_months)
+        # The card names the market rate it was worked out at, so it never reads as an offer.
+        market = await self._deps.engine.market_series(1)
         question = {
             "kind": "term",
             "term_months": proposed.term_months,
             "first_payment": str(proposed.first_payment),
             "basis": basis,
+            "market": {
+                "rate": str(market.consumer_rate),
+                "month": market.consumer_rate_month.isoformat(),
+            },
         }
         await self._deps.sink.emit(
             self._check_id, QUESTION_ASKED, {"question": question, "lead_in": None}
@@ -502,11 +516,15 @@ class CheckTools:
         return data
 
     async def _with_recheck(self, data: Mapping[str, object]) -> str:
-        """The summary, telling the model to recommend again when the check holds a
-        recommendation, since a ceiling change re-checks it in the same turn."""
-        if await self._deps.recommendations.latest(self._check_id) is None:
-            return summary(data)
-        return summary({**data, "next_step": _RECHECK_THE_RECOMMENDATION})
+        """The summary, telling the model what a ceiling change calls for in the same turn: to
+        recommend again when the check holds a recommendation, or, when its term is confirmed and
+        it holds no option yet, to show the term card for the new ceiling."""
+        if await self._deps.recommendations.latest(self._check_id) is not None:
+            return summary({**data, "next_step": _RECHECK_THE_RECOMMENDATION})
+        check = await self._check()
+        if check.term_months is not None and not await holds_option(self._deps, self._check_id):
+            return summary({**data, "next_step": _SHOW_THE_TERM_CARD})
+        return summary(data)
 
     async def update_finances(self, **fields: object) -> str:
         try:
@@ -1929,6 +1947,13 @@ def _scenario_row(option: Option, on: ScenarioFigures, today: ScenarioFigures) -
         },
         "today": {"max_payment": str(today.max_payment), "total_paid": str(today.total_paid)},
     }
+
+
+async def holds_option(deps: ToolDeps, check_id: str) -> bool:
+    """The check holds an option (an example or a real offer) or an offer awaiting its lender."""
+    if await deps.options.list(check_id):
+        return True
+    return bool(await deps.awaiting.list(check_id))
 
 
 async def scenario_offer_next(sink: EventSink, check_id: str) -> ScenarioMovement | None:

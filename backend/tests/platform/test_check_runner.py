@@ -52,7 +52,6 @@ from loan_agent.domain.errors import (
 )
 from loan_agent.domain.models import Check, Finances, LoanRequest, Option, Recommendation, User
 from loan_agent.platform.check_runner import (
-    DESCRIBE_THE_OFFER,
     FAILURE_MESSAGE,
     OFFER_FORM_SHOWN,
     OPENING_CARD_ANSWERED,
@@ -1508,59 +1507,49 @@ async def test_a_quick_turn_logs_nothing(world: World) -> None:
     assert [entry for entry in logs if entry["event"] == "slow turn"] == []
 
 
-OFFER_SKIP = "דילוג"
+CEILING_SKIP = "דילוג על: מה ההחזר החודשי הגבוה ביותר שנוח לך?"
 
 
-async def test_skipping_the_offer_form_invites_a_description_with_no_model_call(
+async def test_a_skipped_ceiling_question_is_stored_with_no_model_call_and_no_reply(
     world: World,
 ) -> None:
     model = ScriptedChatModel(replies=[AIMessage(REPLY)])
     checks = runner(world, model)
     check = await checks.create(PERSON)
 
-    await checks.send_offer_skip(PERSON, check.id, OFFER_SKIP)
+    await checks.send_unanswered(PERSON, check.id, CEILING_SKIP)
     await checks.drain()
 
     events = await stored(world, check.id)
-    assert [type for type, _ in events] == [
-        "message.user",
-        "turn.status",
-        "message.assistant",
-        "turn.status",
-    ]
-    assert events[2][1]["text"] == DESCRIBE_THE_OFFER
+    assert [type for type, _ in events] == ["message.user", "turn.status", "turn.status"]
     assert model.received == []
 
-    await checks.send(PERSON, check.id, "אוויס: 45,000 ₪ ל-60 חודשים, 969 ₪ בחודש")
+    await checks.send(PERSON, check.id, "מה הריבית היום?")
     await checks.drain()
     said = [message for message in model.received[0] if not isinstance(message, SystemMessage)]
-    assert [type(message) for message in said] == [HumanMessage, AIMessage, HumanMessage]
-    assert (said[0].content, said[1].content) == (OFFER_SKIP, DESCRIBE_THE_OFFER)
+    assert [message.content for message in said] == ["מה הריבית היום?"]
 
 
-async def test_the_three_replies_count_as_messages_and_keep_the_send_guards(
+async def test_the_two_replies_count_as_messages_and_keep_the_send_guards(
     world: World,
 ) -> None:
     checks = runner(world, ScriptedChatModel(replies=[]))
     check = await checks.create(PERSON)
     await world.checks.set_loan(check.id, LOAN)
-    await checks.send_offer_skip(PERSON, check.id, OFFER_SKIP)
+    await checks.send_term_confirmation(PERSON, check.id, TERM_CONFIRMED)
     await checks.drain()
     await checks.send_term_confirmation(PERSON, check.id, TERM_CONFIRMED)
     await checks.drain()
     fresh = await checks.create(PERSON)
 
     with pytest.raises(TurnLimitError):
-        await checks.send_offer_skip(PERSON, check.id, OFFER_SKIP)
-    with pytest.raises(TurnLimitError):
         await checks.send_term_confirmation(PERSON, check.id, TERM_CONFIRMED)
     with pytest.raises(TurnLimitError):
         await checks.send_opening(PERSON, fresh.id, OPENING, "רכב", Decimal(45000))
     assert (await world.checks.get(PERSON.id, fresh.id)).loan is None
     await world.checks.archive(check.id, NOW)
-    for send in (checks.send_offer_skip, checks.send_term_confirmation):
-        with pytest.raises(CheckArchivedError):
-            await send(PERSON, check.id, OFFER_SKIP)
+    with pytest.raises(CheckArchivedError):
+        await checks.send_term_confirmation(PERSON, check.id, TERM_CONFIRMED)
     with pytest.raises(CheckArchivedError):
         await checks.send_opening(PERSON, check.id, OPENING, "רכב", Decimal(45000))
     with pytest.raises(CheckNotFoundError):

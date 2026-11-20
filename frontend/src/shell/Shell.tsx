@@ -62,7 +62,11 @@ export function Shell({ user, onSignOut }: Props) {
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const [wantedId, setWantedId] = useState(hashedId)
   const [pane, setPane] = useState<Pane>('chat')
-  const tabSwipe = useTabSwipe(pane, setPane)
+  // Whether the open check holds an option or an offer awaiting its lender; until it does, its
+  // recommendation pane has nothing to show, so its tab is disabled.
+  const [cardReady, setCardReady] = useState(false)
+  const disabledPanes: readonly Pane[] = cardReady ? [] : ['card']
+  const tabSwipe = useTabSwipe(pane, setPane, disabledPanes)
   // The awaiting offer whose card the open check brings into view: the list link that opened it.
   const [focusAwaiting, setFocusAwaiting] = useState<AwaitingFocus | null>(null)
   const focusRequests = useRef(0)
@@ -289,7 +293,7 @@ export function Shell({ user, onSignOut }: Props) {
       )}
       {selected !== null && (
         <main className="shell-main" {...tabSwipe}>
-          <TabBar active={pane} onChange={setPane} />
+          <TabBar active={pane} onChange={setPane} disabled={disabledPanes} />
           <CheckPage
             key={selected.id}
             checkId={selected.id}
@@ -302,6 +306,7 @@ export function Shell({ user, onSignOut }: Props) {
             focusAwaiting={focusAwaiting}
             showFinances={showFinances}
             onTermCardLive={setTermCardLive}
+            onCardReady={setCardReady}
             onShowCard={() => setPane('card')}
           />
         </main>

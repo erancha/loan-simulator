@@ -36,6 +36,7 @@ const noQuestion = {
   offersOpen: false,
   samplesOffered: false,
   scenarioOffered: false,
+  ceilingOffered: false,
   termChips: { shorter: false, longer: false },
   focusAwaiting: null,
   cardReplyId: null,
@@ -53,6 +54,7 @@ interface Options {
   offersOpen?: boolean
   samplesOffered?: boolean
   scenarioOffered?: boolean
+  ceilingOffered?: boolean
   onShowOption?: (optionId: string) => void
   termChips?: { shorter: boolean; longer: boolean }
 }
@@ -67,6 +69,7 @@ function renderChat({
   offersOpen = false,
   samplesOffered = false,
   scenarioOffered = false,
+  ceilingOffered = false,
   onShowOption = vi.fn(),
   termChips = { shorter: false, longer: false },
 }: Options = {}) {
@@ -82,6 +85,7 @@ function renderChat({
       offersOpen={offersOpen}
       samplesOffered={samplesOffered}
       scenarioOffered={scenarioOffered}
+      ceilingOffered={ceilingOffered}
       onShowOption={onShowOption}
       termChips={termChips}
     />,
@@ -485,6 +489,16 @@ test('the samples chip shows with a loan and a term and no offer, and fills the 
 test('no samples chip once an offer is saved or awaits', () => {
   renderChat({ offersOpen: true, samplesOffered: false })
   expect(chipLabels()).toEqual(['הצעה מגוף מלווה', 'פריים ומדדים'])
+})
+
+test('with no ceiling yet, a monthly payment chip sits beside the market chip and fills the input', async () => {
+  const { onSend } = renderChat({ ceilingOffered: true })
+  expect(chipLabels()).toEqual(['החזר חודשי', 'פריים ומדדים'])
+  await userEvent.click(screen.getByRole('button', { name: 'החזר חודשי' }))
+
+  expect(onSend).not.toHaveBeenCalled()
+  expect(screen.getByRole('textbox')).toHaveValue('ההחזר החודשי המקסימלי שלי הוא: ')
+  expect(screen.getByRole('textbox')).toHaveFocus()
 })
 
 test('the simulation chip shows between the offer and market chips, and fills the input', async () => {

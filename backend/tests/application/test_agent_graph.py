@@ -483,6 +483,7 @@ async def test_every_tool_the_system_prompt_names_is_bound(world: World) -> None
         "total_paid",
         "worst_past_payment",
         "peak_payment",
+        "next_step",
     }
     named_tools = (
         (identifiers - set(get_args(OptionSource)) - set(get_args(QuestionField)) - tool_fields)
@@ -939,6 +940,7 @@ async def test_ask_term_ends_the_turn(world: World) -> None:
                 "term_months": 24,
                 "first_payment": "1750.00",
                 "basis": {"kind": "first_payment_target", "amount": "1000", "fits": False},
+                "market": {"rate": "7.9", "month": "2026-08-01"},
             },
             "lead_in": None,
         }

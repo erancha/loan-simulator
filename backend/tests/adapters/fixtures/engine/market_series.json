@@ -293,5 +293,7 @@
       "month": "2026-09-01",
       "change_percent": "-0.5"
     }
-  ]
+  ],
+  "consumer_rate": "7.9",
+  "consumer_rate_month": "2026-08-01"
 }

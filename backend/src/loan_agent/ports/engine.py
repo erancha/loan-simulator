@@ -100,6 +100,10 @@ class MarketSeries:
     cpi_change: tuple[MarketPoint, ...]
     """Each month's change of the consumer price index, percent."""
     cpi_as_of: date
+    consumer_rate: Decimal
+    """The Bank of Israel's latest average rate on new household consumer loans, annual percent:
+    the fixed example track's rate, and the rate the prime example's margin is set from."""
+    consumer_rate_month: date
 
 
 @runtime_checkable

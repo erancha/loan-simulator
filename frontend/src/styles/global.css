@@ -576,6 +576,29 @@ fieldset.field.changed {
   margin-top: 8px;
 }
 
+/* The term card takes the conversation's whole width, not a reply's 80%, so the note beside its
+   confirm button has room. */
+.term-card {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+}
+
+/* On the term card's confirm row, where the person looks before confirming: a short note that
+   the card's figures are a calculation, not an offer. Its box sits at the row's far end, with as
+   much space between it and the button as the row allows, so it never reads as part of the
+   button; its lines read from the right like any Hebrew text. */
+.term-market {
+  flex: 0 1 auto;
+  max-width: 60%;
+  margin: 0;
+  margin-inline-start: auto;
+  color: var(--mute);
+  font-size: var(--fine-print);
+  text-align: start;
+  align-self: center;
+}
+
 /* A button's label stays on one line; a row too narrow for every button moves the last ones
    below the others instead. */
 .question-actions button {
@@ -841,6 +864,51 @@ fieldset.field.changed {
   color: var(--accent);
   font: inherit;
   cursor: pointer;
+}
+
+/* A control the page points to leads the eye to it: an arc in the accent sweeps its edge for
+   four seconds, then goes. The overlay is masked down to a two-pixel band over the border, so the
+   sweep never crosses the content, and takes no taps. The angle is a registered property so the
+   sweep can be animated at all. */
+@property --sweep {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.border-sweep {
+  position: relative;
+  --sweep-seconds: 4;
+}
+
+.border-sweep::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  padding: 2px;
+  border-radius: inherit;
+  opacity: 0;
+  pointer-events: none;
+  background: conic-gradient(from var(--sweep), transparent 70%, var(--accent));
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: border-sweep calc(var(--sweep-seconds) * 1s) linear;
+}
+
+@keyframes border-sweep {
+  from {
+    --sweep: 0deg;
+    opacity: 1;
+  }
+
+  85% {
+    opacity: 1;
+  }
+
+  to {
+    --sweep: calc(var(--sweep-seconds) * 1.4 * 360deg);
+    opacity: 0;
+  }
 }
 
 .sample-chip:hover:not(:disabled) {
@@ -1399,6 +1467,12 @@ button.primary:disabled,
   color: var(--mute);
   font: inherit;
   cursor: pointer;
+}
+
+/* A pane with nothing to show yet: its tab is greyed and takes no tap. */
+.tab-bar button:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .tab-bar button[aria-selected="true"] {

@@ -85,15 +85,17 @@ export function sendOpening(
   return apiPost(`/api/checks/${id}/opening`, { text, purpose, amount })
 }
 
+/** A line nothing answers (a skip of the ceiling question, the offer form's no-offer choice), as
+ * the person's message; the server stores it and answers nothing. */
+export function sendUnanswered(id: string, text: string): Promise<void> {
+  return apiPost(`/api/checks/${id}/unanswered`, { text })
+}
+
 /** The term confirmed on the term card, as the person's message. */
 export function sendTermConfirmation(id: string, text: string): Promise<void> {
   return apiPost(`/api/checks/${id}/term-confirmation`, { text })
 }
 
-/** The person's message for leaving the offer form, which the server answers with no model. */
-export function sendOfferSkip(id: string, text: string): Promise<void> {
-  return apiPost(`/api/checks/${id}/offer-skip`, { text })
-}
 
 /** Turns an awaiting offer into a saved offer by the reading the person confirms. */
 export function confirmReading(id: string, awaitingId: string, kind: ReadingKind): Promise<void> {

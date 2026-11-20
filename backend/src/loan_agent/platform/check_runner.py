@@ -16,8 +16,8 @@ Core building blocks:
 - CheckRunner.send_term_confirmation: records the line of a term the person confirmed; a check
   with no option and no awaiting offer gets the offer form with no model call, any other a model
   turn
-- CheckRunner.send_offer_skip: records the offer form's skip and invites a description of the
-  offer in words, with no model call
+- CheckRunner.send_unanswered: stores a line nothing answers (a skip of the ceiling question,
+  the offer form's no-offer choice) as the person's message, with no model call and no reply
 - CheckRunner.delete: removes an idle check, its conversation and all it produced
 - CheckRunner.clone: copies an idle check, its conversation and all it produced into a new check,
   and leaves the source a check.cloned event naming the copy
@@ -84,6 +84,7 @@ from loan_agent.application.check_tools import (
     ToolDeps,
     ToolError,
     english_words,
+    holds_option,
     scenario_offer_next,
 )
 from loan_agent.application.finances_saving import save_finances
@@ -144,15 +145,10 @@ OPENING_CARD_ANSWERED = (
     "The screen's opening card saved the loan, its purpose and amount, and showed the term "
     "card. The person's answer to that card arrives as the next message."
 )
-# The reply to the offer form's skip, which the conversation keeps as the model's own.
-DESCRIBE_THE_OFFER = (
-    "אפשר לתאר את ההצעה או ההצעות שקיבלת בתיבה למטה, במילים שלך: הסכום, מספר החודשים, הריבית "
-    "וההחזר החודשי, כמו שהגוף המלווה מסר."
-)
 # What the model's conversation records of the runner's question: the page words it itself.
 CEILING_ASKED = (
     "The screen asked the person for their payment ceiling (field payment_ceiling), with a skip "
-    "and a 'לא יודע/ת' choice; their answer arrives as the next message."
+    "and a 'תכנון ההחזר' choice for help working it out; their answer arrives as the next message."
 )
 # What the model's conversation records of the runner's scenario form, by the movement it offers.
 SCENARIO_OFFERED = (
@@ -304,7 +300,7 @@ class CheckRunner:
 
         async def choose_answer() -> None:
             nonlocal answer
-            if not await self._holds_option(check_id):
+            if not await holds_option(self._tool_deps, check_id):
                 answer = self._answer_offer_sample
 
         async def respond(user_id: str, check_id: str, text: str) -> None:
@@ -312,15 +308,17 @@ class CheckRunner:
 
         await self._start(user, check_id, text, respond, before=choose_answer)
 
-    async def send_offer_skip(self, user: User, check_id: str, text: str) -> None:
-        """The offer form's skip: a reply invites the person to describe the offer in their own
-        words, with no model call. It counts as a message and raises as send does."""
-        await self._start(user, check_id, text, self._answer_offer_skip)
+    async def send_unanswered(self, user: User, check_id: str, text: str) -> None:
+        """A line nothing answers, such as a skip of the ceiling question or the offer form's
+        no-offer choice: stored as the person's message, so the page shows it and closes its
+        question, and the person goes on as they choose. The model's conversation, which must end
+        on a model message, never holds it: the model reads the person's next message on its own.
+        It counts as a message and raises as send does."""
 
-    async def _holds_option(self, check_id: str) -> bool:
-        if await self._tool_deps.options.list(check_id):
-            return True
-        return bool(await self._tool_deps.awaiting.list(check_id))
+        async def answer(user_id: str, check_id: str, text: str) -> None:
+            await self._sink.emit(check_id, TURN_STATUS, IDLE)
+
+        await self._start(user, check_id, text, answer)
 
     async def clone(self, user: User, check_id: str) -> Check:
         """Raises CheckNotFoundError for an unknown check or another person's, and
@@ -623,12 +621,6 @@ class CheckRunner:
             return AIMessage(OFFER_FORM_SHOWN)
 
         await self._answer_without_model(user_id, check_id, text, "offer sample", reply)
-
-    async def _answer_offer_skip(self, user_id: str, check_id: str, text: str) -> None:
-        async def reply(tools: CheckTools) -> AIMessage:
-            return await self._say(check_id, DESCRIBE_THE_OFFER)
-
-        await self._answer_without_model(user_id, check_id, text, "offer skip", reply)
 
     async def _answer_market(self, user_id: str, check_id: str, text: str) -> None:
         async def reply(tools: CheckTools) -> AIMessage:

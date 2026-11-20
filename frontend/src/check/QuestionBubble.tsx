@@ -14,8 +14,8 @@ import {
   CEILING_LABEL,
   CLONE_CHOICE,
   confirmedTermLine,
-  DONT_KNOW,
   NOT_A_NUMBER,
+  NOT_AN_OFFER,
   PAYMENT_PLANNING,
   PURPOSE_CHOICES,
   questionHint,
@@ -25,6 +25,7 @@ import {
   skipLine,
   STAY_CHOICE,
   termBasisLine,
+  termMarketLine,
   TERM_BOX_LABEL,
   TERM_BOX_PLACEHOLDER,
   TERM_MAX_MONTHS,
@@ -88,6 +89,9 @@ interface Props {
   /** Resolves false when nothing was sent; rejects with an ApiException on a refused save. */
   onAnswer: (answer: Answer) => Promise<boolean>
   onSkip: (line: string) => Promise<boolean>
+  /** The offer form's no-offer choice, which points to the chat's examples and offer chips; null
+   * when the chat shows no examples chip. */
+  onNoOffer: (() => void) | null
   /** Clones the check and sends the copy the request the clone offer answers. */
   onClone: () => Promise<void>
 }
@@ -153,6 +157,7 @@ export function QuestionBubble(props: Props) {
         termMonths={question.term_months}
         firstPayment={question.first_payment}
         basis={question.basis}
+        market={question.market}
       />
     )
   }
@@ -166,7 +171,7 @@ export function QuestionBubble(props: Props) {
         question={question}
         live={props.live}
         onAnswer={props.onAnswer}
-        onSkip={props.onSkip}
+        onNoOffer={props.onNoOffer}
       />
     )
   }
@@ -210,7 +215,13 @@ function TermBubble({
   termMonths,
   firstPayment,
   basis,
-}: Props & { termMonths: number; firstPayment: string; basis: TermBasis | undefined }) {
+  market,
+}: Props & {
+  termMonths: number
+  firstPayment: string
+  basis: TermBasis | undefined
+  market: { rate: string; month: string } | undefined
+}) {
   const [termDraft, setTermDraft] = useState(String(termMonths))
   const [ceilingText, setCeilingText] = useState(() => ceilingDraft(ceiling))
   const [error, setError] = useState<string | null>(null)
@@ -268,7 +279,7 @@ function TermBubble({
   const termId = `${entry.id}-term`
   const ceilingId = `${entry.id}-ceiling`
   return (
-    <div className="bubble bubble-assistant bubble-question">
+    <div className="bubble bubble-assistant bubble-question term-card">
       {entry.leadIn !== null && <p className="question-lead-in">{entry.leadIn}</p>}
       <p className="question-label">{withValues(questionText(entry.question))}</p>
       {live && basis !== undefined && (
@@ -314,6 +325,12 @@ function TermBubble({
             <button type="submit" className="primary" disabled={busy}>
               {ANSWER}
             </button>
+            {market !== undefined && (
+              <p className="term-market">
+                <strong>{NOT_AN_OFFER}</strong>{' '}
+                {withValues(termMarketLine(market.rate, market.month))}
+              </p>
+            )}
           </div>
         </form>
       )}
@@ -550,9 +567,9 @@ function FieldBubble({
               <button
                 type="button"
                 disabled={busy}
-                onClick={() => void settle(() => onSkip(DONT_KNOW))}
+                onClick={() => void settle(() => onSkip(PAYMENT_PLANNING))}
               >
-                {DONT_KNOW}
+                {PAYMENT_PLANNING}
               </button>
             )}
           </div>

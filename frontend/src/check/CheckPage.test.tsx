@@ -7,6 +7,7 @@ import {
   assistantMessage,
   awaitingAvis,
   awaitingMaxShort,
+  ceilingSet,
   checkArchived,
   financesUpdated,
   loanSet,
@@ -28,7 +29,7 @@ import {
 import { restoreScrollIntoView, stubScrollIntoView } from '../test/scrollIntoView.ts'
 import type { AwaitingFocus } from './Chat.tsx'
 import { CheckPage } from './CheckPage.tsx'
-import { CONTINUE_TO_ANOTHER_OFFER, TO_CARD } from './copy.ts'
+import { CONTINUE_TO_ANOTHER_OFFER, NO_OFFER_YET, TO_CARD } from './copy.ts'
 import { wholeText } from '../test/wholeText.ts'
 
 const MESSAGES = '/api/checks/c1/messages'
@@ -41,7 +42,7 @@ const AWAITING = '/api/checks/c1/awaiting-offers/a-1'
 const MAX_AMOUNT = '/api/checks/c1/awaiting-offers/a-max/amount'
 const OPENING = '/api/checks/c1/opening'
 const TERM_CONFIRMATION = '/api/checks/c1/term-confirmation'
-const OFFER_SKIP = '/api/checks/c1/offer-skip'
+const UNANSWERED = '/api/checks/c1/unanswered'
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status })
@@ -62,7 +63,7 @@ function stubApi(
     if (path === TERM_CEILING && init?.method === 'POST') return Promise.resolve(onMessage())
     if (path === OPENING && init?.method === 'POST') return Promise.resolve(onMessage())
     if (path === TERM_CONFIRMATION && init?.method === 'POST') return Promise.resolve(onMessage())
-    if (path === OFFER_SKIP && init?.method === 'POST') return Promise.resolve(onMessage())
+    if (path === UNANSWERED && init?.method === 'POST') return Promise.resolve(onMessage())
     if (path === TERM && init?.method === 'PUT') return Promise.resolve(new Response(null, { status: 204 }))
     if (path === AWAITING && init?.method === 'PUT') return Promise.resolve(onReading())
     if (path === MAX_AMOUNT && init?.method === 'PUT') return Promise.resolve(onReading())
@@ -132,6 +133,7 @@ function renderPage(
       focusAwaiting={focusAwaiting}
       showFinances={showFinances}
       onTermCardLive={onTermCardLive}
+      onCardReady={vi.fn()}
       onShowCard={onShowCard}
     />,
   )
@@ -162,6 +164,16 @@ test('the examples chip shows only while the check holds no option and no awaiti
   expect(examplesChip()).toBeInTheDocument()
   emit(withSeq(optionPrime36, 6))
   expect(examplesChip()).not.toBeInTheDocument()
+})
+
+test('the monthly payment chip shows only while the check has no ceiling', () => {
+  stubApi()
+  renderPage()
+  const ceilingChip = () => screen.queryByRole('button', { name: 'החזר חודשי' })
+  emit(userMessage(1, 'רכב, 45,000 ₪'), loanSet, withSeq(termSet, 4), turnStatus(5, 'idle'))
+  expect(ceilingChip()).toBeInTheDocument()
+  emit(withSeq(ceilingSet, 6))
+  expect(ceilingChip()).not.toBeInTheDocument()
 })
 
 test('the simulation chip shows once the check holds an option, example or offer', () => {
@@ -846,22 +858,31 @@ test('a check with stored messages and no loan shows its conversation, not the c
 
 const OFFER_FORM: Question = { kind: 'offer', lender: null, tracks: [], max_term_months: null }
 
-test('דילוג on the offer form goes to its own route', async () => {
+test("the ceiling question's skip goes to its own route, which answers with no model", async () => {
   const fetchStub = stubApi()
   renderPage()
-  emit(userMessage(1, 'אישור: 60 חודשים'), withSeq(loanSet, 2), questionAsked(3, OFFER_FORM))
+  const ceiling: Question = { field: 'payment_ceiling', text: null, choices: null }
+  emit(userMessage(1, 'רכב, 45,000 ₪'), withSeq(loanSet, 2), questionAsked(3, ceiling))
   emit(turnStatus(4, 'idle'))
-  const form = document.querySelector<HTMLElement>('.bubble-question')!
-  await userEvent.click(within(form).getByRole('button', { name: 'דילוג' }))
-  await waitFor(() => expect(requests(fetchStub)).toEqual([`POST ${OFFER_SKIP} {"text":"דילוג"}`]))
+  const bubble = document.querySelector<HTMLElement>('.bubble-question')!
+  await userEvent.click(within(bubble).getByRole('button', { name: 'דילוג' }))
+  await waitFor(() => expect(requests(fetchStub)).toHaveLength(1))
+  expect(requests(fetchStub)[0]).toMatch(/^POST \/api\/checks\/c1\/unanswered /)
 })
 
-test('the word דילוג typed with no offer form open goes to the model', async () => {
+test("the offer form's no-offer choice shows as the person's line and sweeps both ways forward", async () => {
   const fetchStub = stubApi()
   renderPage()
-  emit(userMessage(1, 'רוצה לקנות רכב'), turnStatus(2, 'idle'))
-  await userEvent.type(screen.getByRole('textbox', { name: 'הודעה לעוזר' }), 'דילוג{Enter}')
-  await waitFor(() => expect(requests(fetchStub)).toEqual([`POST ${MESSAGES} {"text":"דילוג"}`]))
+  emit(userMessage(1, 'אישור: 60 חודשים'), withSeq(loanSet, 2), withSeq(termSet, 3))
+  emit(questionAsked(4, OFFER_FORM), turnStatus(5, 'idle'))
+  const form = document.querySelector<HTMLElement>('.bubble-question')!
+  await userEvent.click(within(form).getByRole('button', { name: NO_OFFER_YET }))
+
+  expect(screen.getByRole('button', { name: 'דוגמאות' })).toHaveClass('border-sweep')
+  expect(screen.getByRole('button', { name: 'הצעה מגוף מלווה' })).toHaveClass('border-sweep')
+  await waitFor(() =>
+    expect(requests(fetchStub)).toEqual([`POST ${UNANSWERED} ${JSON.stringify({ text: NO_OFFER_YET })}`]),
+  )
 })
 
 test('a link of the list brings its card into view', () => {

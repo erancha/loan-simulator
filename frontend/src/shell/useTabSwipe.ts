@@ -5,7 +5,8 @@
  * A swipe counts only while the tab bar shows, so a wide screen with all three columns ignores
  * it. Scrolling wins over switching: a mostly vertical move, and any move that starts inside
  * something that scrolls sideways (a scenario's table) or inside a text field, is left to the
- * browser, as is a move that starts at a screen edge, where the phone has its own back gesture.
+ * browser, as is a move that starts at a screen edge, where the phone has its own back gesture. A
+ * swipe passes over a pane whose tab is disabled.
  */
 import { useRef, type TouchEvent } from 'react'
 import { TABS } from './copy.ts'
@@ -18,9 +19,12 @@ const EDGE = 24
 /** A swipe travels at least this many times further sideways than up or down. */
 const SIDEWAYS_RATIO = 2
 
-function nextPane(pane: Pane, step: 1 | -1): Pane {
-  const index = TABS.findIndex((tab) => tab.pane === pane)
-  return TABS[(index + step + TABS.length) % TABS.length].pane
+function nextPane(pane: Pane, step: 1 | -1, disabled: readonly Pane[]): Pane {
+  let index = TABS.findIndex((tab) => tab.pane === pane)
+  do {
+    index = (index + step + TABS.length) % TABS.length
+  } while (disabled.includes(TABS[index].pane))
+  return TABS[index].pane
 }
 
 function tabBarShown(root: Element): boolean {
@@ -40,7 +44,11 @@ function scrollsSideways(target: Element, root: Element): boolean {
   return false
 }
 
-export function useTabSwipe(pane: Pane, onChange: (pane: Pane) => void) {
+export function useTabSwipe(
+  pane: Pane,
+  onChange: (pane: Pane) => void,
+  disabled: readonly Pane[],
+) {
   const start = useRef<{ x: number; y: number } | null>(null)
 
   function onTouchStart(event: TouchEvent<HTMLElement>) {
@@ -63,7 +71,7 @@ export function useTabSwipe(pane: Pane, onChange: (pane: Pane) => void) {
     const dy = clientY - from.y
     if (Math.abs(dx) < MIN_DISTANCE || Math.abs(dx) < SIDEWAYS_RATIO * Math.abs(dy)) return
     // The page reads right to left, so a finger moving right brings in the next tab, from the left.
-    onChange(nextPane(pane, dx > 0 ? 1 : -1))
+    onChange(nextPane(pane, dx > 0 ? 1 : -1, disabled))
   }
 
   return {

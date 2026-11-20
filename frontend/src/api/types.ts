@@ -247,6 +247,9 @@ export type Question =
       first_payment: string
       /** Absent from a term card stored before the basis was sent; the card then states none. */
       basis?: TermBasis
+      /** The Bank of Israel's average consumer loan rate the card was worked out at, and its
+       * month; absent from a term card stored before it was sent. */
+      market?: { rate: string; month: string }
     }
   | {
       kind: 'terms'
