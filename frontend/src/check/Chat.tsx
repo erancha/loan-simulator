@@ -185,14 +185,19 @@ export function Chat({
   }
   const locked = running || sending
   const archived = isArchived({ messages: entries })
-  // Market data is worth asking at any point and costs no model call, so that chip stays.
+  const liveEntry = entries.find((entry) => entry.id === liveQuestionId)
+  // A waiting offer form is the one step on screen: a chip that starts another step would leave
+  // the person between the form and a different request in the chat box. Market data is worth
+  // asking at any point and costs no model call, so that chip stays.
+  const offerFormWaits = liveEntry?.role === 'question' && liveEntry.question.kind === 'offer'
+  const stepsOffered = !offerFormWaits
   const samples = [
-    ...(samplesOffered ? [SAMPLES_CHIP] : []),
-    ...(termChips.shorter ? [SHORTER_TERMS_CHIP] : []),
-    ...(termChips.longer ? [LONGER_TERMS_CHIP] : []),
-    ...(offersOpen ? [OFFER_SAMPLE] : []),
-    ...(scenarioOffered ? [SCENARIO_SAMPLE] : []),
-    ...(ceilingOffered ? [CEILING_CHIP] : []),
+    ...(stepsOffered && samplesOffered ? [SAMPLES_CHIP] : []),
+    ...(stepsOffered && termChips.shorter ? [SHORTER_TERMS_CHIP] : []),
+    ...(stepsOffered && termChips.longer ? [LONGER_TERMS_CHIP] : []),
+    ...(stepsOffered && offersOpen ? [OFFER_SAMPLE] : []),
+    ...(stepsOffered && scenarioOffered ? [SCENARIO_SAMPLE] : []),
+    ...(stepsOffered && ceilingOffered ? [CEILING_CHIP] : []),
     MARKET_SAMPLE,
   ]
   const input = useRef<HTMLTextAreaElement>(null)
@@ -275,17 +280,31 @@ export function Chat({
 
   const fillMarketSample = () => fillInput(MARKET_SAMPLE.text)
 
+  // True from the offer form's no-offer choice until the chips it points to show; a send that
+  // does not go through leaves the form waiting and clears it.
+  const pointing = useRef(false)
+
   /** The offer form's no-offer button: the choice shows as the person's line, which nothing
-   * answers, and an arc sweeps the edges of the two ways forward, the examples chip and the offer
-   * chip, so the person decides which to take. The form offers the button only while the examples
-   * chip shows, and the offer chip shows whenever it does. */
-  function pointToWaysForward() {
+   * answers and which closes the form. */
+  function declineOfferForm() {
+    pointing.current = true
+    void onSkip(NO_OFFER_YET).then((sent) => {
+      if (!sent) pointing.current = false
+    })
+  }
+
+  // Once the declined form has closed and the chips are back, an arc sweeps the edges of the two
+  // ways forward, the examples chip and the offer chip, so the person decides which to take. The
+  // form offers the no-offer button only while the examples are offered, and the offer chip
+  // shows whenever they are.
+  useEffect(() => {
+    if (!pointing.current || offerFormWaits) return
+    pointing.current = false
     for (const chip of [samplesChip.current, offerChip.current]) {
       if (chip === null) throw new Error('the examples and offer chips are not both shown')
       drawAttention(chip)
     }
-    void onSkip(NO_OFFER_YET)
-  }
+  }, [offerFormWaits])
   // A card or a reply takes no answer while a turn runs or once the check is archived.
   const answerable = !running && !archived
 
@@ -310,6 +329,12 @@ export function Chat({
     } finally {
       setSending(false)
     }
+  }
+
+  /** A chip that sends at once starts a step of its own, so a sentence another chip left in the
+   * chat box no longer applies and clears once the chip's sentence is accepted. */
+  async function sendChip(text: string) {
+    if (await deliver(text)) setDraft('')
   }
 
   async function submit() {
@@ -345,7 +370,7 @@ export function Chat({
                   ceilingFormula={ceilingFormula}
                   onAnswer={onAnswer}
                   onSkip={onSkip}
-                  onNoOffer={samplesOffered ? pointToWaysForward : null}
+                  onNoOffer={samplesOffered ? declineOfferForm : null}
                   onClone={() => onClone(cloneLine(requestBefore(entries, index)))}
                 />
               ) : entry.role === 'chart' ? (
@@ -418,7 +443,7 @@ export function Chat({
               className="sample-chip"
               disabled={locked}
               onClick={() => {
-                if ('sendsAtOnce' in sample) void deliver(sample.text)
+                if ('sendsAtOnce' in sample) void sendChip(sample.text)
                 else fillInput(sample.text)
               }}
             >

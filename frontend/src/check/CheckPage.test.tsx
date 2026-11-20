@@ -870,19 +870,21 @@ test("the ceiling question's skip goes to its own route, which answers with no m
   expect(requests(fetchStub)[0]).toMatch(/^POST \/api\/checks\/c1\/unanswered /)
 })
 
-test("the offer form's no-offer choice shows as the person's line and sweeps both ways forward", async () => {
+test("the offer form's no-offer choice closes the form and sweeps both ways forward", async () => {
   const fetchStub = stubApi()
   renderPage()
   emit(userMessage(1, 'אישור: 60 חודשים'), withSeq(loanSet, 2), withSeq(termSet, 3))
   emit(questionAsked(4, OFFER_FORM), turnStatus(5, 'idle'))
+  expect(screen.queryByRole('button', { name: 'דוגמאות' })).toBeNull()
   const form = document.querySelector<HTMLElement>('.bubble-question')!
   await userEvent.click(within(form).getByRole('button', { name: NO_OFFER_YET }))
-
-  expect(screen.getByRole('button', { name: 'דוגמאות' })).toHaveClass('border-sweep')
-  expect(screen.getByRole('button', { name: 'הצעה מגוף מלווה' })).toHaveClass('border-sweep')
   await waitFor(() =>
     expect(requests(fetchStub)).toEqual([`POST ${UNANSWERED} ${JSON.stringify({ text: NO_OFFER_YET })}`]),
   )
+  emit(userMessage(6, NO_OFFER_YET))
+
+  expect(screen.getByRole('button', { name: 'דוגמאות' })).toHaveClass('border-sweep')
+  expect(screen.getByRole('button', { name: 'הצעה מגוף מלווה' })).toHaveClass('border-sweep')
 })
 
 test('a link of the list brings its card into view', () => {

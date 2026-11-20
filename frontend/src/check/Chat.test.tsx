@@ -486,6 +486,26 @@ test('the samples chip shows with a loan and a term and no offer, and fills the 
   expect(screen.getByRole('textbox')).toHaveFocus()
 })
 
+test('while the offer form waits, the market chip is the only chip', () => {
+  const form: QuestionEntry = {
+    id: 'q-3',
+    role: 'question',
+    question: { kind: 'offer', lender: null, tracks: [], max_term_months: null },
+    leadIn: null,
+    answered: false,
+  }
+  renderChat({
+    messages: [...exchange, form],
+    liveQuestionId: 'q-3',
+    offersOpen: true,
+    samplesOffered: true,
+    scenarioOffered: true,
+    ceilingOffered: true,
+    termChips: { shorter: true, longer: true },
+  })
+  expect(chipLabels()).toEqual(['פריים ומדדים'])
+})
+
 test('no samples chip once an offer is saved or awaits', () => {
   renderChat({ offersOpen: true, samplesOffered: false })
   expect(chipLabels()).toEqual(['הצעה מגוף מלווה', 'פריים ומדדים'])
@@ -533,6 +553,23 @@ test('the offer chip sends its sentence at once, which opens the empty offer for
 
   expect(onSend).toHaveBeenCalledExactlyOnceWith('קיבלתי הצעה להלוואה מגוף מלווה')
   expect(screen.getByRole('textbox')).toHaveValue('')
+})
+
+test('a chip that sends at once clears a sentence another chip left in the chat box', async () => {
+  const { onSend } = renderChat({ offersOpen: true, samplesOffered: true })
+  await userEvent.click(screen.getByRole('button', { name: 'דוגמאות' }))
+  await userEvent.click(screen.getByRole('button', { name: 'הצעה מגוף מלווה' }))
+
+  expect(onSend).toHaveBeenCalledExactlyOnceWith('קיבלתי הצעה להלוואה מגוף מלווה')
+  await waitFor(() => expect(screen.getByRole('textbox')).toHaveValue(''))
+})
+
+test('a refused chip send keeps the chat box as it was', async () => {
+  renderChat({ offersOpen: true, samplesOffered: true, onSend: vi.fn(() => Promise.resolve(false)) })
+  await userEvent.click(screen.getByRole('button', { name: 'דוגמאות' }))
+  await userEvent.click(screen.getByRole('button', { name: 'הצעה מגוף מלווה' }))
+
+  expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toContain('דוגמאות')
 })
 
 test('the market chip stays at every stage', () => {
