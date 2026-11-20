@@ -852,12 +852,12 @@ fieldset.field.changed {
 .chat-samples {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.32rem;
+  gap: 0.24rem;
   font-size: 0.68rem;
 }
 
 .sample-chip {
-  padding: 0.2rem 0.48rem;
+  padding: 0.2rem 0.3rem;
   border: 1px solid var(--accent-border);
   border-radius: 6px;
   background: var(--panel);
