@@ -841,7 +841,8 @@ test('once the check has events the card gives way to the conversation and its i
   emit(userMessage(1, 'רכב: הלוואה בסך 45,000 ₪'), turnStatus(2, 'running'))
   expect(screen.queryByText('פרטי ההלוואה')).not.toBeInTheDocument()
   expect(screen.getByRole('textbox', { name: 'הודעה לעוזר' })).toBeInTheDocument()
-  expect(screen.getByText('רכב: הלוואה בסך 45,000 ₪')).toBeInTheDocument()
+  // The chat shows the opening card's line as the person's sentence (spokenLine.ts).
+  expect(screen.getByText('אני רוצה הלוואה לרכב בסך 45,000 ₪.')).toBeInTheDocument()
 })
 
 test('a check with stored messages and no loan shows its conversation, not the card', () => {

@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { Chat } from './Chat.tsx'
-import { MARKET_SAMPLE, SHORTER_TERMS_CHIP, TO_CARD } from './copy.ts'
+import { answerLine, MARKET_SAMPLE, openingLine, SHORTER_TERMS_CHIP, TO_CARD } from './copy.ts'
 import {
   awaitingAvis,
   checkArchived,
@@ -92,6 +92,35 @@ function renderChat({
   )
   return { onSend, unmount }
 }
+
+test("a form's line shows as the person's sentence; what they typed shows as typed", () => {
+  renderChat({
+    messages: [
+      { id: 'u-1', role: 'user', text: openingLine('רכב', '45000'), complete: true },
+      { id: 'u-2', role: 'user', text: 'רוצה לקנות רכב', complete: true },
+    ],
+  })
+  expect(screen.getByText('אני רוצה הלוואה לרכב בסך 45,000 ₪.')).toHaveClass('bubble-user')
+  expect(screen.queryByText(openingLine('רכב', '45000'))).not.toBeInTheDocument()
+  expect(screen.getByText('רוצה לקנות רכב')).toHaveClass('bubble-user')
+})
+
+test("an answer to the agent's own question shows as the answer alone", () => {
+  const asked: QuestionEntry = {
+    id: 'q-1',
+    role: 'question',
+    question: { field: null, text: 'האם ההצעה צמודה למדד?', choices: ['כן', 'לא'] },
+    leadIn: null,
+    answered: true,
+  }
+  renderChat({
+    messages: [
+      asked,
+      { id: 'u-1', role: 'user', text: answerLine('האם ההצעה צמודה למדד?', 'כן'), complete: true },
+    ],
+  })
+  expect(screen.getByText('כן', { selector: '.bubble-user' })).toBeInTheDocument()
+})
 
 test('user and assistant bubbles sit on opposite sides', () => {
   renderChat()

@@ -532,6 +532,8 @@ export const OFFER_TRACKS_LABEL = 'המסלולים שהוצעו'
 export const OFFER_MONTHS_LABEL = 'לכמה חודשים לכל היותר?'
 export const OFFER_MONTHS_UNIT = 'חודשים'
 export const OFFER_LINKED = 'צמוד למדד'
+/** The same, said of a rate (ריבית), which Hebrew makes feminine. */
+export const LINKED_RATE = 'צמודה למדד'
 export const OFFER_ADD_TRACK = '+ מסלול נוסף'
 export const OFFER_REMOVE_TRACK = 'הסרת המסלול'
 export const OFFER_NOTE = 'ההחזר מחושב בתשלומים חודשיים שווים, על סכום ההלוואה שבבדיקה.'
@@ -588,8 +590,13 @@ export function offerLine(lender: string, tracks: OfferTrack[], months: number):
       `(${index + 1}) ${OFFER_KIND_LABEL[track.kind]} ${track.rate}%, ` +
       (track.linked ? OFFER_LINKED : `לא ${OFFER_LINKED}`),
   )
+  return offerLineOf(lender, listed.join(' '), String(months))
+}
+
+/** The offer form's line around its tracks, already written out. */
+export function offerLineOf(lender: string, tracks: string, months: string): string {
   return (
-    `קיבלתי הצעה. הגוף המלווה: ${lender}. ${listed.join(' ')}.` +
+    `קיבלתי הצעה. הגוף המלווה: ${lender}. ${tracks}.` +
     ` לתקופה של עד ${months} ${OFFER_MONTHS_UNIT}, בתשלומים חודשיים שווים.`
   )
 }
@@ -814,9 +821,9 @@ export function readingText(reading: Reading): string {
     case 'prime_total':
       return `ריבית כוללת ${rate}% היום (פריים ${marginText(primeSpread(reading))})`
     case 'fixed_unlinked':
-      return `ריבית קבועה ${about}${rate}%, לא צמודה למדד`
+      return `ריבית קבועה ${about}${rate}%, לא ${LINKED_RATE}`
     case 'fixed_linked':
-      return `ריבית קבועה ${about}${rate}%, צמודה למדד`
+      return `ריבית קבועה ${about}${rate}%, ${LINKED_RATE}`
   }
 }
 
@@ -919,7 +926,10 @@ export const readingsClosing = (lender: string) =>
   `${fromLender(lender)} אפשר לחזור לנקודה הזו מהעיגול הצהוב שליד הבדיקה.`
 
 /** The person's message for a confirmed reading; the agent's prompt reads its "אישור:". */
-export const confirmedReadingLine = (reading: Reading) => `אישור: ${readingText(reading)}`
+export const confirmedReadingLine = (reading: Reading) =>
+  confirmedReadingLineOf(readingText(reading))
+/** A confirmed reading's line around the reading, already written out. */
+export const confirmedReadingLineOf = (reading: string) => `אישור: ${reading}`
 
 /** A readings card's line once its awaiting offer became a saved offer by this reading. */
 export const settledReadingText = (reading: Reading) => `אושר: ${readingText(reading)}.`
@@ -938,7 +948,10 @@ export const NOT_COVERED = 'לא'
 /** The person's message once the lender lends the check's loan on the same terms; the agent's
  * prompt reads its "אישור:" and "באותם תנאים". */
 export const amountCoveredLine = (lender: string, loan: string, reading: Reading) =>
-  `אישור: ${formatShekels(loan)} באותם תנאים אצל ${lender}, ${readingText(reading)}`
+  amountCoveredLineOf(lender, formatShekels(loan), readingText(reading))
+/** The covered amount's line around its amount and reading, already written out. */
+export const amountCoveredLineOf = (lender: string, loan: string, reading: string) =>
+  `אישור: ${loan} באותם תנאים אצל ${lender}, ${reading}`
 
 /** The person's message once the lender does not lend the check's loan; the agent's prompt
  * reads its "לא: אין הצעה של". */
@@ -955,3 +968,53 @@ export const awaitingNote = (lender: string) =>
   `${lender}: ממתינה לבירור סוג ההלוואה, לא נכללת בהשוואה`
 export const shortAwaitingNote = (lender: string) =>
   `${lender}: ממתינה לתשובה על סכום ההלוואה, לא נכללת בהשוואה`
+
+/** How many tracks an offer of two or more names, as the spoken offer says it. */
+const TRACK_COUNT: Record<number, string> = { 2: 'בשני', 3: 'בשלושה', 4: 'בארבעה' }
+
+/**
+ * The sentences the chat shows in place of the lines forms send in the person's name
+ * (spokenLine.ts); the stored line is what the agent reads. They are in the first person, in
+ * words that suit a man and a woman alike, and take their values already written out.
+ */
+export const SPOKEN = {
+  opening: (purpose: string, amount: string) =>
+    purpose === GENERAL_PURPOSE
+      ? `אני רוצה הלוואה כללית בסך ${amount}.`
+      : `אני רוצה הלוואה ל${purpose} בסך ${amount}.`,
+  ceiling: (amount: string) => `אוכל להחזיר עד ${amount} בחודש.`,
+  term: (term: string) => `מתאים לי: ${term}.`,
+  termWithCeiling: (term: string, amount: string) =>
+    `מתאים לי: ${term}, עם החזר חודשי של עד ${amount}.`,
+  purpose: (purpose: string) => `אני רוצה לקנות ${purpose}.`,
+  amount: (amount: string) => `אני רוצה ללוות ${amount}.`,
+  ownCapital: (amount: string) => `מהכסף שכבר יש לי אשלם ${amount}.`,
+  income: (amount: string) => `ההכנסה הקבועה שלי היא ${amount} בחודש, נטו.`,
+  expenses: (amount: string) => `ההוצאות הקבועות שלי הן ${amount} בחודש.`,
+  skipped: 'נדלג על זה בינתיים.',
+  /** Key: a data panel field's label; value: the field named with "the". */
+  updatedField: { [INCOME_LABEL]: 'ההכנסה הקבועה', [EXPENSES_LABEL]: 'ההוצאות הקבועות' } as Record<
+    string,
+    string
+  >,
+  updated: (field: string, amount: string) => `עדכנתי את ${field} ל-${amount}.`,
+  /** A fixed rate's linkage in the feminine its noun takes; a prime track keeps the form's own. */
+  track: (track: string) =>
+    track.startsWith(OFFER_KIND_LABEL.fixed) ? track.replace(OFFER_LINKED, LINKED_RATE) : track,
+  offer: (lender: string, tracks: string[], months: string) => {
+    const period = `לעד ${months} ${OFFER_MONTHS_UNIT} בתשלומים חודשיים שווים`
+    if (tracks.length === 1) return `קיבלתי הצעה ${fromLender(lender)}: ${tracks[0]}, ${period}.`
+    const count = TRACK_COUNT[tracks.length]
+    if (count === undefined) throw new Error(`an offer of ${tracks.length} tracks has no wording`)
+    return `קיבלתי הצעה ${fromLender(lender)}, ${period}, ${count} מסלולים: ${tracks.join('; ')}.`
+  },
+  paymentPlanning: 'אשמח לעזרה בתכנון ההחזר החודשי.',
+  readingConfirmed: (reading: string) => `כן, זו ההצעה: ${reading}.`,
+  anotherOffer: 'בינתיים אזין הצעה נוספת, עד שתגיע תשובה.',
+  covered: (lender: string, amount: string, reading: string) =>
+    `${lender} מציעים גם ${amount} באותם תנאים: ${reading}.`,
+  declined: (lender: string, amount: string) => `${lender} לא מציעים ${amount}.`,
+  clone: (request: string) => `נבדוק בנפרד: ${request}`,
+  stay: 'נעדכן את הבדיקה הזאת.',
+  scenario: (subject: string, rise: string) => `מה יקרה אם ${subject} יעלה ${rise}% בשנה?`,
+}

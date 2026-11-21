@@ -334,6 +334,10 @@ one or on an archived check, the list of links the bubble opens and closes, and 
 its check on the conversation and names the card to focus, on every tap. Its delete tests, on
 archived checks, the only ones with a delete icon, prove the confirmation and its cancel, that the
 newest check left opens, that the last one leaves the empty state, and the refusal during a reply.
+`check/spokenLine.test.ts` proves that each form's line, written by its own composer, shows as its
+agreed sentence, that an answer to the agent's own question shows as the answer alone, and that
+typed text shows as typed; `check/Chat.test.tsx` proves the chat draws the person's bubbles that
+way.
 `auth/SignInButton.test.tsx` proves that the sign-in explanation stays closed until asked for, opens
 with its points and its new-tab link to Google, closes from its toggle or its ✕, which returns focus
 to the toggle, frames the sign-in area only while open, and keeps a refused sign-in right under the

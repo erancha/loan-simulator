@@ -136,6 +136,14 @@ on any call returns the page to sign-in. The browser retries a dropped stream by
 it for good on a response it will not retry; the page treats any such close, a 401 among them, as
 signed out.
 
+A form sends a labelled line in the person's name ("רכב: הלוואה בסך 45,000 ₪", "אישור: 48 חודשים"),
+which is what the agent reads. The conversation shows it as the sentence the person could have typed
+("אני רוצה הלוואה לרכב בסך 45,000 ₪."), through `check/spokenLine.ts`. The page's code, not the
+model, recognises a line: each pattern comes from the composer in `check/copy.ts` that writes it,
+called with sample values, so the two cannot drift apart. A stored message keeps no mark of the form
+that sent it, so the line's shape identifies it, in old checks and in the demo's recording alike; an
+answer to the agent's own question shows as the answer alone, and anything typed shows as typed.
+
 The figures belong to the check, so they come with its stream: each `finances.updated` carries
 both figures and the ceiling after the save, and the figures panel (`check/FinancesPanel.tsx`)
 renders from the reducer's state. It shows net fixed income and fixed expenses, each with its

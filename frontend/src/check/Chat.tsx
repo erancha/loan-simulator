@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { FormEvent, KeyboardEvent, ReactNode } from 'react'
-import type { AwaitingOffer, Finances, Reading } from '../api/types.ts'
+import type { AwaitingOffer, Finances, Question, Reading } from '../api/types.ts'
 import {
   INPUT_LABEL, INPUT_PLACEHOLDER,
   questionText,
@@ -26,6 +26,7 @@ import type {
   ChatMessage,
   CheckState,
   IdentifiedEntry,
+  QuestionEntry,
   ReadingsEntry,
   UnrecognizedEntry,
 } from './events.ts'
@@ -38,6 +39,7 @@ import { IdentifiedBubble, UnrecognizedBubble } from './OfferReplies.tsx'
 import { QuestionBubble } from './QuestionBubble.tsx'
 import type { Answer } from './QuestionBubble.tsx'
 import { ReadingsCard } from './ReadingsCard.tsx'
+import { spokenLine } from './spokenLine.ts'
 
 /** How far from the end of the log (px) a reader still counts as following the conversation. */
 const FOLLOW_DISTANCE = 80
@@ -111,6 +113,14 @@ function requestBefore(entries: ChatEntry[], index: number): string {
     .findLast((entry): entry is ChatMessage => entry.role === 'user')
   if (request === undefined) throw new Error('a question is asked after a message of the person')
   return request.text
+}
+
+/** The latest question above the entry at index, which a person's answer line names. */
+function askedBefore(entries: ChatEntry[], index: number): Question | null {
+  const asked = entries
+    .slice(0, index)
+    .findLast((entry): entry is QuestionEntry => entry.role === 'question')
+  return asked === undefined ? null : asked.question
 }
 
 type OfferReply = ReadingsEntry | IdentifiedEntry | UnrecognizedEntry
@@ -401,7 +411,9 @@ export function Chat({
                 <UnrecognizedBubble />
               ) : (
                 <p className={`bubble bubble-${entry.role}`}>
-                  {entry.role === 'assistant' ? withValues(withLastMonth(entry.text, today)) : entry.text}
+                  {entry.role === 'assistant'
+                    ? withValues(withLastMonth(entry.text, today))
+                    : spokenLine(entry.text, askedBefore(entries, index))}
                   {!entry.complete && <span className="caret" aria-hidden="true" />}
                 </p>
               )}
