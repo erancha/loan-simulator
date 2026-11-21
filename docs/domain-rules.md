@@ -1,4 +1,4 @@
-# Calculations
+# Domain rules
 
 This document details the formulas and policy numbers behind the loan engine's part of
 [Architecture](architecture.md#the-loan-engine).
@@ -65,6 +65,24 @@ value: the fixed rate, or the current Bank of Israel rate + 1.5 + the track's sp
 track. The spread runs from -1.5, prime minus its whole margin, which leaves the Bank of Israel rate
 itself, up to 20. A CPI-linked track is indexed by 2% a year, `(1.02)^(1/12) - 1` per month, the
 middle of the Bank of Israel's 1-3% inflation target.
+
+The base path is the engine's default scenario (`DEFAULT_SCENARIO`): the CPI rising 2% a year and
+prime unchanged. `price(track, history, scenario)` builds the path of any scenario the same way.
+
+### Scenarios
+
+A scenario is a future the person names, held for the whole loan: `cpi_per_year`, how much the CPI
+rises each year in percent (−5 to 20), and `prime_per_year`, how much prime rises each year in
+percentage points (−5 to 5). A value the person does not name keeps the default. The CPI's yearly
+rise is indexed monthly, `(1 + cpi_per_year/100)^(1/12) - 1`; the Bank of Israel rate, and prime
+with it, moves by a twelfth of `prime_per_year` more each month from today's, floored at zero as
+in a window. So a CPI rise moves a linked track, a prime rise a prime track, and a fixed unlinked
+track moves with neither. A movement may instead be given as the last N years (1 to 10,
+`cpi_like_last_years`, `prime_like_last_years`), and `resolved` turns it into its yearly figure
+from the latest history: the CPI's compounded rise over those months, taken to a yearly rate, and
+prime's change over them divided by the years, each to a hundredth. A scenario is never replayed
+against the windows: `simulate_scenario` prices the scenario alone, and `simulate_loan` keeps the
+base path and the windows.
 
 ### Windows
 

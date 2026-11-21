@@ -1,4 +1,4 @@
-"""Modelling assumptions that are choices, not market data; docs/calculations.md gives reasons."""
+"""Modelling assumptions that are choices, not market data; docs/domain-rules.md gives reasons."""
 
 from decimal import Decimal
 

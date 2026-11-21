@@ -58,10 +58,8 @@ variable rates.
 
 ## Refresh and fallback
 
-`refresh(store, client)` fetches all three series, builds the history and saves it. The service
-calls it before it listens and then once a day; the history the tools read is replaced after each
-daily refresh. A daily refresh that raises ends the process, so the engine never goes on serving
-data it can no longer update.
+`refresh(store, client)` fetches all three series, builds the history and saves it; when it runs
+is in [Workers' responsibilities and flows](workers.md#_refresh_daily).
 
 If any fetch fails (an HTTP error, or a response that does not parse) or the series do not align
 into a history (`series_alignment`), `refresh` logs a warning naming the failed series and the

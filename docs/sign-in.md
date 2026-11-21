@@ -1,7 +1,7 @@
 # Sign-in
 
-People sign in to the loan agent with a Google account, and there is no other way in. Every piece of
-data belongs to the person who signed in: their checks, the figures held in them and the
+People sign in to the loan simulator with a Google account, and there is no other way in. Every
+piece of data belongs to the person who signed in: their checks, the figures held in them and the
 conversations on them.
 This page explains how sign-in works and how to set up the Google side, behind
 [Architecture](architecture.md#the-agent). The "התחברות עם Google" button is on the page
@@ -33,8 +33,8 @@ This page explains how sign-in works and how to set up the Google side, behind
 
 The token goes no further than the verifier. It never enters the conversation state saved in
 Postgres (a test scans every saved blob for it), and the loan engine never sees it: the agent
-presents only the engine's own bearer token. `GET /api/auth/config` answers the public client id
-for the page, `GET /api/auth/me` the signed-in person, and `DELETE /api/auth/session` signs out.
+presents only the engine's own bearer token. The other sign-in routes are in
+[API endpoints](api.md#sign-in).
 
 Tests sign their own tokens: `AUTH_PUBLIC_KEY_FILE` points the verifier at a test key pair's
 public half instead of Google's keys, so no test reaches Google.
@@ -53,9 +53,9 @@ The app needs its own Google Cloud project with one OAuth client.
    email; then the audience, where you choose **External**; then a contact email and your
    agreement to Google's policy. **Create** finishes it. The app is now in **Testing**, which is
    where it stays: no verification, no publishing.
-3. **Add the test users.** Open **Audience** and, under **Test users**, add the Google accounts
-   of the people who may use the app. **Data Access** stays empty: the agent needs no scope
-   beyond the defaults.
+3. **Leave the scopes as they are.** **Data Access** stays empty: the agent asks only for the
+   name and email, which need no scope beyond the defaults. **Audience → Test users** can stay
+   empty too, since it does not limit this sign-in (see [Who may sign in](#who-may-sign-in)).
 4. **Create the client.** Open **Clients → Create client**, choose **Web application**, give it
    a name, and under **Authorized JavaScript origins** add `http://localhost:8101`, the agent's
    address at `AGENT_HOST_PORT`. If you change that port in `scripts/lib/stack-params.sh`,
@@ -83,8 +83,9 @@ and `https://<id>.cloudfront.net/` as a further authorized redirect URI of the s
 
 ## Who may sign in
 
-The list of test users on the OAuth app is the access list: while an app is in testing mode,
-Google signs in nobody else and shows an "access blocked" page. There is no allow-list in the
-agent's code, so adding or removing a person is done in the console, under **Audience → Test
-users**. Google limits a testing app to 100 test users. A published app admits any Google
-account, and the agent accepts whoever Google signs in, so the app stays in testing mode.
+Any Google account can sign in. The page asks Google only for the person's name and email, and for
+that Google signs in any account even while the OAuth app is in testing mode: the app's test users
+do not limit it. The agent has no allow-list of its own, so whoever Google signs in can open checks;
+what limits a person is the message cap
+([Turns and the turn cap](architecture/agent.md#turns-and-the-turn-cap)).
+[ADR 0015](adr/0015-any-google-account-can-sign-in.md) records the decision to keep it so.

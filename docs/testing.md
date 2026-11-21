@@ -29,7 +29,7 @@ pointing inwards and the loan arithmetic off the affordability module.
 CPI, the historical replay and its worst window, the payment ceiling, and the term and loan
 searches (the first-payment proposal, the comfortable terms with and without `any_track`, an
 offer's own maximum, the largest loan, and the 84-month limit), each against hand-computed figures
-from [calculations.md](calculations.md); the searches price the two unlinked examples, never the
+from [domain-rules.md](domain-rules.md); the searches price the two unlinked examples, never the
 pension fund's linked one. The readings of an offer are proved on a flat history
 whose prime is 4.75%: each reading of a stated number with its first payment, the total-rate
 reading only when asked, Max's prime + 6.45% at 934.01 ₪, the rate a payment alone gives
@@ -134,7 +134,8 @@ never reaches a checkpoint (a test scans every saved blob). For ask it proves th
 after a successful ask, even beside a failed sibling call, and that each refusal returns to the
 model as an error result: two asks in one message, a question with both or neither of field and
 text, an empty question, a single choice. For the recommendation section it proves that one written
-without its tool is discarded and redone once, and that a call from an earlier turn does not count.
+without its tool is discarded and redone once, and that a call from an earlier turn does not count;
+a reply promising results later is rewritten once the same way.
 For the state block it proves that a figure the page saved reaches the model without a tool call,
 that the block is built fresh at each model call within a turn and is absent from the checkpoint,
 and that `ask_term` ends the turn like `ask`, refused beside a second question. For `read_offer`
@@ -153,33 +154,33 @@ and removing one leaves the others. The domain tests prove a reading's JSON enco
 refusal of an unknown reading kind, and of an awaiting offer with a time that is not UTC.
 
 **Platform** tests drive the HTTP API through the real app with fake infrastructure: sign-in and the
-401 answer on every route outside a short public list and the 404 answers, the check routes and `PUT
-/api/checks/{id}/finances` and `/term` (with and without a ceiling) with their 404, 409 and 422
-answers, the event stream's replay, each stored frame's time, Last-Event-ID resume and its dropping
-of fragments the replay already sent complete, the turn cap with its per-person overrides, the
-conflict answers, deleting a check with its conversation, which gives no messages back under the
+401 answer on every route outside a short public list and the 404 answers, the check routes and
+`PUT /api/checks/{check_id}/finances` and `/term` (with and without a ceiling) with their 404, 409
+and 422 answers, the event stream's replay, each stored frame's time, Last-Event-ID resume and its
+dropping of fragments the replay already sent complete, the turn cap with its per-person overrides,
+the conflict answers, deleting a check with its conversation, which gives no messages back under the
 cap, cloning a check with its log and conversation, whose copied messages use none of the cap, with
 the handoff event left on the source and not copied to a later clone, the refusal of a message to an
 archived check, archiving by the person and restoring, the runner's streaming and failure events, a
 turn after a model failure, the turn step limit, a turn ended at the third identical tool call, the
-market-data sample answered from the data with no model call and kept in the conversation, the
-offer chip answered with the offer form and no model call and recorded for the next turn, the
-ceiling typed on the term card saved with a card for it and no model call, the ceiling question the
-runner asks once after a recommendation without a ceiling, and not over a question of the model's
-or an offer's readings card or unrecognized offer,
-restart recovery, settings validation, and that the migration builds the tables, `awaiting_offers`
-among them, matches the ORM, downgrades, and refuses to run its loan-first step on a database that
-still holds checks. The runner's three replies without the model are proved with their routes:
-the opening card saves the loan and shows the term card, while a refused loan records nothing and
-answers 422 and a check that holds a loan is refused; a confirmed term opens the offer form for a
-check with no option and runs the model for one with examples, a saved or an awaiting offer; the
-form's skip is answered with the invitation to describe the offer; each counts as a message under
-the send guards, and another person's check answers 404. The confirmation route saves the chosen reading as
-the offer before any message, and answers 404 for an unknown offer, a second confirmation or
-another person's check, 409 on an archived check or while a turn runs, and 422 for a reading the
-offer lacks. The checks list carries each check's awaiting offers, oldest first, and whether its
-recommendation compares more than one option: not with one offer alone or a second option that is
-an example of another term, but with a second offer or an example of the check's term.
+market-data sample answered from the data with no model call and kept in the conversation, the offer
+chip answered with the offer form and no model call and recorded for the next turn, the ceiling
+typed on the term card saved with a card for it and no model call, the ceiling question the runner
+asks once after a recommendation without a ceiling, and not over a question of the model's or an
+offer's readings card or unrecognized offer, restart recovery, settings validation, and that the
+migration builds the tables, `awaiting_offers` among them, matches the ORM, downgrades, and refuses
+to run its loan-first step on a database that still holds checks. The runner's three replies without
+the model are proved with their routes: the opening card saves the loan and shows the term card,
+while a refused loan records nothing and answers 422 and a check that holds a loan is refused; a
+confirmed term opens the offer form for a check with no option and runs the model for one with
+examples, a saved or an awaiting offer; the form has no skip route; each counts as a message under
+the send guards, and another person's check answers 404.
+The confirmation route saves the chosen reading as the offer before any message, and answers 404 for
+an unknown offer, a second confirmation or another person's check, 409 on an archived check or while
+a turn runs, and 422 for a reading the offer lacks. The checks list carries each check's awaiting
+offers, oldest first, and whether its recommendation compares more than one option: not with one
+offer alone or a second option that is an example of another term, but with a second offer or an
+example of the check's term.
 
 **Deployment files** are checked without Docker, as for the engine: each service's
 `test_settings_files.py` requires the settings files to document its keys and nothing else
@@ -188,6 +189,10 @@ an example of another term, but with a second offer or an example of the check's
 `backend/tests/test_compose.py` requires every published port to bind to `127.0.0.1` through its
 variable, the agent to wait for the database, the migration and the engine, and each container to
 receive only the keys it reads.
+
+**The API document** is checked against the router: `tests/platform/api/test_api_doc.py` reads
+every route the app declares and fails, naming the route, when [API endpoints](api.md) leaves one
+out or names one the app does not declare.
 
 ## Frontend
 
@@ -240,7 +245,8 @@ that a question is its own turn with a control only while live, that a question 
 conversation is announced with its lead-in and label, that the "דוגמאות" chip shows with a loan, a
 term and no offer and fills the chat box, and goes once an offer is saved or awaits, that the offer
 chip shows once the check has a loan and a term, that the terms chips show as offered and send
-their sentence at once, that the market chip stays at every stage, and
+their sentence at once, that the market chip stays at every stage and is the only chip while the
+offer form waits, and
 that a card the checks list asks to focus is brought into view and highlighted, again on a second
 request, while the log follows the end again once the person scrolls or sends.
 `serverSamples.test.ts` proves which wordings count as the market-data sample and as the offer
@@ -248,18 +254,18 @@ chip's sentence.
 
 **Question bubble.** `QuestionBubble.test.tsx` proves each control and the line it sends: a money
 answer saved and sent, a loan amount sent without a save, purpose choices with no text box, free
-questions with and without choices, the skip line, and the ceiling question's "לא יודע/ת". The term
-card shows its term and first payment, starts its two boxes at the proposed term and the check's
-ceiling, confirms the term in its box with a new ceiling only when one was typed, asks for a card
-from a new ceiling when the term is left as proposed, refuses a term outside 6 to 84 months or a
-cleared ceiling, and has one button. It is titled "חישוב ראשוני" only on the basis of the assumed
-payment, and "אפשר לקצר" with what it saves on a suggested shorter term, with the line on its
-basis, a card stored without a basis shows its term line alone, its ceiling box has no placeholder
-and may stay empty, and its "תכנון החזר חודשי" link sends its sentence and saves nothing. The terms
-card lists each term with its payment today and in the worst window, marks a worst payment above
-the ceiling while keeping its term a choice, confirms a chosen term as the term card does, and
-keeps its table without buttons once answered. It also proves that a refused save or a non-number
-keeps the question open with its reason, and that a closed bubble shows only the question.
+questions with and without choices, the skip line, and the ceiling question's "תכנון ההחזר". The
+term card shows its term and first payment, starts its two boxes at the proposed term and the
+check's ceiling, confirms the term in its box with a new ceiling only when one was typed, asks for a
+card from a new ceiling when the term is left as proposed, refuses a term outside 6 to 84 months or
+a cleared ceiling, and has one button. It is titled "חישוב ראשוני" only on the basis of the assumed
+payment, and "אפשר לקצר" with what it saves on a suggested shorter term, with the line on its basis,
+a card stored without a basis shows its term line alone, its ceiling box has no placeholder and may
+stay empty, and its "תכנון ההחזר" link sends its sentence and saves nothing. The terms card lists
+each term with its payment today and in the worst window, marks a worst payment above the ceiling
+while keeping its term a choice, confirms a chosen term as the term card does, and keeps its table
+without buttons once answered. It also proves that a refused save or a non-number keeps the question
+open with its reason, and that a closed bubble shows only the question.
 
 **Check page.** `CheckPage.test.tsx` replays a recorded conversation into all three panes and proves
 sending, the cap notice with the local time on a 429, the silent 409, the clone offer's two choices,
@@ -297,12 +303,12 @@ likely reading chosen; that with no likely reading none is chosen and אישור
 while one that went through keeps it locked until the offer settles; the copy button, which works
 while a turn runs; that המשך להצעה נוספת עד לבירור השאלה continues and leaves the card open; the
 market chip; a settled card showing the confirmed reading and no buttons; and that an offer emitted
-again, or with its readings narrowed, starts its choice from its new likely reading. `copy.test.ts` proves the
-wording: the identified reply with the prime, its date, the total and the payment, and the line for
-an offer quoted on another amount; each reading by its kind; the question for the lender; what
-"קבוע" and "צמוד" suggest; and the equivalent rate. `Chat.test.tsx` proves that a readings card
-stays answerable after later messages, the identified reply and the unrecognized one, and
-`CheckPage.test.tsx` that a confirmed reading is saved before its line, a refused one sends no
+again, or with its readings narrowed, starts its choice from its new likely reading. `copy.test.ts`
+proves the wording: the identified reply with the prime, its date, the total and the payment, and
+the line for an offer quoted on another amount; each reading by its kind; the question for the
+lender; what "קבוע" and "צמוד" suggest; and the equivalent rate. `Chat.test.tsx` proves that a
+readings card stays answerable after later messages, the identified reply and the unrecognized one,
+and `CheckPage.test.tsx` that a confirmed reading is saved before its line, a refused one sends no
 line, and continuing asks for the offer form.
 
 **Offer form.** `OfferForm.test.tsx` proves the message the form words from a lender, its tracks

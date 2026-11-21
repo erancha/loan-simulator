@@ -7,7 +7,7 @@ describes what the scripts run. Each script's header comment is its full documen
 
 **Contents:** [Working copy location](#working-copy-location) · [Frontend](#frontend) ·
 [Configuration](#configuration) · [Backend tests](#backend-tests) ·
-[Deployment scripts (scripts/)](#deployment-scripts-scripts) ·
+[Deployment scripts (scripts/)](#deployment-scripts-scripts) · [The EC2 stack](#the-ec2-stack) ·
 [The preview on EC2](#the-preview-on-ec2) · [Addresses](#addresses) ·
 [Try the engine with MCP Inspector](#try-the-engine-with-mcp-inspector)
 
@@ -38,7 +38,8 @@ it first on every run, and stops with a list of every setting it needs that is s
   `init-env.sh`, the database URL built from them, and the model provider's API key.
 - `params.sh` — this deployment's own settings that are no secret: `LLM_MODEL`,
   `GOOGLE_CLIENT_ID` ([Sign-in](sign-in.md) sets up the Google client), the per-person
-  message limits and the license contact.
+  message limits, the retry model with the people allowed it (`LLM_RETRY_MODEL`,
+  `LLM_RETRY_EMAILS`) and the license contact.
 - `aws-config.sh` — the access key pair and region of the AWS account `deploy.sh --ec2`
   deploys to; a machine that deploys only locally leaves it unfilled.
 
@@ -47,6 +48,15 @@ ports, the database name and the addresses built from them. The agent refuses to
 `LLM_MODEL`, `GOOGLE_CLIENT_ID` or `LLM_API_KEY` is blank. An edit to any of the three files
 takes a `deploy.sh` run.
 
+The engine's keys are `ENGINE_`-prefixed, the agent's are not. Compose hands each container only
+the keys it reads, listed once per service in `docker-compose.yml`, so the engine never receives
+the agent's model key or database password. A missing or malformed required setting stops
+startup, and a blank value counts as missing. Each key is explained once, in `stack-params.sh`
+or in the `.example.sh` beside a gitignored file; `mcp-server/tests/test_settings_files.py` and
+`backend/tests/test_settings_files.py` fail when the files and the settings differ, each owning
+its service's keys, and each service's `test_compose.py` fails when its container receives a key
+it does not read. `ENGINE_BEARER_TOKEN` is defined once and read by both services.
+
 A script that loads a settings file first stops if git would track it, or a tracked file holds
 one of its secrets or email addresses, the license contact of `params.sh` excepted. It also
 sets `core.hooksPath` to `.githooks`, whose `pre-commit` hook makes the same check on every
@@ -54,9 +64,9 @@ commit's staged changes.
 
 The scripts export the three files into their shell before calling Compose, so a bare
 `docker compose` call has no settings. The files hold the host forms of `DATABASE_URL` and
-`ENGINE_URL`; Compose overrides both with the in-network addresses. Host commands (pytest,
-uvicorn) run from the repo root, because the agent reads the settings files by their path from
-the working directory.
+`ENGINE_URL`; Compose overrides both with the in-network addresses (`db:<DB_PORT>`,
+`engine:<ENGINE_PORT>`). Host commands (pytest, uvicorn) run from the repo root, because the
+agent reads the settings files by their path from the working directory.
 
 ## Backend tests
 
@@ -77,25 +87,16 @@ Each project's `tests/test_requirements_lock.py` fails until its lock matches it
 Docker runs the stack; `deploy.sh` and `docker-helper.sh` stop when it is not reachable.
 
 - [`deploy.sh`](../scripts/deploy.sh) — builds the images, starts Postgres (with its schema
-  migration), the engine and the agent in Docker, and returns once the agent answers. Then open
-  http://localhost:8101, sign in with a Google account listed as a test user, and start a check.
+  migration), the engine and the agent in Docker, and returns once the engine and the agent
+  answer. Then open http://localhost:8101, sign in with a Google account,
+  and start a check.
 - `deploy.sh --ec2` — deploys to one EC2 instance in the account of `aws-config.sh`, and needs
   the AWS CLI, `ssh` and `curl`. It creates or updates the CloudFormation stack of
   [`template-ec2.yaml`](../scripts/template-ec2.yaml), builds the images here for ARM, loads them
   into the instance's Docker daemon over SSH and starts the stack there, and prints the
   CloudFront address to open and to register with Google
-  ([Sign-in](sign-in.md#setting-up-google)). The git branch selects the stack: `main` deploys
-  `loan-simulator`, any other branch `loan-simulator-fb`; an exported `STACK_NAME` wins. The
-  stack is a host, with an instance of its own, while `EC2_HOST_STACK` of `params.sh` is blank;
-  set to another Docker Compose repo's host stack, it deploys onto that instance as a guest, with
-  its own port and CloudFront distribution
-  ([ADR 0014](adr/0014-any-docker-repo-can-host-the-instance.md)); the host goes first. The
-  `EC2` block of `stack-params.sh` names the stack, its port and the instance type a host
-  starts, t4g.small; a change of the
-  type stops and starts the same instance, which keeps its disk and its address. Every deploy,
-  host or guest, also makes sure the instance has a 1 GB swap file (`prepare_ec2_host` in
-  `lib/ec2.sh`), so a burst beyond the instance's 2 GB of memory slows the stacks instead of
-  killing a container.
+  ([Sign-in](sign-in.md#setting-up-google)). [The EC2 stack](#the-ec2-stack) covers what it
+  deploys.
 - `deploy.sh --ec2 --preview` — runs the working tree beside production on the same instance;
   [The preview on EC2](#the-preview-on-ec2) covers it, from the first deploy to its removal.
 - [`docker-helper.sh`](../scripts/docker-helper.sh) — `--stop [--volumes]`, `--logs [-e]` or
@@ -111,7 +112,8 @@ Docker runs the stack; `deploy.sh` and `docker-helper.sh` stop when it is not re
   `--reset <account-id>` or `--reset-all`, which delete a person's records so their next
   sign-in is a first visit, and `--clone <from> <to>`, which copies one account's checks to
   another with no records; `--ec2` first acts on the instance, `--ec2 --preview` on the
-  preview, and `--ec2 --preview --copy-live` copies production's database into it) and
+  preview, and `--ec2 --preview --copy-live` copies production's database into it; `--copy-live`
+  alone copies it into this machine's database and migrates it there) and
   [`lock.sh`](../scripts/tools/lock.sh) (recompiles `mcp-server/requirements.txt` and
   `backend/requirements.txt` inside each Dockerfile's Python image; run it after editing a
   dependency list). [`tools/README.md`](../scripts/tools/README.md) lists them.
@@ -133,6 +135,32 @@ The IAM user of `aws-config.sh` needs to create and delete the stack's resources
 read the public SSM parameter that names the Amazon Linux image, and
 `ec2-instance-connect:SendSSHPublicKey` for the SSH connection. No IAM user has these by
 default; an administrator has them all.
+
+## The EC2 stack
+
+`./scripts/deploy.sh --ec2` runs the same Compose stack on one EC2 instance
+([ADR 0009](adr/0009-ec2-instance-behind-cloudfront.md)). A CloudFormation stack,
+`scripts/template-ec2.yaml`, holds the instance (ARM, with only the Docker engine), its
+fixed address, a security group and a CloudFront distribution, whose `https` address is the only
+way in: the security group admits the agent's port from CloudFront's servers alone, and port 22
+from the deployer's address. TLS ends at CloudFront, and the hop to the instance is plain HTTP.
+`docker-compose.ec2.yml` holds what differs on the instance: images built for ARM, the agent
+published on the instance's address, and services that start again with the instance. Compose
+runs on the deployer's machine against the instance's Docker daemon. The settings files stay on
+that machine, and no secret store is involved: each container's own settings, secrets included,
+reach the instance as part of its configuration, which Docker keeps on the instance's encrypted
+disk. That disk holds the database and outlives the instance.
+
+The git branch selects the stack: `main` deploys `loan-simulator`, any other branch
+`loan-simulator-fb`; an exported `STACK_NAME` wins. The stack is a host, with an instance of its
+own, while `EC2_HOST_STACK` of `params.sh` is blank; set to another Docker Compose repo's host
+stack, it deploys onto that instance as a guest, with its own port and CloudFront distribution
+([ADR 0014](adr/0014-any-docker-repo-can-host-the-instance.md)); the host goes first. The `EC2`
+block of `stack-params.sh` names the stack, its port and the instance type a host starts,
+t4g.small; a change of the type stops and starts the same instance, which keeps its disk and its
+address. Every deploy, host or guest, also makes sure the instance has a 1 GB swap file
+(`prepare_ec2_host` in `lib/ec2.sh`), so a burst beyond the instance's 2 GB of memory slows the
+stacks instead of killing a container.
 
 ## The preview on EC2
 
@@ -181,7 +209,8 @@ then removed from the Google OAuth client by hand.
 ## Addresses
 
 Each service has a port inside the Compose network, where the services reach each other by name,
-and a port published on this machine's loopback interface only, where you reach it. As shipped
+and a port published on this machine's loopback interface only, where you reach it (the reason
+is in the header of `docker-compose.yml`; `backend/tests/test_compose.py` checks it). As shipped
 in `scripts/lib/stack-params.sh`:
 
 | Service | On this machine | Inside the Compose network |

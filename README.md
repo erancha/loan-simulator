@@ -1,16 +1,17 @@
 # loan-simulator
 
-The loan simulator is a Hebrew-only AI agent that helps a person in Israel decide on a short- or
-medium-term loan (a car, a renovation, a consumer purchase): for how long, and on which track (one
-part of a loan with its own rate: fixed or tied to the prime rate, linked to the consumer price
-index or not). The person states the loan they need, sets its term, and compares the offers they
-collected from lenders, which the simulator reads back on one footing however vaguely a lender
+The loan simulator is a Hebrew-only AI chat assistant that helps a person in Israel decide on a
+short- or medium-term loan (a car, a renovation, a consumer purchase): for how long, and on which
+track (one part of a loan with its own rate: fixed or tied to the prime rate, linked to the consumer
+price index or not). The person states the loan they need, sets its term, and compares the offers
+they collected from lenders, which the simulator reads back on one footing however vaguely a lender
 worded them; their household finances come up only if they ask for help with a monthly payment
 ceiling. The model leads the conversation and decides what to ask; code computes every number and
-sets the bounds the recommendation must respect. The engine prices each track at what it costs
-today and at what it would have cost had interest rates and inflation moved as in the worst stretch
-of the last ten years; the page shows both. Access is by invitation, and the stack runs on one
-machine under Docker Compose. This repo holds the loan engine, the agent and the page.
+sets the bounds the recommendation must respect. The loan engine, a calculation service of its own,
+prices each track at what it costs today and at what it would have cost had interest rates and
+inflation moved as in the worst stretch of the last ten years; the page shows both. Any Google
+account can sign in, and the stack runs on one machine under Docker Compose. This repo holds the
+loan engine, the agent (the service that runs the conversations) and the page.
 
 **Contents:** [Overview](#overview) · [Tech stack](#tech-stack) · [Architecture](#architecture) ·
 [Getting started](#getting-started) · [Scripts](#scripts) · [Details](#details) ·
@@ -19,8 +20,8 @@ machine under Docker Compose. This repo holds the loan engine, the agent and the
 ## Overview
 
 - **Sign-in and chat**: a person signs in with a Google account and chats with the assistant in
-  Hebrew, on a right-to-left page. Only the Google accounts the operator lists as test users of
-  the app's Google client can sign in.
+  Hebrew, on a right-to-left page. Any Google account can sign in, and each person sees only
+  their own checks.
 - **Offers first**: a check opens with a card for the loan's goal (car, renovation or general)
   and its amount, typed or worked out from a price less the money put in. A terms card proposes
   a term with its first payment (with a stated monthly limit, the shortest term that fits it;
@@ -37,9 +38,11 @@ machine under Docker Compose. This repo holds the loan engine, the agent and the
   These figures belong to the check and show as one line above its conversation once given. A
   check can be paused to collect offers and resumed days later, cloned to try a variant beside it,
   archived, restored, and deleted once archived.
-- **Worst case**: every option shows today's payment and its worst-case payment: the highest
-  payment had rates and inflation moved as in any stretch of past months as long as the loan's
-  term, starting in the last ten years, and which stretch that was.
+- **Worst case and what-ifs**: every option shows today's payment and its worst-case payment: the
+  highest payment had rates and inflation moved as in any stretch of past months as long as the
+  loan's term, starting in the last ten years, and which stretch that was. A person who asks what
+  happens if the CPI or prime rises by a given amount each year gets every offer priced on that
+  future, as a table in the chat beside its total today.
 - **Recommendation**: a card with the loan amount, term and payment, each option's worst case,
   and the ceiling when there is one. Every figure on it comes from the engine's results, never
   from the model's text. The amount recommended is always the amount the person asked for.
@@ -88,8 +91,8 @@ flowchart LR
   M -.->|daily refresh| S[Bank of Israel and CBS]
 ```
 
-**[Architecture](docs/architecture.md)** continues from here: the full diagram, the engine's
-tools and layers, the agent, the page, the configuration and the Compose services.
+**[Architecture](docs/architecture.md)** continues from here: the full diagram, the Compose
+services, the engine, the agent, the page, the configuration and how the stack is reached on EC2.
 
 ## Getting started
 
@@ -97,8 +100,7 @@ Needs Docker; the tests also need Python 3.12+ and Node.js 22.
 
 1. Create a Google OAuth web client in a Google Cloud project of your own, with
    `http://localhost:8101` as its authorized origin and `http://localhost:8101/` as its redirect
-   URI, and add your Google account as a test user ([Sign-in](docs/sign-in.md) walks the
-   console).
+   URI ([Sign-in](docs/sign-in.md) walks the console).
 2. Run `./scripts/deploy.sh`. The first run creates the gitignored settings files under
    `scripts/lib/` from their `.example.sh` files, which explain each setting, with a generated
    bearer token and database password, then stops and names each setting left to fill in:
@@ -112,9 +114,8 @@ Needs Docker; the tests also need Python 3.12+ and Node.js 22.
    `aws-config.sh`, and at the end prints the CloudFront address to add to the Google client
    ([Development & deployment](docs/development.md#deployment-scripts-scripts)).
 
-The agent has no allow-list of its own: the test users of the Google client are the access
-list, on this machine and on EC2 alike, for as long as the Google app stays in testing mode. A
-published app would admit any Google account
+Any Google account can sign in, on this machine and on EC2 alike: Google admits any account to a
+sign-in that asks only for the name and email, and the agent has no allow-list of its own
 ([who may sign in](docs/sign-in.md#who-may-sign-in)).
 
 To call the engine's tools by hand, run MCP Inspector (`npx @modelcontextprotocol/inspector`, a
@@ -136,12 +137,19 @@ Each script's header comment is its full documentation, and `--help` prints it.
 
 ## Details
 
-- [Architecture](docs/architecture.md) — the parts, the engine's tools, configuration and
-  deployment
+- [Architecture](docs/architecture.md) — the Compose services, the engine, the agent, the page,
+  the edge on EC2, storage and the codebase
+- [API endpoints](docs/api.md) — every route of the agent and every tool of the engine, who may
+  call it and what it answers
+- [Workers' responsibilities and flows](docs/workers.md) — the conversation turns, the daily
+  market-data refresh and the schema migration
 - [The agent](docs/architecture/agent.md) — how a conversation runs, the guardrail, the message
   cap and the events
 - [The page](docs/architecture/page.md) — the layout, the data flow and how the page is served
-- [Calculations](docs/calculations.md) — every formula and policy number, with its reasoning
+- [Domain rules](docs/domain-rules.md) — every formula and policy number, with its reasoning
+- [Design patterns](docs/design-patterns.md) — the layers of each package and how they are
+  enforced
+- [Data model](docs/data-model.md) — every table, its keys and indexes, and the other stores
 - [Market data](docs/market-data.md) — the published series and what happens when one is down
 - [Sign-in](docs/sign-in.md) — how sign-in works and how to set up the Google side
 - [Development & deployment](docs/development.md) — the settings files, the tests, the
