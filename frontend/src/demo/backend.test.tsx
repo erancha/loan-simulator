@@ -24,7 +24,7 @@ import type { Entry, Recording } from './backend.ts'
 import { wholeText } from '../test/wholeText.ts'
 
 const REPLY = 'הנה ההמלצה: מסלול הפריים.'
-const PACE = { pauseMs: 0, typingMs: 0, typedChars: 8, entryMs: 0 }
+const PACE = { pauseMs: 0, quietMs: 0, typingMs: 0, typedChars: 8, entryMs: 0 }
 const noEntry = () => () => {}
 
 const recording: Recording = {
@@ -280,7 +280,7 @@ test('a recorded clone whose source ends at an event it lacks is refused', () =>
 test("the replay's total is its length at 1×, and at 2× it plays in half that", async () => {
   vi.useFakeTimers()
   try {
-    const paced = { pauseMs: 1000, typingMs: 100, typedChars: 8, entryMs: 500 }
+    const paced = { pauseMs: 1000, quietMs: 1000, typingMs: 100, typedChars: 8, entryMs: 500 }
     const atOne = createDemoBackend(recording, paced, noEntry)
     let started = Date.now()
     await vi.runAllTimersAsync()
@@ -297,4 +297,20 @@ test("the replay's total is its length at 1×, and at 2× it plays in half that"
   } finally {
     vi.useRealTimers()
   }
+})
+
+test('an event the conversation does not show waits only the short pause', () => {
+  const events = [
+    userMessage(1, 'אני רוצה לקנות רכב ב-55,000 ₪'),
+    turnStatus(2, 'running'),
+    withSeq(optionPrime36, 3),
+    assistantMessage(4, 'm1', 'קצר'),
+    turnStatus(5, 'idle'),
+  ]
+  const paced = { pauseMs: 1000, quietMs: 100, typingMs: 0, typedChars: 100, entryMs: 0 }
+  const backend = createDemoBackend({ events, source: null }, paced, noEntry)
+
+  // The two messages wait the full pause; the turn's two statuses and the saved option, which
+  // only the thinking bubble and the card show, wait the short one.
+  expect(backend.totalMs).toBe(2 * 1000 + 3 * 100)
 })

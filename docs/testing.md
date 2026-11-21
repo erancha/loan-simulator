@@ -352,7 +352,8 @@ and streams its whole history, lists the offers still awaiting their lender, ans
 term confirmation, skip and reading routes, refuses a source that ends at an event the recording
 lacks, refuses a read the page is not known to make, reports every action of the visitor as
 unavailable, leaves an action it has no answer for unsettled, reports the replay's end, and
-that its total is its length at 1× and half that at 2×. `demo/clock.test.ts` proves that a wait
+that its total is its length at 1× and half that at 2×, and that an event the conversation does not
+show waits only the short pause. `demo/clock.test.ts` proves that a wait
 ends after its demo time at either speed, that a speed change mid-wait applies to the time left,
 and that a pause holds waits and demo time until resumed; `demo/DemoControls.test.tsx` proves the
 bar sits under the header, pauses and resumes, sets and marks the speed, and shows the time until

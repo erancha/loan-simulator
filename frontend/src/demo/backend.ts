@@ -9,6 +9,7 @@ import type {
 import { comparesOptions } from '../check/card.ts'
 import { answerLine, INPUT_LABEL, questionLabel } from '../check/copy.ts'
 import { initialState, reduce } from '../check/events.ts'
+import type { ChatEntry } from '../check/events.ts'
 import { hasFinancialDetails } from '../check/FinancesPanel.tsx'
 import { createDemoClock } from './clock.ts'
 
@@ -28,10 +29,12 @@ export interface Recording {
   source: { sharedThroughSeq: number } | null
 }
 
-/** How the replay paces a recording: the pause before each event, how a reply is typed, and how
- * long what the person typed stays in its box before their message is sent. */
+/** How the replay paces a recording: the pause before an event the conversation shows, and the
+ * shorter one before an event only the card or the page's state takes in; how a reply is typed;
+ * and how long what the person typed stays in its box before their message is sent. */
 export interface Pace {
   pauseMs: number
+  quietMs: number
   typingMs: number
   typedChars: number
   entryMs: number
@@ -185,16 +188,26 @@ type Step = { waitMs: number } & (
   | { kind: 'event'; event: StoredEvent }
 )
 
+/** Whether two message lists hold the same entries, which a reducer may copy without change. */
+function sameEntries(before: ChatEntry[], after: ChatEntry[]): boolean {
+  return before.length === after.length && before.every((entry, index) => entry === after[index])
+}
+
 /**
- * The replay as steps: a pause before each event; before a message the person typed, its value in
- * its box for a moment; before a reply, the reply typed out a few characters at a time.
+ * The replay as steps: a pause before each event, the full one only when the event adds to the
+ * conversation; before a message the person typed, its value in its box for a moment; before a
+ * reply, the reply typed out a few characters at a time. Whether an event adds to the
+ * conversation is what the page's own reducer makes of it, so the replay and the page agree.
  */
 function stepsOf(recording: Recording, pace: Pace): Step[] {
   const steps: Step[] = []
   // The question a message from the person answers: the latest one asked since they last wrote.
   let live: Question | null = null
+  let state = initialState
   for (const event of recording.events) {
-    let waitMs = pace.pauseMs
+    const next = reduce(state, event)
+    let waitMs = sameEntries(state.messages, next.messages) ? pace.quietMs : pace.pauseMs
+    state = next
     if (event.type === 'question.asked') live = event.data.question
     if (event.type === 'message.user') {
       const entry = entryOf(event.data.text, live)

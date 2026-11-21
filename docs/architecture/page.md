@@ -39,15 +39,16 @@ The demo, `/demo.html`, is the same app over a recorded check (`frontend/src/dem
 renders, it replaces `fetch` and `EventSource` with a backend that replays one check's stored events
 on a demo clock (`demo/clock.ts`). A bar under the header (`demo/DemoControls.tsx`) lets the visitor
 pause and resume the clock, play at 1× or 2× (it starts at 2×), and see the time played of the whole
-replay; the clock carries a wait in progress across a pause or a change of speed. A tap on the
-conversation's surface, or the space bar, also pauses and resumes it, with a sign in the
-conversation's middle for a moment; a tap on a button, a link or a box does what it does. It types
-each reply out as deltas, since the server stores replies whole. Before each message the person
-typed, it shows the typed value in its box for a second: an answer in its question's box, any other
-message in the chat's composer. It answers the checks list from the events played so far. A recorded
-clone names the last event it shares with its source, and the demo rebuilds the source from those
-shared events and its clone note: once the replay passes the clone, the list shows both, and the
-source opens on its whole conversation.
+replay; the clock carries a wait in progress across a pause or a change of speed. An event waits the
+full pause only when it adds to the conversation, as the page's own reducer decides; one that only
+updates the card or the page's state waits a short one. A tap on the conversation's surface, or the
+space bar, also pauses and resumes it, with a sign in the conversation's middle for a moment; a tap
+on a button, a link or a box does what it does. It types each reply out as deltas, since the server
+stores replies whole. Before each message the person typed, it shows the typed value in its box for
+a second: an answer in its question's box, any other message in the chat's composer. It answers the
+checks list from the events played so far. A recorded clone names the last event it shares with its
+source, and the demo rebuilds the source from those shared events and its clone note: once the
+replay passes the clone, the list shows both, and the source opens on its whole conversation.
 `sql-helper.sh --demo-check <id>` writes the recording from the stack's database.
 
 A visitor may click anything in the demo, and no server is there to carry an action out. Every

@@ -245,7 +245,7 @@ test('signed out links to the demo, the WhatsApp invite and the source', async (
   render(<App />)
   await screen.findByRole('button', { name: SIGN_IN })
 
-  const demo = screen.getByRole('link', { name: 'הדגמה (60* שניות)' })
+  const demo = screen.getByRole('link', { name: 'הדגמה (40* שניות)' })
   expect(within(demo).getByText('*').tagName).toBe('SUP')
   expect(demo).toHaveAttribute('href', '/demo.html')
   // The demo's tab keeps its tie to this one, so its link into the simulator can return here.
@@ -253,7 +253,7 @@ test('signed out links to the demo, the WhatsApp invite and the source', async (
   expect(demo).toHaveAttribute(
     'title',
     'שיחה מוקלטת, מהשאלה הראשונה ועד ההמלצה; מומלץ לראות במסך מחשב\n' +
-      '* ההדגמה מתחילה במהירות כפולה. במהירות רגילה היא נמשכת כשתי דקות, והשעון בהדגמה סופר' +
+      '* ההדגמה מתחילה במהירות כפולה. במהירות רגילה היא נמשכת כדקה וחצי, והשעון בהדגמה סופר' +
       ' לפיה.',
   )
   const invite = new URL(
@@ -269,7 +269,7 @@ test('signed out links to the demo, the WhatsApp invite and the source', async (
       ' להלוואה.',
   )
   expect(paragraphs[3]).toBe(
-    `🎁 זה בחינם, ויש שם גם ▶️ הדגמה של 60 שניות, בלי להירשם:\n${window.location.origin}`,
+    `🎁 זה בחינם, ויש שם גם ▶️ הדגמה של 40 שניות, בלי להירשם:\n${window.location.origin}`,
   )
   expect(screen.getByRole('link', { name: 'קוד המקור ב-GitHub' })).toHaveAttribute(
     'href',

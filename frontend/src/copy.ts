@@ -51,7 +51,7 @@ export const versionLine = (version: string, commitDate: string) =>
 
 /** How long the recorded check on demo.html replays at its starting speed, to the nearest ten
  * seconds; a test holds it to the recording. */
-export const DEMO_SECONDS = 60
+export const DEMO_SECONDS = 40
 /** The landing page's link to the demo, with its length, so a visitor knows what a click costs.
  * The page draws the mark in superscript after the number, which holds only at the demo's
  * starting speed. */
@@ -64,7 +64,7 @@ export const INVITE_MARK = '💬'
  * length stands for: the demo's starting speed, and the speed its clock counts by. */
 export const DEMO_HINT =
   'שיחה מוקלטת, מהשאלה הראשונה ועד ההמלצה; מומלץ לראות במסך מחשב\n' +
-  `${DEMO_LINK.mark} ההדגמה מתחילה במהירות כפולה. במהירות רגילה היא נמשכת כשתי דקות, והשעון` +
+  `${DEMO_LINK.mark} ההדגמה מתחילה במהירות כפולה. במהירות רגילה היא נמשכת כדקה וחצי, והשעון` +
   ' בהדגמה סופר לפיה.'
 /** The banner over the replayed check on demo.html. */
 export const DEMO_BANNER = 'הדגמה מוקלטת'
