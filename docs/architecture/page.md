@@ -22,7 +22,7 @@ fragment ([sign-in.md](../sign-in.md)). Under the name a line gives the build: i
 version, which is the release tag the checkout descends from (`vMAJOR.MINOR`) and the commits since
 it, and its last commit's date. `scripts/lib/build-info.sh` reads both from git and the image
 build receives them as build arguments, since its context has no `.git`. Under the card, one
-line of links opens the demo, whose label states its length in minutes and whose tooltip says it
+line of links opens the demo, whose label states its length in seconds and whose tooltip says it
 is a recorded check best seen on a computer; a WhatsApp invite carrying the page's own address; and
 the GitHub source.
 
@@ -30,14 +30,19 @@ A signed-in person sees a header whose account menu (`shell/AccountMenu.tsx`) na
 holds sign-out, and one open check. The open check is kept in the URL hash as `#check=<id>`; a hash
 that names no check of theirs opens the newest one and is rewritten to match.
 
-The demo, `/demo.html`, is the same app over a recorded check (`frontend/src/demo/`). Before the
-app renders, it replaces `fetch` and `EventSource` with a backend that replays one check's stored
-events on a timer. It types each reply out as deltas, since the server stores replies whole. Before
-each message the person typed, it shows the typed value in its box for a second: an answer in its
-question's box, any other message in the chat's composer. It answers the checks list from the
-events played so far. A recorded clone names the last event it shares with its source, and the
-demo rebuilds the source from those shared events and its clone note: once the replay passes the
-clone, the list shows both, and the source opens on its whole conversation.
+The demo, `/demo.html`, is the same app over a recorded check (`frontend/src/demo/`). Before the app
+renders, it replaces `fetch` and `EventSource` with a backend that replays one check's stored events
+on a demo clock (`demo/clock.ts`). A bar under the header (`demo/DemoControls.tsx`) lets the visitor
+pause and resume the clock, play at 1× or 2× (it starts at 2×), and see the time played of the whole
+replay; the clock carries a wait in progress across a pause or a change of speed. A tap on the
+conversation's surface, or the space bar, also pauses and resumes it, with a sign in the
+conversation's middle for a moment; a tap on a button, a link or a box does what it does. It types
+each reply out as deltas, since the server stores replies whole. Before each message the person
+typed, it shows the typed value in its box for a second: an answer in its question's box, any other
+message in the chat's composer. It answers the checks list from the events played so far. A recorded
+clone names the last event it shares with its source, and the demo rebuilds the source from those
+shared events and its clone note: once the replay passes the clone, the list shows both, and the
+source opens on its whole conversation.
 `sql-helper.sh --demo-check <id>` writes the recording from the stack's database.
 
 A visitor may click anything in the demo, and no server is there to carry an action out. Every

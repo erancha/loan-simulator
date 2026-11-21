@@ -276,3 +276,25 @@ test('a recorded clone whose source ends at an event it lacks is refused', () =>
     createDemoBackend({ events: recording.events, source: { sharedThroughSeq: 12 } }, PACE, noEntry),
   ).toThrow('no event 12')
 })
+
+test("the replay's total is its length at 1×, and at 2× it plays in half that", async () => {
+  vi.useFakeTimers()
+  try {
+    const paced = { pauseMs: 1000, typingMs: 100, typedChars: 8, entryMs: 500 }
+    const atOne = createDemoBackend(recording, paced, noEntry)
+    let started = Date.now()
+    await vi.runAllTimersAsync()
+    await atOne.finished
+    expect(Date.now() - started).toBe(atOne.totalMs)
+
+    const atTwo = createDemoBackend(recording, paced, noEntry)
+    atTwo.clock.setRate(2)
+    started = Date.now()
+    await vi.runAllTimersAsync()
+    await atTwo.finished
+    expect(Date.now() - started).toBe(atTwo.totalMs / 2)
+    expect(atTwo.clock.elapsed()).toBe(atTwo.totalMs)
+  } finally {
+    vi.useRealTimers()
+  }
+})

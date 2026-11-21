@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, expect, test, vi } from 'vitest'
 import { SIGNED_OUT_EVENT } from './api/client.ts'
@@ -245,7 +245,8 @@ test('signed out links to the demo, the WhatsApp invite and the source', async (
   render(<App />)
   await screen.findByRole('button', { name: SIGN_IN })
 
-  const demo = screen.getByRole('link', { name: 'הדגמה (2 דקות)' })
+  const demo = screen.getByRole('link', { name: 'הדגמה (60* שניות)' })
+  expect(within(demo).getByText('*').tagName).toBe('SUP')
   expect(demo).toHaveAttribute('href', '/demo.html')
   // The demo's tab keeps its tie to this one, so its link into the simulator can return here.
   expect(demo).toHaveAttribute('rel', 'opener')
@@ -266,7 +267,7 @@ test('signed out links to the demo, the WhatsApp invite and the source', async (
       ' להלוואה.',
   )
   expect(paragraphs[3]).toBe(
-    `🎁 זה בחינם, ויש שם גם ▶️ הדגמה של 2 דקות, בלי להירשם:\n${window.location.origin}`,
+    `🎁 זה בחינם, ויש שם גם ▶️ הדגמה של 60 שניות, בלי להירשם:\n${window.location.origin}`,
   )
   expect(screen.getByRole('link', { name: 'קוד המקור ב-GitHub' })).toHaveAttribute(
     'href',

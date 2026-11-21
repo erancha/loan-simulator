@@ -203,7 +203,7 @@ export function Chat({
   const input = useRef<HTMLTextAreaElement>(null)
   const samplesChip = useRef<HTMLButtonElement>(null)
   const offerChip = useRef<HTMLButtonElement>(null)
-  // The chat box grows with its text, from its two rows up to the stylesheet's cap of three. Its
+  // The chat box grows with its text, from its two rows up to the stylesheet's cap of five. Its
   // height resets first, so a shorter text shrinks it back; the borders are its offset height
   // beyond its client height. Before paint, so the box never shows at the wrong size.
   useLayoutEffect(() => {

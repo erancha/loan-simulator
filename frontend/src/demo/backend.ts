@@ -10,6 +10,7 @@ import { comparesOptions } from '../check/card.ts'
 import { answerLine, INPUT_LABEL, questionLabel } from '../check/copy.ts'
 import { initialState, reduce } from '../check/events.ts'
 import { hasFinancialDetails } from '../check/FinancesPanel.tsx'
+import { createDemoClock } from './clock.ts'
 
 /**
  * Every event the server stores for a check; deltas and retractions are live only, so a recording
@@ -148,10 +149,6 @@ function summaryOf(id: string, createdAt: string, events: StoredEvent[]): CheckS
 
 type Listener = (frame: MessageEvent<string>) => void
 
-function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status })
 }
@@ -180,12 +177,52 @@ function entryOf(text: string, live: Question | null): Entry | null {
   return { box: label, value: typed }
 }
 
+/** One step of the replay: the demo time it waits, then what it changes on the page. */
+type Step = { waitMs: number } & (
+  | { kind: 'entry'; entry: Entry }
+  | { kind: 'clear' }
+  | { kind: 'delta'; messageId: string; text: string }
+  | { kind: 'event'; event: StoredEvent }
+)
+
 /**
- * The page's backend for the demo: one recorded check replayed on a timer, served through a fetch
+ * The replay as steps: a pause before each event; before a message the person typed, its value in
+ * its box for a moment; before a reply, the reply typed out a few characters at a time.
+ */
+function stepsOf(recording: Recording, pace: Pace): Step[] {
+  const steps: Step[] = []
+  // The question a message from the person answers: the latest one asked since they last wrote.
+  let live: Question | null = null
+  for (const event of recording.events) {
+    let waitMs = pace.pauseMs
+    if (event.type === 'question.asked') live = event.data.question
+    if (event.type === 'message.user') {
+      const entry = entryOf(event.data.text, live)
+      live = null
+      if (entry !== null) {
+        steps.push({ waitMs, kind: 'entry', entry }, { waitMs: pace.entryMs, kind: 'clear' })
+        waitMs = 0
+      }
+    }
+    if (event.type === 'message.assistant') {
+      const { message_id: messageId, text } = event.data
+      for (let end = pace.typedChars; end < text.length; end += pace.typedChars) {
+        steps.push({ waitMs, kind: 'delta', messageId, text: text.slice(0, end) })
+        waitMs = pace.typingMs
+      }
+    }
+    steps.push({ waitMs, kind: 'event', event })
+  }
+  return steps
+}
+
+/**
+ * The page's backend for the demo: one recorded check replayed on a clock, served through a fetch
  * and an EventSource that demo/main.tsx installs before the real app renders.
  *
- * - One timeline starts when the backend is created. A stream that connects later first gets the
- *   events already played, as the server's replay does, then the rest as they play.
+ * - One timeline starts when the backend is created, on a demo clock the visitor can pause and
+ *   speed up; totalMs is its length at the recording's pace. A stream that connects later first
+ *   gets the events already played, as the server's replay does, then the rest as they play.
  * - A recorded reply is stored whole, so the timeline types it out as cumulative deltas first.
  * - Before a message the person typed, showEntry puts the typed value in its box for a moment.
  * - The checks list answers what the events played so far imply. A recorded clone's source joins
@@ -202,31 +239,24 @@ export function createDemoBackend(recording: Recording, pace: Pace, showEntry: S
     for (const listener of listeners) listener(event)
   }
 
+  const clock = createDemoClock()
+  const steps = stepsOf(recording, pace)
+  const totalMs = steps.reduce((sum, step) => sum + step.waitMs, 0)
+
   async function play() {
-    // The question a message from the person answers: the latest one asked since they last wrote.
-    let live: Question | null = null
-    for (const event of recording.events) {
-      await wait(pace.pauseMs)
-      if (event.type === 'question.asked') live = event.data.question
-      if (event.type === 'message.user') {
-        const entry = entryOf(event.data.text, live)
-        live = null
-        if (entry !== null) {
-          const clear = showEntry(entry)
-          await wait(pace.entryMs)
-          clear()
-        }
+    let clear = () => {}
+    for (const step of steps) {
+      await clock.wait(step.waitMs)
+      if (step.kind === 'entry') clear = showEntry(step.entry)
+      if (step.kind === 'clear') clear()
+      if (step.kind === 'delta') {
+        const data = { message_id: step.messageId, text: step.text }
+        broadcast({ type: 'message.delta', data, seq: null })
       }
-      if (event.type === 'message.assistant') {
-        const { message_id, text } = event.data
-        for (let end = pace.typedChars; end < text.length; end += pace.typedChars) {
-          const typed = text.slice(0, end)
-          broadcast({ type: 'message.delta', data: { message_id, text: typed }, seq: null })
-          await wait(pace.typingMs)
-        }
+      if (step.kind === 'event') {
+        played.push(step.event)
+        broadcast(step.event)
       }
-      played.push(event)
-      broadcast(event)
     }
   }
   const finished = play()
@@ -325,5 +355,5 @@ export function createDemoBackend(recording: Recording, pace: Pace, showEntry: S
     }
   }
 
-  return { fetch, EventSource: DemoEventSource, finished }
+  return { fetch, EventSource: DemoEventSource, finished, clock, totalMs }
 }

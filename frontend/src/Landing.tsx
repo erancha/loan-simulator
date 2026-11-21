@@ -92,7 +92,9 @@ export function Landing({ pitch = false, children }: { pitch?: boolean; children
               link into the simulator can return here. */}
           <a href={DEMO_PATH} target="_blank" rel="opener" title={DEMO_HINT}>
             <LinkMark mark={DEMO_MARK} />
-            {DEMO_LINK}
+            {DEMO_LINK.before}
+            <sup>{DEMO_LINK.mark}</sup>
+            {DEMO_LINK.after}
           </a>
           <a href={whatsAppInviteUrl()} target="_blank" rel="noreferrer">
             <LinkMark mark={INVITE_MARK} />

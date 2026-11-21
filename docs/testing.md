@@ -343,12 +343,19 @@ recommendation compares options, lists a recorded clone's source once the replay
 and streams its whole history, lists the offers still awaiting their lender, answers the opening,
 term confirmation, skip and reading routes, refuses a source that ends at an event the recording
 lacks, refuses a read the page is not known to make, reports every action of the visitor as
-unavailable, leaves an action it has no answer for unsettled, and reports the replay's end.
+unavailable, leaves an action it has no answer for unsettled, reports the replay's end, and
+that its total is its length at 1× and half that at 2×. `demo/clock.test.ts` proves that a wait
+ends after its demo time at either speed, that a speed change mid-wait applies to the time left,
+and that a pause holds waits and demo time until resumed; `demo/DemoControls.test.tsx` proves the
+bar sits under the header, pauses and resumes, sets and marks the speed, and shows the time until
+the end, when pause is disabled; that a tap on the conversation or the space bar pauses and
+resumes with a sign, while a tap on a control, outside the conversation or after the end, and a
+space typed in a box, change nothing.
 `demo/DemoBanner.test.tsx` proves the notice and its link, that the link closes the demo's tab only
 when the tab it was opened from still shows the simulator, and that the new-check button is held
 until the replay ends; `demo/holdButtons.test.tsx` covers the hold itself, and
-`demo/length.test.ts` holds the minutes the landing page's demo link promises to the recording's
-replay length.
+`demo/length.test.ts` holds the seconds the landing page's demo link promises to the recording's
+replay length at the demo's starting speed.
 
 **By hand.** jsdom has no layout, so the three columns and the tabs are checked in a browser after
 `./scripts/deploy.sh`, at laptop and at phone width.

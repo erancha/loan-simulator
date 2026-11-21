@@ -49,12 +49,13 @@ export const LANDING_DETAILS = [
 export const versionLine = (version: string, commitDate: string) =>
   `גירסה ${version}, ${commitDate}`
 
-/** How long the recorded check on demo.html replays, to the nearest minute; a test holds it to
- * the recording. */
-export const DEMO_MINUTES = 2
-/** The landing page's link to the demo, with its length, so a visitor knows what a click costs;
- * the wording suits two minutes or more. */
-export const DEMO_LINK = `הדגמה (${DEMO_MINUTES} דקות)`
+/** How long the recorded check on demo.html replays at its starting speed, to the nearest ten
+ * seconds; a test holds it to the recording. */
+export const DEMO_SECONDS = 60
+/** The landing page's link to the demo, with its length, so a visitor knows what a click costs.
+ * The page draws the mark in superscript after the number, which holds only at the demo's
+ * starting speed. */
+export const DEMO_LINK = { before: `הדגמה (${DEMO_SECONDS}`, mark: '*', after: ' שניות)' }
 /** The marks before the demo and invite links, the same as the invite message's own. */
 export const DEMO_MARK = '▶️'
 export const INVITE_MARK = '💬'
@@ -63,6 +64,11 @@ export const DEMO_HINT = 'שיחה מוקלטת, מהשאלה הראשונה ו�
 /** The banner over the replayed check on demo.html. */
 export const DEMO_BANNER = 'הדגמה מוקלטת'
 export const DEMO_RESTART = 'מההתחלה'
+/** The demo's playback bar: pause and resume, and the speed group's name; the speeds name
+ * themselves (1×, 2×). */
+export const DEMO_PAUSE = 'השהיה'
+export const DEMO_RESUME = 'המשך'
+export const DEMO_SPEED = 'מהירות'
 /** The notice on demo.html when the visitor's action needs a server: the sentence, then its link
  * into the simulator, which ends it. */
 export const DEMO_UNAVAILABLE = 'הפעולה הזאת לא זמינה בהדגמה. כדי לנסות בעצמך,'
@@ -78,7 +84,7 @@ export const INVITE_MESSAGE = [
   '💬 כותבים לו בצ\'אט, במילים פשוטות, מה הציעו לכם. הוא משווה בין ההצעות, בודק אותן מול הריבית' +
     ' הממוצעת בבנקים לפי נתוני בנק ישראל, וממליץ.',
   'לא צריך להבין בריביות, והוא לא מוכר כלום ולא פונה לאף בנק.',
-  `🎁 זה בחינם, ויש שם גם ▶️ הדגמה של ${DEMO_MINUTES} דקות, בלי להירשם:`,
+  `🎁 זה בחינם, ויש שם גם ▶️ הדגמה של ${DEMO_SECONDS} שניות, בלי להירשם:`,
 ]
 export const SOURCE_LINK = 'קוד המקור ב-GitHub'
 
