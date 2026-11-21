@@ -1,22 +1,34 @@
 /** The Hebrew of the page outside a check: sign-in, session states and failed API calls. */
 
 export const APP_TITLE = 'סימולטור הלוואות'
+/** The line under the title: what sets the simulator apart from a loan calculator. */
+export const APP_TAGLINE = 'מבוסס בינה מלאכותית'
 export const CHECKING_SESSION = 'בודקים מי מחובר…'
 /** Where real offers can come from; the one place the page and its card name them. The system
  * prompt carries the same list, and a backend test holds the two equal. */
 export const OFFER_SOURCES = 'בנקים, קרן השתלמות, קרן פנסיה, חברות אשראי, או גופים אחרים'
-/** The signed-out pitch's opening line; **marked** words show in bold. */
-export const LANDING_LEAD =
-  '**הסימולטור לא נותן הלוואות** ולא פונה לאף גוף מלווה.'
+/** The signed-out pitch's opening lines; **marked** words show in bold. The first names the
+ * question the simulator answers, which a loan calculator's payment table does not; the second
+ * says it is a conversation that needs no financial knowledge. */
+export const LANDING_LEAD = [
+  '**קיבלתם הצעות להלוואה ולא ברור איזו משתלמת?** הסימולטור משווה ביניהן ומול הריבית הממוצעת' +
+    ' בבנקים, וממליץ.',
+  '**הכול בשיחה, במילים שלכם, בלי ידע מוקדם:** הסימולטור שואל מה שצריך, ואפשר לשאול אותו כל דבר' +
+    ' בדרך.',
+]
 /** The signed-out pitch as numbered steps, since visitors skim prose but follow steps. It leads
  * with the loan, then the offers the person already holds, and ends on what each offer really
- * is; the person's finances come up only if they choose to bring them. */
+ * is; the person's finances come up only if they choose to bring them. The step that names
+ * lenders also says the simulator is not one, so no visitor expects a loan from it. */
 export const LANDING_STEPS = [
   { title: 'מתארים את ההלוואה המבוקשת', text: 'מטרה, סכום והחזר חודשי מרבי.' },
-  { title: 'מזינים את ההצעות שקיבלתם', text: 'בטופס, או במילים שלכם, כמו שהגוף המלווה מסר.' },
+  {
+    title: 'מזינים את ההצעות שקיבלתם',
+    text: 'בטופס או במילים שלכם. הסימולטור לא נותן הלוואות ולא פונה לאף גוף מלווה.',
+  },
   {
     title: 'רואים את המחיר האמיתי של כל הצעה',
-    text: 'כמה ריבית תשלמו, איך היא ביחס לממוצע בבנקים, ואיזו הצעה זולה יותר.',
+    text: 'כמה ריבית תשלמו בסה"כ, איך היא ביחס לממוצע בבנקים, ואיזו הצעה זולה יותר.',
   },
 ]
 
@@ -43,6 +55,9 @@ export const DEMO_MINUTES = 2
 /** The landing page's link to the demo, with its length, so a visitor knows what a click costs;
  * the wording suits two minutes or more. */
 export const DEMO_LINK = `הדגמה (${DEMO_MINUTES} דקות)`
+/** The marks before the demo and invite links, the same as the invite message's own. */
+export const DEMO_MARK = '▶️'
+export const INVITE_MARK = '💬'
 /** The demo link's tooltip: the desktop shows the chat and the card side by side. */
 export const DEMO_HINT = 'שיחה מוקלטת, מהשאלה הראשונה ועד ההמלצה; מומלץ לראות במסך מחשב'
 /** The banner over the replayed check on demo.html. */
@@ -54,16 +69,38 @@ export const DEMO_UNAVAILABLE = 'הפעולה הזאת לא זמינה בהדג�
 export const DEMO_ENTER = 'נכנסים לסימולטור'
 export const DEMO_NOTICE_CLOSE = 'סגירת ההודעה'
 export const INVITE_LINK = 'הזמנת חברים ב-WhatsApp'
-/** The invite message, before the page's own address, which closes it on a line of its own. */
+/** The invite message's paragraphs, in the voice of the friend who sends it: who it is for, how
+ * it works, what it does not ask of the reader, and the demo, which needs no sign-in. The page's
+ * own address follows the last one. */
 export const INVITE_MESSAGE = [
-  'היי! קיבלתי המלצה על סימולטור הלוואות חינמי: מספרים כמה צריך ללוות, והוא מציע' +
-    ' לכמה זמן, ומראה את ההחזרים בחודש לפי נתוני בנק ישראל.',
-  'אחר כך הוא משווה בין הצעות אמיתיות וממליץ. נכנסים בחינם עם חשבון Google:',
+  'היי! 👋 קיבלתי המלצה על סימולטור הלוואות מבוסס בינה מלאכותית, למי שמתלבט בין הצעות' +
+    ' להלוואה.',
+  '💬 כותבים לו בצ\'אט, במילים פשוטות, מה הציעו לכם. הוא משווה בין ההצעות, בודק אותן מול הריבית' +
+    ' הממוצעת בבנקים לפי נתוני בנק ישראל, וממליץ.',
+  'לא צריך להבין בריביות, והוא לא מוכר כלום ולא פונה לאף בנק.',
+  `🎁 זה בחינם, ויש שם גם ▶️ הדגמה של ${DEMO_MINUTES} דקות, בלי להירשם:`,
 ]
 export const SOURCE_LINK = 'קוד המקור ב-GitHub'
 
 export const SIGN_IN = 'התחברות עם Google'
 export const SIGN_IN_REFUSED = 'הכניסה עם Google לא הושלמה. אפשר לנסות שוב.'
+/** The toggle under the sign-in button, for a visitor wary of signing in to an unfamiliar site
+ * with a Google account. */
+export const SIGN_IN_WHY = 'למה להתחבר עם Google?'
+/** The opening line of what the toggle shows; **marked** words show in bold. */
+export const SIGN_IN_WHY_LEAD = 'כניסה עם Google **בטוחה ונוחה יותר** מפתיחת חשבון עם סיסמה חדשה.'
+/** The points under that line. The first two answer the fear of handing the simulator access to a
+ * Google account, since a worried reader discounts advantages until then; the last two argue the
+ * advantages. */
+export const SIGN_IN_WHY_POINTS = [
+  '**ההתחברות מאושרת על ידי Google, לא על ידי הסימולטור.** Google מוסרת לסימולטור רק אימות' +
+    ' לגבי הזהות שלכם, ללא גישה לנתונים שלכם (מיילים, אנשי קשר ועוד).',
+  '**השליטה אצלכם:** אפשר לנתק את הסימולטור בכל רגע מהגדרות חשבון Google.',
+  '**אין עוד סיסמה לזכור,** ואין סיסמה שיכולה לדלוף מכאן: הסימולטור לא שומר סיסמאות בכלל.',
+  '**ההגנות של Google עובדות בשבילכם:** אימות דו-שלבי והתראה על כניסה חשודה שומרים גם על' +
+    ' הכניסה לכאן.',
+]
+export const SIGN_IN_WHY_LINK = 'ההסבר המלא של Google'
 
 export const MORE = 'יותר'
 export const LESS = 'פחות'

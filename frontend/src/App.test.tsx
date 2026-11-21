@@ -208,13 +208,36 @@ test('a failed sign-out says so and keeps the person in the app', async () => {
   expect(screen.getByRole('button', { name: 'תפריט חשבון' })).toBeInTheDocument()
 })
 
-test('signed out names the build under the title', async () => {
+test('signed out names the tagline and the build under the title', async () => {
   stubApi(signedOut)
   render(<App />)
   await screen.findByRole('button', { name: SIGN_IN })
 
   expect(screen.getByText(/^גירסה \d+\.\d+\.\d+, \d{2}\/\d{2}\/\d{4}$/)).toBeInTheDocument()
   expect(screen.getByRole('heading', { name: 'סימולטור הלוואות' })).toBeInTheDocument()
+  expect(screen.getByText('מבוסס בינה מלאכותית')).toBeInTheDocument()
+})
+
+test('signed out leads with the question and the chat, then says it lends nothing', async () => {
+  stubApi(signedOut)
+  render(<App />)
+  await screen.findByRole('button', { name: SIGN_IN })
+
+  const question = screen.getByText('קיבלתם הצעות להלוואה ולא ברור איזו משתלמת?')
+  expect(question.tagName).toBe('STRONG')
+  expect(question.parentElement).toHaveTextContent(
+    'קיבלתם הצעות להלוואה ולא ברור איזו משתלמת? הסימולטור משווה ביניהן ומול הריבית הממוצעת' +
+      ' בבנקים, וממליץ.',
+  )
+  const chat = screen.getByText('הכול בשיחה, במילים שלכם, בלי ידע מוקדם:')
+  expect(chat.tagName).toBe('STRONG')
+  expect(chat.parentElement).toHaveTextContent(
+    'הכול בשיחה, במילים שלכם, בלי ידע מוקדם: הסימולטור שואל מה שצריך, ואפשר לשאול אותו כל דבר' +
+      ' בדרך.',
+  )
+  expect(question.compareDocumentPosition(chat)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+  const offersStep = screen.getAllByRole('listitem')[1]
+  expect(offersStep).toHaveTextContent(/הסימולטור לא נותן הלוואות ולא פונה לאף גוף מלווה\.$/)
 })
 
 test('signed out links to the demo, the WhatsApp invite and the source', async () => {
@@ -234,7 +257,17 @@ test('signed out links to the demo, the WhatsApp invite and the source', async (
     screen.getByRole('link', { name: 'הזמנת חברים ב-WhatsApp' }).getAttribute('href') as string,
   )
   expect(`${invite.origin}${invite.pathname}`).toBe('https://wa.me/')
-  expect(invite.searchParams.get('text')).toContain(window.location.origin)
+  const message = invite.searchParams.get('text') as string
+  // An empty line between paragraphs; the address sits right under the line that leads into it.
+  const paragraphs = message.split('\n\n')
+  expect(paragraphs).toHaveLength(4)
+  expect(paragraphs[0]).toBe(
+    'היי! 👋 קיבלתי המלצה על סימולטור הלוואות מבוסס בינה מלאכותית, למי שמתלבט בין הצעות' +
+      ' להלוואה.',
+  )
+  expect(paragraphs[3]).toBe(
+    `🎁 זה בחינם, ויש שם גם ▶️ הדגמה של 2 דקות, בלי להירשם:\n${window.location.origin}`,
+  )
   expect(screen.getByRole('link', { name: 'קוד המקור ב-GitHub' })).toHaveAttribute(
     'href',
     'https://github.com/erancha/loan-simulator',
