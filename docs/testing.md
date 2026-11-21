@@ -334,6 +334,10 @@ one or on an archived check, the list of links the bubble opens and closes, and 
 its check on the conversation and names the card to focus, on every tap. Its delete tests, on
 archived checks, the only ones with a delete icon, prove the confirmation and its cancel, that the
 newest check left opens, that the last one leaves the empty state, and the refusal during a reply.
+`auth/SignInButton.test.tsx` proves that the sign-in explanation stays closed until asked for, opens
+with its points and its new-tab link to Google, closes from its toggle or its ✕, which returns focus
+to the toggle, frames the sign-in area only while open, and keeps a refused sign-in right under the
+button.
 `App.test.tsx` proves the Hebrew right-to-left document, the sign-in screen, entering the app and
 the fall back to sign-in on a 401. `money.test.ts` and `client.test.ts` cover the amount formatting
 and arithmetic on decimal strings, the API client's errors, and that each call of the offers flow

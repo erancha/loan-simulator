@@ -12,6 +12,7 @@ test('the reasons for signing in with Google stay closed until asked for', () =>
   expect(screen.getByRole('button', { name: WHY })).toHaveAttribute('aria-expanded', 'false')
   expect(screen.queryByRole('list')).not.toBeInTheDocument()
   expect(screen.queryByRole('link')).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'סגירת ההסבר' })).not.toBeInTheDocument()
 })
 
 test('the toggle opens the reasons, ending with the link to Google, and closes them', async () => {
@@ -28,7 +29,8 @@ test('the toggle opens the reasons, ending with the link to Google, and closes t
     'ההתחברות מאושרת על ידי Google, לא על ידי הסימולטור. Google מוסרת לסימולטור רק אימות לגבי' +
       ' הזהות שלכם, ללא גישה לנתונים שלכם (מיילים, אנשי קשר ועוד).',
   )
-  const link = screen.getByRole('link', { name: 'ההסבר המלא של Google' })
+  // The link says it opens a new tab, so nobody takes it for the way to close the explanation.
+  const link = screen.getByRole('link', { name: 'ההסבר המלא של Google (נפתח בכרטיסייה חדשה)' })
   expect(link).toHaveAttribute('href', GOOGLE_HELP)
   expect(link).toHaveAttribute('target', '_blank')
   expect(link).toHaveAttribute('rel', 'noreferrer')
@@ -45,4 +47,21 @@ test('a refused sign-in shows right under the button, above the reasons toggle',
   const alert = screen.getByRole('alert')
   const toggle = screen.getByRole('button', { name: WHY })
   expect(alert.compareDocumentPosition(toggle)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+})
+
+test('the open explanation frames the sign-in area, and its close button closes it', async () => {
+  const { container } = render(<SignInButton />)
+  const area = container.querySelector('.sign-in')
+  const toggle = screen.getByRole('button', { name: WHY })
+  expect(area).not.toHaveClass('sign-in-open')
+
+  await userEvent.click(toggle)
+  expect(area).toHaveClass('sign-in-open')
+
+  await userEvent.click(screen.getByRole('button', { name: 'סגירת ההסבר' }))
+  expect(toggle).toHaveAttribute('aria-expanded', 'false')
+  expect(screen.queryByRole('list')).not.toBeInTheDocument()
+  expect(area).not.toHaveClass('sign-in-open')
+  // The close button is gone, so focus moves to the toggle rather than to the page's start.
+  expect(toggle).toHaveFocus()
 })

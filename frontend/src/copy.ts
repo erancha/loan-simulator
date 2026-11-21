@@ -112,6 +112,10 @@ export const SIGN_IN_WHY_POINTS = [
     ' הכניסה לכאן.',
 ]
 export const SIGN_IN_WHY_LINK = 'ההסבר המלא של Google'
+/** The button that closes the explanation; its name, since it shows only a ✕. */
+export const SIGN_IN_WHY_CLOSE = 'סגירת ההסבר'
+/** What a link that opens a new tab adds to its name, where the eye sees ↗. */
+export const NEW_TAB = '(נפתח בכרטיסייה חדשה)'
 
 export const MORE = 'יותר'
 export const LESS = 'פחות'

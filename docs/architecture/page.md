@@ -18,7 +18,12 @@ API ([the agent](agent.md)) and holds no data the agent does not hold; the sign-
 
 A signed-out visitor sees the product name and the "התחברות עם Google" button
 (`frontend/src/auth/`), which sends the browser to Google and receives the ID token back in the URL
-fragment ([sign-in.md](../sign-in.md)). Under the name a line gives the build: its
+fragment ([sign-in.md](../sign-in.md)). Under the button, "למה להתחבר עם Google?"
+(`auth/SignInReasons.tsx`) opens a short explanation for a visitor wary of signing in to an
+unfamiliar site: Google approves the sign-in and passes only an identity, and the visitor can
+disconnect the simulator at any time. While it is open, the button and the explanation share a pale
+green panel, a ✕ on the toggle's line closes it, and its last link marks that it opens Google's own
+help page in a new tab. Under the name a line gives the build: its
 version, which is the release tag the checkout descends from (`vMAJOR.MINOR`) and the commits since
 it, and its last commit's date. `scripts/lib/build-info.sh` reads both from git and the image
 build receives them as build arguments, since its context has no `.git`. Under the card, one
