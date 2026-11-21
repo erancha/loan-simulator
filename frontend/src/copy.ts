@@ -59,8 +59,13 @@ export const DEMO_LINK = { before: `הדגמה (${DEMO_SECONDS}`, mark: '*', aft
 /** The marks before the demo and invite links, the same as the invite message's own. */
 export const DEMO_MARK = '▶️'
 export const INVITE_MARK = '💬'
-/** The demo link's tooltip: the desktop shows the chat and the card side by side. */
-export const DEMO_HINT = 'שיחה מוקלטת, מהשאלה הראשונה ועד ההמלצה; מומלץ לראות במסך מחשב'
+/** The demo link's tooltip, which only a computer shows. Its first line recommends a computer,
+ * where the chat and the card show side by side; its second says what the mark on the link's
+ * length stands for: the demo's starting speed, and the speed its clock counts by. */
+export const DEMO_HINT =
+  'שיחה מוקלטת, מהשאלה הראשונה ועד ההמלצה; מומלץ לראות במסך מחשב\n' +
+  `${DEMO_LINK.mark} ההדגמה מתחילה במהירות כפולה. במהירות רגילה היא נמשכת כשתי דקות, והשעון` +
+  ' בהדגמה סופר לפיה.'
 /** The banner over the replayed check on demo.html. */
 export const DEMO_BANNER = 'הדגמה מוקלטת'
 export const DEMO_RESTART = 'מההתחלה'

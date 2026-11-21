@@ -252,7 +252,9 @@ test('signed out links to the demo, the WhatsApp invite and the source', async (
   expect(demo).toHaveAttribute('rel', 'opener')
   expect(demo).toHaveAttribute(
     'title',
-    'שיחה מוקלטת, מהשאלה הראשונה ועד ההמלצה; מומלץ לראות במסך מחשב',
+    'שיחה מוקלטת, מהשאלה הראשונה ועד ההמלצה; מומלץ לראות במסך מחשב\n' +
+      '* ההדגמה מתחילה במהירות כפולה. במהירות רגילה היא נמשכת כשתי דקות, והשעון בהדגמה סופר' +
+      ' לפיה.',
   )
   const invite = new URL(
     screen.getByRole('link', { name: 'הזמנת חברים ב-WhatsApp' }).getAttribute('href') as string,
