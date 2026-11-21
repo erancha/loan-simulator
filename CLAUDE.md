@@ -59,7 +59,9 @@ than the license contact (`PUBLISHED_SETTINGS` of `lib/settings-guard.sh`).
   guest stack `loan-simulator-preview` (its own address, database and ports; `DEPLOY_PREVIEW` of
   `stack-params.sh` selects it).
 - `docker-helper.sh [--ec2 [--preview]]` — `--stop [--volumes] [--images]`, `--logs [-e]`,
-  `--ps`; `--ec2 --delete-stack` deletes the EC2 stack (a host's leaves its disk).
+  `--ps`, `--costs [--since <age>]` (model spend by day and kind, summed by `lib/docker_helper.py`,
+  the same file in every Docker repo); `--ec2 --delete-stack` deletes the EC2 stack (a host's
+  leaves its disk).
 - `lib/ec2.sh` — the EC2 target: the stack's deploy, SSH with an Instance Connect key, Compose
   against the instance's daemon. The stack is a host, with an instance of its own, or a guest on
   another Docker Compose repo's instance (`EC2_HOST_STACK` of `params.sh`); `template-ec2.yaml`,

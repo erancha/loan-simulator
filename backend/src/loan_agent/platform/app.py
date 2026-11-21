@@ -94,12 +94,13 @@ async def production_infrastructure(settings: Settings) -> AsyncIterator[Infrast
             "check that it runs, and ENGINE_URL and ENGINE_BEARER_TOKEN"
         ) from error
     api_key = settings.llm_api_key.get_secret_value()
-    model = build_chat_model(settings.llm_model, api_key)
+    model = build_chat_model(settings.llm_model, api_key, "turn")
     retry_model = (
         None
         if settings.llm_retry_model is None
         else RetryModel(
-            settings.llm_retry_model, build_chat_model(settings.llm_retry_model, api_key)
+            settings.llm_retry_model,
+            build_chat_model(settings.llm_retry_model, api_key, "retry turn"),
         )
     )
     database_url = settings.database_url.get_secret_value()

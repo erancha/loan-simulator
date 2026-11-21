@@ -99,10 +99,12 @@ Docker runs the stack; `deploy.sh` and `docker-helper.sh` stop when it is not re
   deploys.
 - `deploy.sh --ec2 --preview` — runs the working tree beside production on the same instance;
   [The preview on EC2](#the-preview-on-ec2) covers it, from the first deploy to its removal.
-- [`docker-helper.sh`](../scripts/docker-helper.sh) — `--stop [--volumes]`, `--logs [-e]` or
-  `--ps` for the stack; `--volumes` also removes the stored market data and the database. With
-  `--ec2` as its first argument it acts on the instance, and `--ec2 --delete-stack` deletes
-  the EC2 stack.
+- [`docker-helper.sh`](../scripts/docker-helper.sh) — `--stop [--volumes]`, `--logs [-e]`,
+  `--ps` or `--costs [--since <age>]` for the stack; `--volumes` also removes the stored market
+  data and the database. `--costs` sums the model calls of the running containers' logs by UTC
+  day and by kind of call (a turn, a retry turn), in dollars at the prices of
+  `backend/src/loan_agent/adapters/model_costs.py`. With `--ec2` as its first argument it acts
+  on the instance, and `--ec2 --delete-stack` deletes the EC2 stack.
 - [`test.sh`](../scripts/test.sh) — the quality gate, above.
 - [`init-env.sh`](../scripts/init-env.sh) — creates the settings files, above; `--force`
   replaces existing ones, hand-filled keys included.

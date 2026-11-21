@@ -66,10 +66,10 @@ def stubbed(monkeypatch: pytest.MonkeyPatch) -> ScriptedChatModel:
     """The production wiring with the engine and the chat model replaced by the returned
     ScriptedChatModel and a StubEngine; on teardown, checks both were built from the settings."""
     model = ScriptedChatModel(replies=[])
-    built: list[tuple[str, str]] = []
+    built: list[tuple[str, str, str]] = []
 
-    def build_chat_model(spec: str, api_key: str) -> ScriptedChatModel:
-        built.append((spec, api_key))
+    def build_chat_model(spec: str, api_key: str, kind: str) -> ScriptedChatModel:
+        built.append((spec, api_key, kind))
         return model
 
     StubEngine.opened = []
@@ -77,7 +77,7 @@ def stubbed(monkeypatch: pytest.MonkeyPatch) -> ScriptedChatModel:
     monkeypatch.setattr(app_module, "build_chat_model", build_chat_model)
     yield model
     assert StubEngine.opened == [(ENGINE_URL, ENGINE_TOKEN)]
-    assert built == [("anthropic:claude-test", "sk-test")]
+    assert built == [("anthropic:claude-test", "sk-test", "turn")]
 
 
 async def seed_interrupted_turn(database_url: str, check_id: str) -> None:

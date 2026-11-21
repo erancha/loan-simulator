@@ -3,6 +3,8 @@
 Core building blocks:
 - configure_logging: the root level, uvicorn's loggers routed to the shared handler, and plain
   tracebacks
+- the model_call logger kept at INFO, so each model call's line reaches the log whatever level
+  the process runs at
 - ProbeAccessDemotion: drops /health and /ready access lines answered below 400 to DEBUG so
   frequent orchestrator probes do not flood the log
 """
@@ -11,6 +13,8 @@ import logging
 import sys
 
 import structlog
+
+from loan_agent.adapters.model_costs import MODEL_CALL_LOGGER
 
 PROBE_PATHS = frozenset({"/health", "/ready"})
 UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
@@ -69,6 +73,7 @@ def configure_logging(level: str) -> None:
         logger.handlers.clear()
         logger.propagate = True
         logger.setLevel(logging.NOTSET)
+    logging.getLogger(MODEL_CALL_LOGGER).setLevel(logging.INFO)
     access = logging.getLogger(ACCESS_LOGGER)
     access.filters[:] = [f for f in access.filters if not isinstance(f, ProbeAccessDemotion)]
     access.addFilter(ProbeAccessDemotion())
