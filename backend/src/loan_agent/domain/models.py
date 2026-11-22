@@ -379,8 +379,10 @@ class Reading:
 
 @dataclass(frozen=True)
 class AwaitingOffer:
-    """A lender's offer whose words leave its type open, kept with its readings until the person
-    tells which one the lender meant. The offer states a rate, quotes a payment, or both."""
+    """A lender's offer that waits on its lender's answer, kept with its readings: one whose words
+    leave its type open, until the person tells which reading the lender meant, or one quoted for
+    less than the check's loan, until the lender says whether it lends the loan amount on the
+    same terms. The offer states a rate, quotes a payment, or both."""
 
     id: str
     check_id: str

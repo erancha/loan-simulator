@@ -608,22 +608,24 @@ class RecordingSink:
 
 
 class ScriptedChatModel(BaseChatModel):
-    """replies are answered in order, one per model call; received holds the messages of each call
-    and tools the tools of the last bind_tools. A call raises the next of errors, while any is
-    left, in place of answering."""
+    """replies are answered in order, one per model call; received holds the messages of each call,
+    tool_choices the tool each was bound to choose, and tools the tools of the last bind_tools. A
+    call raises the next of errors, while any is left, in place of answering."""
 
     replies: list[AIMessage]
     errors: list[Exception] = Field(default_factory=list)
     received: list[list[BaseMessage]] = Field(default_factory=list)
     tools: list[Any] = Field(default_factory=list)
+    tool_choices: list[str | None] = Field(default_factory=list)
+    """The tool each call was bound to choose; None for a free choice, as for an unbound call."""
 
     @property
     def _llm_type(self) -> str:
         return "scripted"
 
-    def bind_tools(self, tools: Any, **kwargs: Any) -> "ScriptedChatModel":
+    def bind_tools(self, tools: Any, **kwargs: Any) -> Any:
         self.tools = list(tools)
-        return self
+        return self.bind(tool_choice=kwargs.get("tool_choice"))
 
     def _generate(
         self,
@@ -632,10 +634,21 @@ class ScriptedChatModel(BaseChatModel):
         run_manager: CallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> ChatResult:
+        reply = self._next_reply(messages, kwargs)
+        return ChatResult(generations=[ChatGeneration(message=reply)])
+
+    def _next_reply(self, messages: list[BaseMessage], kwargs: dict[str, Any]) -> AIMessage:
+        """The next scripted reply; a script that answers a forced call with another tool is a
+        broken test, since a provider never lets the model do that."""
         self.received.append(list(messages))
+        choice = kwargs.get("tool_choice")
+        self.tool_choices.append(choice)
         if self.errors:
             raise self.errors.pop(0)
-        return ChatResult(generations=[ChatGeneration(message=self.replies.pop(0))])
+        reply = self.replies.pop(0)
+        if choice is not None and [call["name"] for call in reply.tool_calls] != [choice]:
+            raise AssertionError(f"the call was bound to {choice}; the script answers {reply}")
+        return reply
 
     async def _agenerate(
         self,
@@ -644,7 +657,7 @@ class ScriptedChatModel(BaseChatModel):
         run_manager: AsyncCallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> ChatResult:
-        return self._generate(messages, stop)
+        return self._generate(messages, stop, **kwargs)
 
     async def _astream(
         self,
@@ -653,10 +666,7 @@ class ScriptedChatModel(BaseChatModel):
         run_manager: AsyncCallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[ChatGenerationChunk]:
-        self.received.append(list(messages))
-        if self.errors:
-            raise self.errors.pop(0)
-        reply = self.replies.pop(0)
+        reply = self._next_reply(messages, kwargs)
         chunks = [AIMessageChunk(content=piece, id=reply.id) for piece in _fragments(reply.text)]
         chunks.append(
             AIMessageChunk(

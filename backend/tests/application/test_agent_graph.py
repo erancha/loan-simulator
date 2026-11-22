@@ -34,6 +34,7 @@ from fakes import (
 from loan_agent.adapters.engine_mcp import MODEL_ENGINE_TOOLS
 from loan_agent.application.agent_graph import (
     EVALUATION_HEADING,
+    PRESENT_RECOMMENDATION,
     RECOMMENDATION_HEADING,
     SYSTEM_PROMPT,
     AskArgs,
@@ -54,7 +55,12 @@ from loan_agent.application.agent_graph import (
     build_agent_graph,
     check_config,
 )
-from loan_agent.application.check_tools import ASKED_RESULT, READING_ON_SCREEN, ToolDeps
+from loan_agent.application.check_tools import (
+    ASKED_RESULT,
+    READING_ON_SCREEN,
+    CheckTools,
+    ToolDeps,
+)
 from loan_agent.application.turn_state import turn_state
 from loan_agent.domain.models import (
     Check,
@@ -1148,7 +1154,7 @@ async def test_the_lenders_answer_on_the_amount_in_words_saves_the_short_offer(
     model = ScriptedChatModel(
         replies=[
             calls(("answer_offer_amount", {"awaiting_id": "awaiting-1", "covers": True})),
-            calls(recommend("option-1")),
+            calls(recommend("awaiting-1")),
             AIMessage("ההמלצה מוכנה"),
         ]
     )
@@ -1158,9 +1164,54 @@ async def test_the_lenders_answer_on_the_amount_in_words_saves_the_short_offer(
     )
 
     (option,) = await world.options.list(CHECK)
-    assert option.lender == "אוויס"
+    # The saved offer keeps the id the model knew it by while it waited on its lender.
+    assert (option.id, option.lender) == ("awaiting-1", "אוויס")
     types = [event.type for event in world.sink.events]
     assert OFFER_SETTLED in types
+    assert await world.recommendations.latest(CHECK) is not None
+
+
+async def offer_saved_by_the_page(world: World) -> None:
+    """An 80,000 loan over 60 months with Avis's prime offer saved, as the page's answer on an
+    awaiting offer saves it before the turn that follows: no recommendation covers it yet."""
+    await world.checks.set_loan(CHECK, LoanRequest("רכב", Decimal(80000)))
+    await world.checks.set_term(CHECK, 60)
+    world.engine.simulations = [PRIME_SIMULATION]
+    track = {
+        "principal": "80000",
+        "term_months": 60,
+        "rate_kind": "prime",
+        "prime_spread": "1.5",
+        "cpi_linked": False,
+        "method": "spitzer",
+    }
+    await CheckTools(PERSON, CHECK, world.deps).save_offer([track], "אוויס")
+
+
+async def test_an_option_no_recommendation_covers_forces_the_recommendation(world: World) -> None:
+    await offer_saved_by_the_page(world)
+    model = ScriptedChatModel(replies=[calls(recommend("option-1")), AIMessage("ההמלצה מוכנה")])
+
+    await run(world, model).ainvoke(
+        said("אישור: 80,000 ₪ באותם תנאים אצל אוויס"), check_config(PERSON, CHECK)
+    )
+
+    assert model.tool_choices == [PRESENT_RECOMMENDATION, None]
+    recommendation = await world.recommendations.latest(CHECK)
+    assert recommendation is not None and recommendation.preferred_option_id == "option-1"
+
+
+async def test_a_refused_forced_recommendation_goes_back_to_the_model_unforced(
+    world: World,
+) -> None:
+    await offer_saved_by_the_page(world)
+    model = ScriptedChatModel(
+        replies=[calls(recommend("option-9")), calls(recommend("option-1")), AIMessage("מוכן")]
+    )
+
+    await run(world, model).ainvoke(said("מה עכשיו?"), check_config(PERSON, CHECK))
+
+    assert model.tool_choices == [PRESENT_RECOMMENDATION, None, None]
     assert await world.recommendations.latest(CHECK) is not None
 
 

@@ -283,7 +283,8 @@ function apply(state: CheckState, event: CheckEvent): CheckState {
           : state.optionsSinceRecommendation,
       }
     }
-    case 'examples.removed': {
+    case 'examples.removed':
+    case 'options.removed': {
       const { option_ids: removed, recommendation_removed } = event.data
       const options = new Map(state.options)
       for (const id of removed) options.delete(id)

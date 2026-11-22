@@ -59,6 +59,7 @@ from loan_agent.ports.events import (
     OFFER_SETTLED,
     OFFER_UNRECOGNIZED,
     OPTION_SAVED,
+    OPTIONS_REMOVED,
     QUESTION_ASKED,
     RECOMMENDATION_PRESENTED,
     SCENARIO_SHOWN,
@@ -1357,23 +1358,179 @@ async def test_a_zero_ceiling_keeps_an_open_offer_at_its_longest_term(world: Wor
 
 async def test_recommendation_refuses_an_option_of_another_amount(world: World) -> None:
     await ready_for_recommendation(world)
-
-    await world.tools.set_loan(None, "90000")
+    await world.checks.set_loan(CHECK, LoanRequest(None, Decimal(90000)))
 
     with pytest.raises(ToolError, match="option-2 borrows 80000.*90000"):
         await world.tools.present_recommendation("option-2", REASONING)
     assert world.recommendations.rows == {}
 
 
-async def test_changing_the_amount_after_a_recommendation_tells_the_model(world: World) -> None:
+async def test_a_new_amount_withdraws_the_recommendation_of_examples(world: World) -> None:
+    await ready_for_recommendation(world)
+    await world.tools.present_recommendation("option-1", REASONING)
+    world.sink.events.clear()
+
+    same = await world.tools.set_loan(None, "80000")
+    changed = await world.tools.set_loan(None, "90000")
+
+    assert "next_step" not in same
+    assert "call save_examples, then present_recommendation" in changed
+    assert world.recommendations.rows == {}
+    assert await world.options.list(CHECK) == []
+    assert world.events_of(OPTIONS_REMOVED) == [
+        {"option_ids": ["option-1", "option-2"], "recommendation_removed": True}
+    ]
+
+
+async def save_prime_offer(world: World) -> None:
+    """Harel's prime + 1.5% offer of 80,000 over 48 months, recommended."""
+    await world.tools.set_loan(None, "80000")
+    await world.tools.set_term(48)
+    world.engine.simulations = [PRIME_SIMULATION]
+    await world.tools.save_offer([PRIME_TRACK], "הראל")
+    await world.tools.present_recommendation("option-1", REASONING)
+    world.sink.events.clear()
+    world.engine.calls.clear()
+
+
+async def test_a_larger_amount_puts_each_offer_to_its_lender(world: World) -> None:
+    await save_prime_offer(world)
+    world.engine.readings = readings_of(
+        reading("prime_margin", "1.5", "1900.00", "6.25", "80000", 48),
+        reading("fixed_unlinked", "1.5", "1700.00", "1.5", "80000", 48),
+    )
+
+    summary = await world.tools.set_loan(None, "90000")
+
+    assert "never save such an offer at the new amount yourself" in summary
+    assert await world.options.list(CHECK) == []
+    assert world.recommendations.rows == {}
+    (offer,) = await world.awaiting.list(CHECK)
+    assert (offer.id, offer.lender, offer.amount) == ("option-1", "הראל", Decimal(80000))
+    assert offer.term_months == 48
+    (held,) = offer.readings
+    assert (held.kind, held.track, held.total_rate) == (
+        "prime_margin",
+        PRIME_TRACK,
+        Decimal("6.25"),
+    )
+    assert held.first_payment == PRIME_SIMULATION.figures.first_payment
+    assert world.engine.calls == [
+        ("suggest", {"principal": Decimal(90000), "term_months": 84}),
+        (
+            "offer_readings",
+            {
+                "principal": Decimal(80000),
+                "term_months": 48,
+                "stated_rate": Decimal("1.5"),
+                "monthly_payment": None,
+                "prime_total": False,
+            },
+        ),
+    ]
+    assert [event.type for event in world.sink.events] == [
+        LOAN_SET,
+        OPTIONS_REMOVED,
+        OFFER_AWAITING,
+    ]
+    assert world.events_of(OPTIONS_REMOVED) == [
+        {"option_ids": ["option-1"], "recommendation_removed": True}
+    ]
+    (awaiting,) = world.events_of(OFFER_AWAITING)
+    assert isinstance(awaiting, dict) and awaiting["identified"] is True
+
+
+async def test_an_offer_put_to_its_lender_is_saved_only_by_the_lenders_yes(world: World) -> None:
+    await save_prime_offer(world)
+    world.engine.readings = readings_of(
+        reading("prime_margin", "1.5", "1900.00", "6.25", "80000", 48)
+    )
+    await world.tools.set_loan(None, "90000")
+    (offer,) = await world.awaiting.list(CHECK)
+    larger = {**PRIME_TRACK, "principal": "90000"}
+    world.engine.simulations = [PRIME_SIMULATION, PRIME_SIMULATION]
+
+    with pytest.raises(ToolError, match="answer_offer_amount"):
+        await world.tools.save_offer([larger], "הראל")
+    await world.tools.answer_offer_amount(offer.id, True, None)
+
+    (saved,) = await world.options.list(CHECK)
+    assert (saved.id, saved.loan, saved.lender) == ("option-1", {"tracks": [larger]}, "הראל")
+    assert await world.awaiting.list(CHECK) == []
+
+
+async def test_a_smaller_amount_saves_each_offer_again_at_it(world: World) -> None:
+    await save_prime_offer(world)
+    world.engine.simulations = [PRIME_SIMULATION]
+
+    summary = await world.tools.set_loan(None, "70000")
+
+    assert "saved again at the new amount" in summary
+    (saved,) = await world.options.list(CHECK)
+    assert (saved.id, saved.lender) == ("option-1", "הראל")
+    assert saved.loan == {"tracks": [{**PRIME_TRACK, "principal": "70000"}]}
+    assert world.recommendations.rows == {}
+    assert await world.awaiting.list(CHECK) == []
+    assert [event.type for event in world.sink.events] == [LOAN_SET, OPTIONS_REMOVED, OPTION_SAVED]
+
+
+async def test_a_recommendation_is_due_until_one_covers_the_options(world: World) -> None:
+    assert await world.tools.recommendation_due() is False
+    await ready_for_recommendation(world)
+    assert await world.tools.recommendation_due() is True
+
+    await world.tools.present_recommendation("option-1", REASONING)
+    assert await world.tools.recommendation_due() is False
+
+    world.clock.value += timedelta(minutes=1)
+    world.engine.simulations = [PRIME_SIMULATION]
+    await add_example(world, {**PRIME_TRACK, "prime_spread": "2"})
+    assert await world.tools.recommendation_due() is True
+
+
+async def test_a_recommendation_of_another_ceiling_or_amount_is_due_again(world: World) -> None:
     await ready_for_recommendation(world)
     await world.tools.present_recommendation("option-1", REASONING)
 
-    changed = await world.tools.set_loan(None, "90000")
-    same = await world.tools.set_loan(None, "80000")
+    await world.checks.set_ceiling(CHECK, Decimal(3000), "stated")
+    assert await world.tools.recommendation_due() is True
+    recommendation = world.recommendations.rows[CHECK]
+    checked = replace(recommendation, payment_ceiling=Decimal(3000))
+    world.recommendations.rows[CHECK] = checked
+    assert await world.tools.recommendation_due() is False
 
-    assert "recommendation is for 80000" in changed
-    assert "recommendation is for" not in same
+    # A recommendation of another amount, saved before set_loan withdrew such ones.
+    world.recommendations.rows[CHECK] = replace(checked, loan_amount=Decimal(70000))
+    assert await world.tools.recommendation_due() is True
+
+
+async def test_a_new_term_withdraws_the_recommendation(world: World) -> None:
+    await ready_for_recommendation(world)
+    await world.tools.present_recommendation("option-1", REASONING)
+    world.sink.events.clear()
+
+    await world.tools.set_term(48)
+    assert world.recommendations.rows != {}
+    await world.tools.set_term(60)
+
+    assert world.recommendations.rows == {}
+    assert world.events_of(OPTIONS_REMOVED) == [{"option_ids": [], "recommendation_removed": True}]
+
+
+async def test_an_unknown_awaiting_id_is_refused_with_the_offers_that_await(world: World) -> None:
+    await world.tools.set_loan(None, "80000")
+
+    with pytest.raises(ToolError, match="are: none. An offer the person answered"):
+        await world.tools.answer_offer_amount("option-1", True, None)
+
+
+async def test_an_unknown_option_is_refused_with_the_options_it_can_recommend(
+    world: World,
+) -> None:
+    await ready_for_recommendation(world)
+
+    with pytest.raises(ToolError, match=r"no option 'awaiting-9'.*are: option-1 \(.*; option-2"):
+        await world.tools.present_recommendation("awaiting-9", REASONING)
 
 
 async def test_balloon_option_judged_on_recurring_payment(world: World) -> None:

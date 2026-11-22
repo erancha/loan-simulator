@@ -81,11 +81,16 @@ The comparison tests prove the classes of a gap (זניח, במקצת, ברור)
 conversation, and that options of another term are not compared. The offer tests prove an open offer
 priced at the confirmed term or at its shorter maximum, a term change that prices open offers again
 and leaves fixed ones, an engine refusal there that saves nothing, and an option saved again with
-the same figures refused while another lender's is saved. The ceiling and finances tools prove a
+the same figures refused while another lender's is saved. For a new loan amount they prove that
+the recommendation and the options of the old amount go, that a larger amount puts each real offer
+to its lender under the same id, saved only by the lender's yes, and that a smaller amount saves
+each offer again at it; for a new term, that the recommendation goes; and each case in which a
+recommendation is due. The ceiling and finances tools prove a
 stated ceiling, a derived one that replaces it, a bad figure or an engine refusal that saves
 nothing, and the request to recommend again after a ceiling change. The guardrail's tests prove an
 unchecked recommendation without a ceiling and a checked one within it, an option of another amount,
-an example of another term refused and not named as fitting, and each answer above the ceiling: a
+an unknown option refused with the options it can recommend, an example of another term refused
+and not named as fitting, and each answer above the ceiling: a
 refusal naming a saved option that fits, else a recommendation presented above the ceiling with its
 remedy, a longer term, the largest loan when 84 months do not fit, and none for a ceiling too low
 for any loan; for a check with offers, the longer term an open offer allows or the turn to the
@@ -135,7 +140,9 @@ after a successful ask, even beside a failed sibling call, and that each refusal
 model as an error result: two asks in one message, a question with both or neither of field and
 text, an empty question, a single choice. For the recommendation section it proves that one written
 without its tool is discarded and redone once, and that a call from an earlier turn does not count;
-a reply promising results later is rewritten once the same way.
+a reply promising results later is rewritten once the same way. It proves that a model call made
+while an option has no recommendation covering it is bound to `present_recommendation`, and that
+a refused forced call returns to the model unforced.
 For the state block it proves that a figure the page saved reaches the model without a tool call,
 that the block is built fresh at each model call within a turn and is absent from the checkpoint,
 and that `ask_term` ends the turn like `ask`, refused beside a second question. For `read_offer`

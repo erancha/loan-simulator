@@ -104,9 +104,11 @@ export interface LoanSimulation {
 
 export type OptionSaved = OptionData & { result: LoanSimulation }
 
-/** The examples a saved real offer removes from the check, and whether its recommendation, which
- * named one of them, is removed with them. */
-export interface ExamplesRemoved {
+/** Options that leave the check, and whether its recommendation leaves with them: the examples a
+ * saved real offer removes (`examples.removed`), with a recommendation that named one; or, on a
+ * new loan amount or term, every option of another amount and the recommendation of another
+ * amount or term (`options.removed`, which a new term sends with no option). */
+export interface OptionsRemoved {
   option_ids: string[]
   recommendation_removed: boolean
 }
@@ -339,8 +341,10 @@ export interface AwaitingOffer {
   type_words: TypeWord[]
   readings: Reading[]
   likely: ReadingKind | null
-  /** Its quoted payment identified its one reading; only an offer quoted for less than the
-   * check's loan awaits with an identified reading, for the lender's answer on the amount. */
+  /** It holds one reading, which its quoted payment identified, or which it was saved with
+   * before the check's loan grew past the amount quoted (then it quotes no payment); only an
+   * offer quoted for less than the check's loan awaits with an identified reading, for the
+   * lender's answer on the amount. */
   identified: boolean
   prime: string
   rate_as_of: string
@@ -392,6 +396,7 @@ export const CHECK_EVENT_TYPES = [
   'finances.updated',
   'option.saved',
   'examples.removed',
+  'options.removed',
   'recommendation.presented',
   'turn.status',
   'turn.failed',
@@ -457,7 +462,8 @@ export type CheckEvent =
   | Sequenced<'ceiling.set', { payment_ceiling: string; ceiling_source: CeilingSource }>
   | Sequenced<'finances.updated', FinancesUpdated>
   | Sequenced<'option.saved', OptionSaved>
-  | Sequenced<'examples.removed', ExamplesRemoved>
+  | Sequenced<'examples.removed', OptionsRemoved>
+  | Sequenced<'options.removed', OptionsRemoved>
   | Sequenced<'recommendation.presented', RecommendationPresented>
   | Sequenced<'turn.status', { status: TurnStatus }>
   | Sequenced<'turn.failed', { message: string }>

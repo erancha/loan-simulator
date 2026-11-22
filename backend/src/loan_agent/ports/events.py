@@ -26,6 +26,9 @@ FINANCES_UPDATED = "finances.updated"
 OPTION_SAVED = "option.saved"
 # A check's examples go once it holds a real offer, with a recommendation that names one.
 EXAMPLES_REMOVED = "examples.removed"
+# A new loan amount or term withdrew what no longer holds: the options of another amount, and the
+# recommendation of another amount or term.
+OPTIONS_REMOVED = "options.removed"
 RECOMMENDATION_PRESENTED = "recommendation.presented"
 # An offer whose type awaits its lender's answer; emitted again when a later message changes it.
 OFFER_AWAITING = "offer.awaiting"

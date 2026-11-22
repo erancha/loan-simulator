@@ -10,6 +10,7 @@ import {
   COVERS_SAME_TERMS,
   droppedText,
   equivalentRateText,
+  heldOfferText,
   identificationText,
   lenderQuestion,
   lenderQuestionTitle,
@@ -57,23 +58,25 @@ function identifiedReading(offer: AwaitingOffer): Reading {
   return reading
 }
 
-/** The payment an identified offer was identified by; an offer is identified only by one. */
-function quotedPayment(offer: AwaitingOffer): string {
-  if (offer.monthly_payment === null) {
-    throw new Error(`identified offer ${offer.awaiting_id} quotes no payment`)
-  }
-  return offer.monthly_payment
+/** How an identified offer reads: by the payment it quoted, or, quoting none, by the reading it
+ * was saved with before the check's loan grew past its amount. */
+function awaitingIdentifiedText(offer: AwaitingOffer): string {
+  const reading = identifiedReading(offer)
+  return offer.monthly_payment === null
+    ? heldOfferText(reading, offer.prime, offer.rate_as_of)
+    : identificationText(reading, offer.prime, offer.rate_as_of, offer.monthly_payment)
 }
 
 /**
  * The card of an offer that waits on its lender: what its payment is worth as a rate, what the
  * lender's words suggest, the question to put to the lender, and the readings the answer may
  * confirm, the likely one chosen. An offer quoted for less than the check's loan also asks the
- * lender for the loan amount on the same terms, answered yes or no; one its payment identified
- * shows that reading in place of the choices. Answering hands the chosen reading to the page; a
- * settled card shows the reading the offer was saved by, which may be one it never offered, and
- * a dropped card says the offer does not cover the loan, each in place of the questions. A
- * waiting card also has a button for describing another offer meanwhile and the market chip.
+ * lender for the loan amount on the same terms, answered yes or no; one whose reading is
+ * identified shows that reading in place of the choices. Answering hands the chosen reading to
+ * the page; a settled card shows the reading the offer was saved by, which may be one it never
+ * offered, and a dropped card says the offer does not cover the loan, each in place of the
+ * questions. A waiting card also has a button for describing another offer meanwhile and the
+ * market chip.
  */
 export function ReadingsCard({
   entry,
@@ -167,16 +170,7 @@ export function ReadingsCard({
   return (
     <div id={`awaiting-${offer.awaiting_id}`} className="bubble bubble-assistant readings-card">
       {offer.identified ? (
-        <p>
-          {withValues(
-            identificationText(
-              identifiedReading(offer),
-              offer.prime,
-              offer.rate_as_of,
-              quotedPayment(offer),
-            ),
-          )}
-        </p>
+        <p>{withValues(awaitingIdentifiedText(offer))}</p>
       ) : (
         <>
           {offer.payment_rate !== null && (

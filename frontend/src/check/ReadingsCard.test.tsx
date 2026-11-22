@@ -263,6 +263,18 @@ test(IDENTIFIED_SHORT, () => {
   expect(screen.getByRole('button', { name: 'המשך להצעה נוספת עד לבירור השאלה' })).toBeEnabled()
 })
 
+const HELD_SHORT =
+  'a saved offer the loan grew past shows the reading it was saved with and asks for the amount'
+
+test(HELD_SHORT, () => {
+  renderCard({ offer: { ...awaitingMaxShort, monthly_payment: null, payment_rate: null } })
+  expect(maxCard()).toHaveTextContent('ההצעה היא הלוואה בריבית פריים + 6.45%.')
+  expect(maxCard()).toHaveTextContent('הריבית הכוללת היום היא 11.2% (4.75 + 6.45).')
+  expect(maxCard()).not.toHaveTextContent('ההחזר שמסרת')
+  expect(maxCard()).toHaveTextContent('האם תוכלו להציע 45,000 ₪ באותם תנאים?')
+  expect(screen.getByRole('button', { name: 'כן, באותם תנאים' })).toBeEnabled()
+})
+
 test('כן, באותם תנאים on an identified offer answers with its one reading', async () => {
   const { onAnswerAmount, onConfirm } = renderCard({ offer: awaitingMaxShort })
   await userEvent.click(screen.getByRole('button', { name: 'כן, באותם תנאים' }))

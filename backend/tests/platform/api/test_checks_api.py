@@ -738,7 +738,10 @@ def test_put_term_saves_the_confirmed_term(world: World, client: TestClient) -> 
 
     assert response.status_code == 204
     assert world.checks.rows["c-rec"].term_months == 72
-    assert world.events.rows["c-rec"][-1].type == "term.set"
+    term_set, removed = world.events.rows["c-rec"][-2:]
+    assert (term_set.type, removed.type) == ("term.set", "options.removed")
+    assert removed.data == {"option_ids": [], "recommendation_removed": True}
+    assert "c-rec" not in world.recommendations.rows
 
 
 def test_put_term_with_a_ceiling_saves_both(world: World, client: TestClient) -> None:
@@ -755,7 +758,11 @@ def test_put_term_with_a_ceiling_saves_both(world: World, client: TestClient) ->
         Decimal(1000),
         "stated",
     )
-    assert [event.type for event in world.events.rows["c-rec"][-2:]] == ["term.set", "ceiling.set"]
+    assert [event.type for event in world.events.rows["c-rec"][-3:]] == [
+        "term.set",
+        "options.removed",
+        "ceiling.set",
+    ]
 
 
 def test_put_term_with_a_ceiling_of_zero_is_422(world: World, client: TestClient) -> None:

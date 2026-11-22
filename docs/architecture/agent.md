@@ -297,6 +297,16 @@ the recommendation section, or the single offer's section in its place, and no s
 the model is told once to redo it. The second reply stands, because a reply about a case with no
 recommendation may share the heading. A discarded reply is only ever streamed live, never stored.
 
+The card also goes out of date when an option is saved and no recommendation follows: the page's
+answer on an awaiting offer saves the offer before the turn that follows it, and a tool's result
+asks the model for the call in words only. So before each model call the model node asks
+`recommendation_due` of the check's tools whether the card still describes the check. It does not
+when the check holds options of its loan amount and term and the recommendation is missing, of
+another amount or ceiling, names an option no longer among them, or is older than one of them. The
+call is then bound to `present_recommendation`, which the provider makes the model call; the model
+still chooses the option and writes the reasoning. A refused forced call goes back to the model
+unforced, so it can first make what the refusal names, and the turn never loops on it.
+
 The agent speaks only in answer to a message, so a reply that promises results later ("אעדכן",
 "אחזור אליך", "אחזור ו...", "רוצה שאחשב", "זה לוקח כמה שניות", "אני הולך ל...") leaves the person
 with no answer. A reply without tool calls that holds one of those phrases is discarded the same
@@ -390,8 +400,10 @@ person may send another message.
 | `scenario.shown` | Every saved option priced on a scenario: the scenario with its defaults filled in, the values the person named, and per option the fields its card names it by, its payment today, highest payment and total on the scenario, and its highest payment and total in today's calculation. |
 | `check.cloned` | Left on the source check after a clone, naming the copy; the page adds a handoff note to the source's conversation, with a button to the copy, and the source stays open. A clone does not copy it. |
 | `option.saved` | An option was saved; carries the engine's full result. |
+| `examples.removed` | A real offer saved or awaiting removed the check's examples; carries their ids and whether the recommendation, which named one, was removed with them. |
+| `options.removed` | A new loan amount or term withdrew what no longer holds: the options of another amount and the recommendation of another amount or term; carries their ids and whether the recommendation was removed. |
 | `offer.identified` | `read_offer` identified an offer and saved it: the option's id, the lender, the reading, today's prime and its date, the quoted payment, and the quoted and the check's loan amounts; the page shows the short reply that names the loan. |
-| `offer.awaiting` | An offer awaits its lender's answer: its id, lender, quoted amount, term and payment, the rate the payment amounts to, the type words, the readings, the likely one, whether the quoted payment identified its one reading (only an offer quoted for less than the check's loan awaits so), and today's prime with its date; the page shows it as a readings card. Emitted again under the same id when a later message changes the offer. |
+| `offer.awaiting` | An offer awaits its lender's answer: its id, lender, quoted amount, term and payment, the rate the payment amounts to, the type words, the readings, the likely one, whether its one reading is identified, by the quoted payment or as the reading a saved offer had before the check's loan grew past its amount (only an offer quoted for less than the check's loan awaits so), and today's prime with its date; the page shows it as a readings card. Emitted again under the same id when a later message changes the offer. |
 | `offer.unrecognized` | No reading fit the offer, so nothing was saved; carries the lender, and the page asks the person to get more details from the lender. |
 | `offer.settled` | An awaiting offer became a saved offer: its id, the reading's kind and the reading it was saved by. Emitted both when the person confirms a reading on the card and when a later detail identifies the awaiting offer, whose reading the card may not hold; the page shows the saved reading on the settled card. |
 | `offer.dropped` | An awaiting offer quoted for less than the check's loan left the check, since its lender does not lend the loan amount on the same terms: its id, the lender, and the quoted and the check's loan amounts; the page shows on its card that the offer does not cover the loan. |

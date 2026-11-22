@@ -321,6 +321,16 @@ reading, the identified one or the one chosen on the card, on the check's loan a
 quoted term; a no removes the offer, which stays out of the comparison. An offer quoted for the
 loan amount or more is saved on the check's amount as above.
 
+The same holds when the check's loan amount changes. A recommendation and every option belong to
+the amount they were made for, so a new amount withdraws the recommendation of another amount and
+removes every option of another amount. The examples go, and are saved anew for the new amount
+when the person asks for them again. A real offer of a smaller amount than the new one awaits
+its lender's answer on the new amount, with the reading it was saved by as its one reading. A real
+offer of a larger amount is saved again on the new amount at the same terms. An offer keeps one id
+through all of this, awaiting or saved, so the id the agent learned for it stays valid. A
+recommendation is made for a term too, so a new term withdraws it; an offer that leaves its term
+open is priced again at the new term, and an example of another term is not recommended.
+
 An offer with only a number or only a payment goes to the card with every reading: a number alone
 has no payment to fit against, and readings priced from a payment all match it. A payment that no
 rate gives leaves no reading, and the type is not recognized. On a card, פריים keeps only the prime

@@ -174,6 +174,16 @@ test('a real offer removes the examples and the recommendation that named one', 
   expect(state.optionsSinceRecommendation).toEqual(['offer-hapoalim'])
 })
 
+test('a new loan amount removes the options and the recommendation of another amount', () => {
+  const state = play([
+    optionPrime36,
+    recommendationPrime,
+    { ...examplesRemoved(20, ['prime-36'], true), type: 'options.removed' },
+  ])
+  expect([...state.options.keys()]).toEqual([])
+  expect(state.recommendation).toBeNull()
+})
+
 test('removing examples keeps a recommendation that names none of them', () => {
   const state = play([optionPrime36, recommendationPrime, examplesRemoved(20, ['fixed-36'], false)])
   expect(state.recommendation).toBe(recommendationPrime.data)

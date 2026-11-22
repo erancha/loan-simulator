@@ -5,7 +5,8 @@ each check's conversation is one checkpoint thread.
 
 - build_agent_graph: the model node and the tool node over the thread's messages, as an
   AgentGraph; a reply's tool calls skip the tool node and are refused when an argument holds a
-  NUL character, and a prompt the provider's usage filter flags is sent once more
+  NUL character, and a prompt the provider's usage filter flags is sent once more; a call made
+  while the card no longer describes the check is bound to present_recommendation
 - check_config: the run configuration naming the person and the check, with the turn's step
   limit
 - delete_conversation, copy_conversation: remove a check's saved conversation, or start
@@ -55,6 +56,7 @@ log = logging.getLogger(__name__)
 
 # The graph node that calls the chat model; each of its updates in a turn is one model call.
 MODEL_NODE: Final = "model"
+PRESENT_RECOMMENDATION: Final = "present_recommendation"
 
 SYSTEM_PROMPT = (files(__package__) / "prompts" / "system_he.md").read_text(encoding="utf-8")
 
@@ -690,7 +692,7 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
         ),
         StructuredTool.from_function(
             coroutine=present_recommendation,
-            name="present_recommendation",
+            name=PRESENT_RECOMMENDATION,
             description="Present the recommendation card: the preferred option and an optional "
             "alternative, with your reasoning. Without a ceiling the card says it is not yet "
             "checked against what the person can pay. Refused, with the reason and the remedy "
@@ -763,10 +765,21 @@ def _recommends_without_the_tool(reply: AIMessage, messages: Sequence[BaseMessag
             return True
         if (
             isinstance(message, ToolMessage)
-            and message.name == "present_recommendation"
+            and message.name == PRESENT_RECOMMENDATION
             and message.status != "error"
         ):
             return False
+    raise AssertionError("a turn starts with the person's message")
+
+
+def _tried_to_present(messages: Sequence[BaseMessage]) -> bool:
+    """Whether the model's last reply of this turn called present_recommendation; a refused call
+    goes back to the model unforced, so it can make what the refusal names first."""
+    for message in reversed(messages):
+        if isinstance(message, HumanMessage):
+            return False
+        if isinstance(message, AIMessage):
+            return any(call["name"] == PRESENT_RECOMMENDATION for call in message.tool_calls)
     raise AssertionError("a turn starts with the person's message")
 
 
@@ -916,16 +929,26 @@ def build_agent_graph(
 ) -> AgentGraph:
     tools = [*engine_tools, *_check_model_tools(tool_deps)]
     bound = model.bind_tools(tools)
+    # The card changes only through present_recommendation, so while it no longer describes the
+    # check the model's next call is that one; the model still chooses and explains the option.
+    presenting = model.bind_tools(tools, tool_choice=PRESENT_RECOMMENDATION)
 
     async def call_model(state: MessagesState, config: RunnableConfig) -> MessagesState:
         configurable = config["configurable"]
         block = await turn_state(configurable[_USER_ID], configurable[_CHECK_ID], tool_deps)
         prefix = [SystemMessage(SYSTEM_PROMPT), SystemMessage(block)]
         conversation = [*prefix, *state["messages"]]
-        reply = await _reply_of(bound, conversation, config)
-        correction = _correction_for(reply, state["messages"], configurable[_CHECK_ID])
+        due = not _tried_to_present(state["messages"]) and (
+            await _tools_for(config, tool_deps).recommendation_due()
+        )
+        chosen = presenting if due else bound
+        check_id = configurable[_CHECK_ID]
+        reply = await _reply_of(chosen, conversation, config)
+        correction = _correction_for(reply, state["messages"], check_id)
         if correction is not None:
-            reply = await _reply_of(bound, [*conversation, reply, HumanMessage(correction)], config)
+            reply = await _reply_of(
+                chosen, [*conversation, reply, HumanMessage(correction)], config
+            )
         _require_new_calls(reply, state["messages"])
         return {"messages": [reply]}
 

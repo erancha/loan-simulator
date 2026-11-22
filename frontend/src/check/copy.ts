@@ -834,6 +834,24 @@ export const READING_BEHAVIOUR = {
   fixed_linked: 'ההחזר עולה עם המדד',
 } as const satisfies Record<ReadingKind, string>
 
+/** The reading's loan and, for a prime reading, how its rate adds up to the total today. */
+function readingSentences(
+  lead: string,
+  reading: Reading,
+  prime: string,
+  rateAsOf: string,
+): string[] {
+  const sentences = [`${lead} הלוואה ב${readingText(reading)}.`]
+  if (reading.kind === 'prime_margin' || reading.kind === 'prime_total') {
+    const sum = marginText(primeSpread(reading)).replace('%', '')
+    sentences.push(
+      `ריבית הפריים נכון ל-${formatDate(rateAsOf)} היא ${prime}%, כך שהריבית` +
+        ` הכוללת היום היא ${roundedPercent(reading.total_rate, 2)}% (${prime} ${sum}).`,
+    )
+  }
+  return sentences
+}
+
 /** How the quoted payment identified a reading: the loan, how a prime reading's rate adds up to
  * the total, and that the payment given matches. */
 export function identificationText(
@@ -842,17 +860,15 @@ export function identificationText(
   rateAsOf: string,
   monthlyPayment: string,
 ): string {
-  const sentences = [`זיהיתי שזו הלוואה ב${readingText(reading)}.`]
-  if (reading.kind === 'prime_margin' || reading.kind === 'prime_total') {
-    const sum = marginText(primeSpread(reading)).replace('%', '')
-    sentences.push(
-      `ריבית הפריים נכון ל-${formatDate(rateAsOf)} היא ${prime}%, כך שהריבית` +
-        ` הכוללת היום היא ${roundedPercent(reading.total_rate, 2)}% (${prime} ${sum}).`,
-    )
-  }
-  sentences.push(`ההחזר שמסרת, ${formatShekels(monthlyPayment)}, תואם לחישוב הזה.`)
-  return sentences.join(' ')
+  return [
+    ...readingSentences('זיהיתי שזו', reading, prime, rateAsOf),
+    `ההחזר שמסרת, ${formatShekels(monthlyPayment)}, תואם לחישוב הזה.`,
+  ].join(' ')
 }
+
+/** The loan of an offer saved before the check's loan grew past the amount it was quoted for. */
+export const heldOfferText = (reading: Reading, prime: string, rateAsOf: string) =>
+  readingSentences('ההצעה היא', reading, prime, rateAsOf).join(' ')
 
 /** The reply to an offer whose reading the agent identified and saved; an offer quoted on more
  * than the check's loan says which amount the check prices. */
