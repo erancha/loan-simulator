@@ -584,8 +584,13 @@ test('a clone offer clones with its choice and the request, and answers this che
   const { onClone } = renderPage()
   emit(userMessage(1, 'ומה עם 1,000 בחודש?'), questionAsked(2, CLONE_OFFER))
 
-  expect(screen.getByText(/לשכפל את הבדיקה/, { selector: '.question-label' })).toBeInTheDocument()
+  const question = screen.getByText(/לעדכן את הבדיקה הזאת\?/, { selector: '.question-label' })
+  expect(question).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'דילוג' })).not.toBeInTheDocument()
+  const choices = screen.getByText('לשכפל ולבדוק בנפרד').parentElement!
+  const [update, clone] = within(choices).getAllByRole('button')
+  expect([update.textContent, update.className]).toEqual(['לעדכן את הבדיקה הזאת', 'primary'])
+  expect(clone.textContent).toBe('לשכפל ולבדוק בנפרד')
   await userEvent.click(screen.getByRole('button', { name: 'לשכפל ולבדוק בנפרד' }))
   expect(onClone).toHaveBeenCalledWith('לשכפל ולבדוק בנפרד: ומה עם 1,000 בחודש?')
   expect(sentTexts(fetchStub)).toEqual([])

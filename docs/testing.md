@@ -275,7 +275,8 @@ without buttons once answered. It also proves that a refused save or a non-numbe
 open with its reason, and that a closed bubble shows only the question.
 
 **Check page.** `CheckPage.test.tsx` replays a recorded conversation into all three panes and proves
-sending, the cap notice with the local time on a 429, the silent 409, the clone offer's two choices,
+sending, the cap notice with the local time on a 429, the silent 409, the clone offer's two choices
+with updating the check first and primary,
 and when the checks list changes: once when a turn this page started ends, and not for replayed
 turns. For questions it proves that a finances answer is saved to the check and then sent as a line,
 that a refused save sends nothing, that a capped send after a saved answer keeps the bubble, that a

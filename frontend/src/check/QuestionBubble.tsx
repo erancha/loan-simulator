@@ -507,11 +507,11 @@ function FieldBubble({
       const stay = () => void settle(() => onSkip(STAY_CHOICE))
       return (
         <>
+          <button type="button" className="primary" disabled={busy} onClick={stay}>
+            {STAY_CHOICE}
+          </button>
           <button type="button" disabled={busy} onClick={clone}>
             {CLONE_CHOICE}
-          </button>
-          <button type="button" disabled={busy} onClick={stay}>
-            {STAY_CHOICE}
           </button>
         </>
       )

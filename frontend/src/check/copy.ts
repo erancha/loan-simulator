@@ -382,9 +382,11 @@ export function fieldLabel(field: QuestionField): string {
   return FIELD_COPY[field].label
 }
 
-/** The offer to clone a check before changing its recommendation; the prompt quotes the choices. */
+/** The question before a change to a check that holds a recommendation: updating the check is
+ * the default, and cloning it is the option for comparing the two; the prompt quotes the
+ * choices. */
 export const CLONE_QUESTION =
-  'לשכפל את הבדיקה ולבצע סימולציה נפרדת? כך אפשר יהיה להשוות בין הבדיקות.'
+  'לעדכן את הבדיקה הזאת? אפשר גם לשכפל אותה ולבדוק בנפרד, כדי להשוות בין השתיים.'
 export const CLONE_CHOICE = 'לשכפל ולבדוק בנפרד'
 /** The clone's first line: the choice and the request that brought the offer, which the clone
  * carries out; the prompt reads the request after the colon. */
