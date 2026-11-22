@@ -3,7 +3,7 @@ name = "loan-agent"
 version = "0.1.0"
 description = "Loan agent: a conversation that sizes and compares loans through the loan engine"
 license = "PolyForm-Noncommercial-1.0.0"
-authors = [{ name = "Eran C", email = "erancha@gmail.com" }]
+authors = [{ name = "Eran Hachmon", email = "erancha@gmail.com" }]
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.143",

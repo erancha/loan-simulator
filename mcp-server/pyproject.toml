@@ -3,7 +3,7 @@ name = "loan-engine"
 version = "0.1.0"
 description = "Loan engine: an MCP server of loan calculations over market data"
 license = "PolyForm-Noncommercial-1.0.0"
-authors = [{ name = "Eran C", email = "erancha@gmail.com" }]
+authors = [{ name = "Eran Hachmon", email = "erancha@gmail.com" }]
 requires-python = ">=3.12"
 dependencies = [
     "mcp>=2.3,<3",
