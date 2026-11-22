@@ -133,6 +133,9 @@ function isOfferReply(entry: ChatEntry): entry is OfferReply {
   return entry.role === 'readings' || entry.role === 'identified' || entry.role === 'unrecognized'
 }
 
+/** The chips a phone's width holds on one line; the row never wraps to a second. */
+const CHIPS_PER_LINE = 5
+
 /** When an entry was said, under its bubble on the bubble's side. */
 function EntryTime({ at, side }: { at: string | undefined; side: 'user' | 'assistant' }) {
   if (at === undefined) return null
@@ -207,15 +210,17 @@ export function Chat({
   // asking at any point and costs no model call, so that chip stays.
   const offerFormWaits = liveEntry?.role === 'question' && liveEntry.question.kind === 'offer'
   const stepsOffered = !offerFormWaits
-  const samples = [
+  const stepChips = [
     ...(stepsOffered && samplesOffered ? [SAMPLES_CHIP] : []),
     ...(stepsOffered && termChips.shorter ? [SHORTER_TERMS_CHIP] : []),
     ...(stepsOffered && termChips.longer ? [LONGER_TERMS_CHIP] : []),
     ...(stepsOffered && offersOpen ? [OFFER_SAMPLE] : []),
     ...(stepsOffered && scenarioOffered ? [SCENARIO_SAMPLE] : []),
     ...(stepsOffered && ceilingOffered ? [CEILING_CHIP] : []),
-    MARKET_SAMPLE,
   ]
+  // The market chip is the one to give way on a full line: the person can still ask for market
+  // data in the chat.
+  const samples = stepChips.length < CHIPS_PER_LINE ? [...stepChips, MARKET_SAMPLE] : stepChips
   const input = useRef<HTMLTextAreaElement>(null)
   const samplesChip = useRef<HTMLButtonElement>(null)
   const offerChip = useRef<HTMLButtonElement>(null)

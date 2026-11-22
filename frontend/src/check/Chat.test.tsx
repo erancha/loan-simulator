@@ -552,6 +552,38 @@ test('with no ceiling yet, a monthly payment chip sits beside the market chip an
   expect(screen.getByRole('textbox')).toHaveFocus()
 })
 
+test('with every step chip and the monthly payment chip, the market chip gives way', () => {
+  renderChat({
+    offersOpen: true,
+    scenarioOffered: true,
+    ceilingOffered: true,
+    termChips: { shorter: true, longer: true },
+  })
+  expect(chipLabels()).toEqual([
+    'קיצור תקופה',
+    'הארכת תקופה',
+    'הצעה מגוף מלווה',
+    'סימולציה',
+    'החזר חודשי',
+  ])
+})
+
+test('with the monthly payment chip and one step chip fewer, the market chip stays', () => {
+  renderChat({
+    offersOpen: true,
+    scenarioOffered: true,
+    ceilingOffered: true,
+    termChips: { shorter: false, longer: true },
+  })
+  expect(chipLabels()).toEqual([
+    'הארכת תקופה',
+    'הצעה מגוף מלווה',
+    'סימולציה',
+    'החזר חודשי',
+    'פריים ומדדים',
+  ])
+})
+
 test('the simulation chip shows between the offer and market chips, and fills the input', async () => {
   const { onSend } = renderChat({ offersOpen: true, scenarioOffered: true })
   expect(chipLabels()).toEqual(['הצעה מגוף מלווה', 'סימולציה', 'פריים ומדדים'])
