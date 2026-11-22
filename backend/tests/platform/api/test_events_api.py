@@ -143,9 +143,11 @@ def test_the_stream_replays_after_last_event_id_then_streams_live(
     ]
     assert replayed[0]["data"]["text"] == FIRST_REPLY
     deltas = [frame for frame in live if frame["type"] == "message.delta"]
-    stored = [frame for frame in live if frame["type"] != "message.delta"]
+    steps = [frame for frame in live if frame["type"] == "turn.step"]
+    stored = [frame for frame in live if frame["type"] not in ("message.delta", "turn.step")]
     assert len(deltas) > 1
-    assert not [frame for frame in deltas if "id" in frame or "at" in frame["data"]]
+    assert [frame["data"] for frame in steps] == [{"step": 1, "tools": []}]
+    assert not [frame for frame in deltas + steps if "id" in frame or "at" in frame["data"]]
     assert {frame["data"]["at"] for frame in stored} == {NOW.isoformat()}
     assert deltas[-1]["data"]["text"] == SECOND_REPLY
     assert [(frame["id"], frame["type"]) for frame in stored] == [

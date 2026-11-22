@@ -13,7 +13,6 @@ import {
   SCENARIO_SAMPLE,
   SEND_BUTTON,
   SHORTER_TERMS_CHIP,
-  THINKING,
   TO_CARD,
   cloneLine,
   withLastMonth,
@@ -40,6 +39,7 @@ import { QuestionBubble } from './QuestionBubble.tsx'
 import type { Answer } from './QuestionBubble.tsx'
 import { ReadingsCard } from './ReadingsCard.tsx'
 import { spokenLine } from './spokenLine.ts'
+import { ThinkingBubble } from './ThinkingBubble.tsx'
 
 /** How far from the end of the log (px) a reader still counts as following the conversation. */
 const FOLLOW_DISTANCE = 80
@@ -61,6 +61,10 @@ interface Props {
   /** How the ceiling was derived from the finances; null for a stated ceiling or none. */
   ceilingFormula: string | null
   turn: CheckState['turn']
+  /** The running turn's steps so far, for the thinking bubble. */
+  steps: CheckState['steps']
+  /** When the running turn started, for the thinking bubble's seconds. */
+  turnStartedAt: CheckState['turnStartedAt']
   failure: string | null
   /** Why the last send did not go through. */
   notice: string | null
@@ -154,6 +158,8 @@ export function Chat({
   ceiling,
   ceilingFormula,
   turn,
+  steps,
+  turnStartedAt,
   failure,
   notice,
   onSend,
@@ -430,7 +436,7 @@ export function Chat({
           ))}
           {running && !streaming && (
             <li className="chat-turn">
-              <p className="bubble bubble-thinking">{THINKING}</p>
+              <ThinkingBubble steps={steps} startedAt={turnStartedAt} />
             </li>
           )}
         </ol>

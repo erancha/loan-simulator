@@ -141,8 +141,9 @@ model as an error result: two asks in one message, a question with both or neith
 text, an empty question, a single choice. For the recommendation section it proves that one written
 without its tool is discarded and redone once, and that a call from an earlier turn does not count;
 a reply promising results later is rewritten once the same way. It proves that a model call made
-while an option has no recommendation covering it is bound to `present_recommendation`, and that
-a refused forced call returns to the model unforced.
+while an option has no recommendation covering it is bound to `present_recommendation`, that a
+refused forced call returns to the model unforced, and that each model call publishes its step and
+the tools it chose.
 For the state block it proves that a figure the page saved reaches the model without a tool call,
 that the block is built fresh at each model call within a turn and is absent from the checkpoint,
 and that `ask_term` ends the turn like `ask`, refused beside a second question. For `read_offer`
@@ -245,7 +246,10 @@ and skipped, switching checks closes the old stream, and a closed stream signals
 update line, that a refused save shows the rejection and sends nothing, that the panel shows a
 stated or a derived ceiling with its source, and that a read-only panel takes no edit.
 
-**Chat.** `Chat.test.tsx` proves the bubbles, the thinking bubble, the input locked while a turn
+**Chat.** `ThinkingBubble.test.tsx` proves the thinking bubble's line: the seconds counted from
+the turn's start, or from the bubble's appearance when the turn has no start time, the step, what
+a step's tools do, the hint that lists the turn's steps, and a tool with no text shown as thinking
+and logged. `Chat.test.tsx` proves the bubbles, the thinking bubble, the input locked while a turn
 runs, Enter against Shift+Enter, the text kept when a send is refused, and that the log follows
 new and streamed text and content that grows by itself until the reader scrolls up. It also proves
 that a question is its own turn with a control only while live, that a question ending the

@@ -255,6 +255,29 @@ export const OFFER_DETAILS =
 export const EMPTY_CARD = 'ההמלצה תופיע כאן אחרי שנכיר את ההלוואה.'
 
 export const THINKING = 'העוזר חושב…'
+/** What the assistant does in a step: thinking, or the activities of the tools it runs. */
+function doingText(activities: string[]): string {
+  return activities.length === 0 ? 'חושב' : activities.join(', ')
+}
+
+/** The thinking bubble's line: what the assistant does, the seconds the turn has run from the
+ * first whole second, and the step it is on, e.g. "העוזר חושב, 99 שניות (שלב 1)". */
+export function thinkingLine(activities: string[], step: number | null, seconds: number): string {
+  const time = seconds < 1 ? '' : `, ${seconds === 1 ? 'שנייה אחת' : `${seconds} שניות`}`
+  const steps = step === null ? '' : ` (שלב ${step})`
+  return `העוזר ${doingText(activities)}${time}${steps}`
+}
+
+/** The thinking bubble's tooltip: what a step is, then each step of the turn so far. */
+export function stepsHint(steps: { step: number; activities: string[] }[]): string {
+  const what =
+    'כל שלב הוא סבב אחד של העוזר: הוא קורא את השיחה ואת נתוני הבדיקה, ומחליט אם לחשב, לשמור' +
+    ' או לכתוב תשובה. שאלה פשוטה נגמרת בשלב אחד; הצעה והמלצה לוקחות כמה שלבים.'
+  if (steps.length === 0) return what
+  const done = steps.map((step) => `שלב ${step.step}: ${doingText(step.activities)}`)
+  return `${what} בתור הזה: ${done.join('; ')}.`
+}
+
 export const INPUT_PLACEHOLDER = {
   idle: 'אפשר לכתוב כאן…',
   running: THINKING,

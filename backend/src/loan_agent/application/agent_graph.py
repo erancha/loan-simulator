@@ -6,7 +6,8 @@ each check's conversation is one checkpoint thread.
 - build_agent_graph: the model node and the tool node over the thread's messages, as an
   AgentGraph; a reply's tool calls skip the tool node and are refused when an argument holds a
   NUL character, and a prompt the provider's usage filter flags is sent once more; a call made
-  while the card no longer describes the check is bound to present_recommendation
+  while the card no longer describes the check is bound to present_recommendation, and every
+  call publishes a live turn.step event when it starts and when it chooses tools
 - check_config: the run configuration naming the person and the check, with the turn's step
   limit
 - delete_conversation, copy_conversation: remove a check's saved conversation, or start
@@ -51,6 +52,7 @@ from loan_agent.application.check_tools import (
 )
 from loan_agent.application.turn_state import turn_state
 from loan_agent.domain.models import ReadingKind, TypeWord
+from loan_agent.ports.events import TURN_STEP
 
 log = logging.getLogger(__name__)
 
@@ -772,6 +774,17 @@ def _recommends_without_the_tool(reply: AIMessage, messages: Sequence[BaseMessag
     raise AssertionError("a turn starts with the person's message")
 
 
+def _model_calls_this_turn(messages: Sequence[BaseMessage]) -> int:
+    """How many replies the model gave since the person's message that started the turn."""
+    count = 0
+    for message in reversed(messages):
+        if isinstance(message, HumanMessage):
+            return count
+        if isinstance(message, AIMessage):
+            count += 1
+    raise AssertionError("a turn starts with the person's message")
+
+
 def _tried_to_present(messages: Sequence[BaseMessage]) -> bool:
     """Whether the model's last reply of this turn called present_recommendation; a refused call
     goes back to the model unforced, so it can make what the refusal names first."""
@@ -943,6 +956,8 @@ def build_agent_graph(
         )
         chosen = presenting if due else bound
         check_id = configurable[_CHECK_ID]
+        step = _model_calls_this_turn(state["messages"]) + 1
+        await tool_deps.sink.publish_live(check_id, TURN_STEP, {"step": step, "tools": []})
         reply = await _reply_of(chosen, conversation, config)
         correction = _correction_for(reply, state["messages"], check_id)
         if correction is not None:
@@ -950,6 +965,9 @@ def build_agent_graph(
                 chosen, [*conversation, reply, HumanMessage(correction)], config
             )
         _require_new_calls(reply, state["messages"])
+        if reply.tool_calls:
+            names = list(dict.fromkeys(call["name"] for call in reply.tool_calls))
+            await tool_deps.sink.publish_live(check_id, TURN_STEP, {"step": step, "tools": names})
         return {"messages": [reply]}
 
     builder = StateGraph(MessagesState)

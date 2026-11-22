@@ -76,6 +76,7 @@ from loan_agent.ports.events import (
     OFFER_IDENTIFIED,
     OFFER_SETTLED,
     QUESTION_ASKED,
+    TURN_STEP,
 )
 
 PERSON = "1001"
@@ -442,6 +443,33 @@ def test_system_prompt_names_the_same_purpose_choices_as_the_page() -> None:
 def test_system_prompt_and_track_schema_say_a_margin_under_prime_is_negative() -> None:
     assert "פריים מינוס" in SYSTEM_PROMPT
     assert "-0.25" in str(TrackArgs.model_fields["prime_spread"].description)
+
+
+async def test_tool_activity_names_every_agent_tool(world: World) -> None:
+    """The page shows a Hebrew activity for each tool a turn.step names, from toolActivity.ts."""
+    model = ScriptedChatModel(replies=[])
+    run(world, model, [])
+    activity = (Path(__file__).parents[3] / "frontend/src/check/toolActivity.ts").read_text(
+        encoding="utf-8"
+    )
+    named = set(re.findall(r"^  ([a-z_]+): '", activity, re.MULTILINE))
+    assert named == {tool.name for tool in model.tools} | MODEL_ENGINE_TOOLS
+
+
+async def test_each_model_call_publishes_its_step_and_the_tools_it_chose(world: World) -> None:
+    await car_loan_of_60_months(world)
+    model = ScriptedChatModel(
+        replies=[calls(("set_ceiling", {"amount": "3000"})), AIMessage("נשמר")]
+    )
+
+    await run(world, model).ainvoke(said("עד 3,000 בחודש"), check_config(PERSON, CHECK))
+
+    steps = [event.data for event in world.sink.live if event.type == TURN_STEP]
+    assert steps == [
+        {"step": 1, "tools": []},
+        {"step": 1, "tools": ["set_ceiling"]},
+        {"step": 2, "tools": []},
+    ]
 
 
 async def test_every_tool_the_system_prompt_names_is_bound(world: World) -> None:

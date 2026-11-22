@@ -313,6 +313,8 @@ export function CheckPage({
                 : ceilingFormula(state.ceiling.basis, state.finances)
             }
             turn={state.turn}
+            steps={state.steps}
+            turnStartedAt={state.turnStartedAt}
             failure={state.failure}
             notice={notice}
             onSend={sendTyped}

@@ -21,6 +21,8 @@ const exchange: ChatMessage[] = [
 /** The question props, for a chat whose entries hold no question. */
 const noQuestion = {
   liveQuestionId: null,
+  steps: [],
+  turnStartedAt: null,
   finances: null,
   ceiling: null,
   ceilingFormula: null,
@@ -152,7 +154,7 @@ test('a running turn shows the thinking bubble until the reply streams', () => {
       onSend={vi.fn()}
     />,
   )
-  expect(screen.getByText('העוזר חושב…')).toHaveClass('bubble', 'bubble-thinking')
+  expect(document.querySelector('.bubble-thinking')).toHaveTextContent(/^העוזר חושב/)
 
   rerender(
     <Chat
@@ -164,7 +166,7 @@ test('a running turn shows the thinking bubble until the reply streams', () => {
       onSend={vi.fn()}
     />,
   )
-  expect(screen.queryByText('העוזר חושב…')).not.toBeInTheDocument()
+  expect(document.querySelector('.bubble-thinking')).toBeNull()
   const streaming = screen.getByText('בשמ')
   expect(streaming.querySelector('.caret')).toBeInTheDocument()
 })

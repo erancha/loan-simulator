@@ -4,7 +4,8 @@
  * The stream replays stored events and then continues live, and a reconnect replays again, so
  * stored events (with a seq) are applied once. `message.delta` has no seq and carries the whole
  * reply so far; its complete `message.assistant` may arrive later, or already have been applied.
- * `message.retracted`, also without a seq, removes a reply that is still being written.
+ * `message.retracted`, also without a seq, removes a reply that is still being written, and
+ * `turn.step`, live too, names a model call of the running turn and the tools it chose.
  *
  * An offer the person described becomes an entry of the conversation: a readings card while its
  * loan type, or the loan amount of an offer quoted for less, waits on the lender, or the reply
@@ -26,6 +27,7 @@ import type {
   Reading,
   RecommendationPresented,
   ScenarioShown,
+  TurnStep,
 } from '../api/types.ts'
 import { exceeds } from '../money.ts'
 import { TERM_MAX_MONTHS, TERM_MIN_MONTHS } from './copy.ts'
@@ -164,6 +166,12 @@ export interface CheckState {
   ceiling: { amount: string; source: CeilingSource; basis: CeilingBasis | null } | null
   finances: Finances
   turn: 'idle' | 'running'
+  /** The running turn's model calls so far, one per step number, each with the tools it chose,
+   * from the live `turn.step` events; empty between turns and before the first step arrives. */
+  steps: TurnStep[]
+  /** When the running turn started, by the server's clock, from its `turn.status`; null between
+   * turns and in the demo, whose recording holds no times. */
+  turnStartedAt: string | null
   /** How many times a running turn has gone idle in this stream, replay included. */
   turnsEnded: number
   /** The last `turn.failed` message; cleared by the next `message.user`. */
@@ -184,6 +192,8 @@ export const initialState: CheckState = {
   ceiling: null,
   finances: { net_fixed_income: null, fixed_expenses: null },
   turn: 'idle',
+  steps: [],
+  turnStartedAt: null,
   turnsEnded: 0,
   failure: null,
   lastSeq: 0,
@@ -229,6 +239,11 @@ function apply(state: CheckState, event: CheckEvent): CheckState {
         ...state,
         messages: upsertAssistant(state.messages, message_id, text, false),
       }
+    }
+    case 'turn.step': {
+      // A call reports itself when it starts and again with the tools it chose.
+      const earlier = state.steps.filter((step) => step.step !== event.data.step)
+      return { ...state, steps: [...earlier, event.data] }
     }
     case 'message.retracted':
       return {
@@ -306,7 +321,10 @@ function apply(state: CheckState, event: CheckEvent): CheckState {
         optionsSinceRecommendation: [],
       }
     case 'turn.status': {
-      if (event.data.status === 'running') return { ...state, turn: 'running' }
+      if (event.data.status === 'running') {
+        const turnStartedAt = event.at === undefined ? null : event.at
+        return { ...state, turn: 'running', steps: [], turnStartedAt }
+      }
       // A reply still incomplete when its turn ends was never stored, so a reload never shows it.
       const settled = {
         ...state,
@@ -315,6 +333,8 @@ function apply(state: CheckState, event: CheckEvent): CheckState {
       return {
         ...settled,
         turn: 'idle',
+        steps: [],
+        turnStartedAt: null,
         turnsEnded: state.turn === 'running' ? state.turnsEnded + 1 : state.turnsEnded,
       }
     }

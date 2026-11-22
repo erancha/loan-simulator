@@ -389,6 +389,7 @@ export const CHECK_EVENT_TYPES = [
   'message.user',
   'message.delta',
   'message.retracted',
+  'turn.step',
   'message.assistant',
   'loan.set',
   'term.set',
@@ -423,8 +424,17 @@ interface Sequenced<Type extends EventTypeName, Data> {
   at?: string
 }
 
-/** `message.delta` and `message.retracted` are the events without a sequence number; a delta's
- * text is cumulative. */
+/** A model call of the running turn: its number within the turn, and the tools it chose to run
+ * next, by name; none while the call is still thinking. */
+export interface TurnStep {
+  step: number
+  tools: string[]
+}
+
+/** The live events, published to open pages and never stored, so they carry no sequence number;
+ * a `message.delta`'s text is cumulative. */
+export const LIVE_EVENT_TYPES = ['message.delta', 'message.retracted', 'turn.step'] as const
+
 /** A market series to draw: the prime in annual percent, or the CPI's monthly change in percent;
  * values are decimal strings, oldest month first. */
 export interface ChartShown {
@@ -456,6 +466,7 @@ export type CheckEvent =
   | { type: 'message.delta'; data: { message_id: string; text: string }; seq: null }
   /** Live only: a streamed reply the page drops, since the assistant rewrites it. */
   | { type: 'message.retracted'; data: { message_id: string }; seq: null }
+  | { type: 'turn.step'; data: TurnStep; seq: null }
   | Sequenced<'message.assistant', { message_id: string; text: string }>
   | Sequenced<'loan.set', LoanRequest>
   | Sequenced<'term.set', { term_months: number }>

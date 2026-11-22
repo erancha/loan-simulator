@@ -409,6 +409,7 @@ person may send another message.
 | `offer.dropped` | An awaiting offer quoted for less than the check's loan left the check, since its lender does not lend the loan amount on the same terms: its id, the lender, and the quoted and the check's loan amounts; the page shows on its card that the offer does not cover the loan. |
 | `recommendation.presented` | A recommendation passed the guardrail; carries the loan amount, the ceiling and its source or none, whether it was checked, both options and the reasoning. |
 | `turn.status` | `running` when a turn starts, `idle` when it ends. |
+| `turn.step` | Live only, never stored: a model call of the running turn started (its number within the turn, no tools) or chose the tools it runs next (their names); the page's thinking bubble names what each tool does. |
 | `turn.failed` | A Hebrew message the page shows as is, sent before `idle` when a turn failed. |
 
 Fragments are never stored and go out without an event id, so a page that reconnects or opens a

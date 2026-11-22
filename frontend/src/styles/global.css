@@ -538,7 +538,17 @@ fieldset.field.changed {
 }
 
 .bubble-thinking {
+  position: relative;
   color: var(--mute);
+  font-size: calc(1em - 2px);
+}
+
+/* The bubble is narrow and sits at the chat's far edge, so its hint opens from that edge into
+   the chat at a readable width rather than the bubble's. */
+.bubble-thinking .hint-text {
+  inset-inline: auto 0;
+  inline-size: min(22rem, 80vw);
+  white-space: normal;
 }
 
 .bubble-question {

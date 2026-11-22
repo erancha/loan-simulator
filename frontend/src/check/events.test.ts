@@ -184,6 +184,30 @@ test('a new loan amount removes the options and the recommendation of another am
   expect(state.recommendation).toBeNull()
 })
 
+test('a turn keeps its steps, each with the tools it chose, until a turn starts or ends', () => {
+  const step = (number: number, tools: string[]): CheckEvent => ({
+    type: 'turn.step',
+    data: { step: number, tools },
+    seq: null,
+  })
+  const running = play([
+    turnStatus(1, 'running'),
+    step(1, []),
+    step(1, ['set_loan']),
+    step(2, []),
+  ])
+  expect(running.steps).toEqual([
+    { step: 1, tools: ['set_loan'] },
+    { step: 2, tools: [] },
+  ])
+  expect(running.lastSeq).toBe(1)
+  expect(reduce(running, turnStatus(2, 'idle')).steps).toEqual([])
+  const timed = reduce(initialState, { ...turnStatus(1, 'running'), at: '2026-11-22T09:52:31Z' })
+  expect(timed.turnStartedAt).toBe('2026-11-22T09:52:31Z')
+  expect(reduce(timed, turnStatus(2, 'idle')).turnStartedAt).toBeNull()
+  expect(reduce(running, turnStatus(2, 'running')).steps).toEqual([])
+})
+
 test('removing examples keeps a recommendation that names none of them', () => {
   const state = play([optionPrime36, recommendationPrime, examplesRemoved(20, ['fixed-36'], false)])
   expect(state.recommendation).toBe(recommendationPrime.data)

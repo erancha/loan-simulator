@@ -17,6 +17,9 @@ MESSAGE_DELTA = "message.delta"
 # Live only: a streamed reply the page drops, since it will be rewritten.
 MESSAGE_RETRACTED = "message.retracted"
 MESSAGE_ASSISTANT = "message.assistant"
+# Live only: a model call of the running turn started (no tools) or chose the tools it runs next,
+# so the page shows that the turn moves and what it does.
+TURN_STEP = "turn.step"
 TURN_STATUS = "turn.status"
 TURN_FAILED = "turn.failed"
 LOAN_SET = "loan.set"
