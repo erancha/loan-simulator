@@ -62,8 +62,13 @@ class ModelCallLog(BaseCallbackHandler):
         details = usage.get("input_token_details", {})
         read = _count(details, "cache_read")
         written = sum(_count(details, key) for key in _CACHE_WRITE_KEYS)
+        reasoning = _count(usage.get("output_token_details", {}), "reasoning")
         billed = Usage(
-            usage["input_tokens"] - read - written, usage["output_tokens"], read, written
+            usage["input_tokens"] - read - written,
+            usage["output_tokens"],
+            read,
+            written,
+            reasoning,
         )
         log_model_call(self.kind, self.spec, billed, time.perf_counter() - started)
 

@@ -5,7 +5,8 @@ The same file in every Docker repo. Each input line is the timestamp Docker reco
 space, and the line a service logged, in whatever format that service writes; the call's JSON
 object, which model_costs.py (or the Java agent's equivalent) logs per answered call, sits
 somewhere in it and is read from its opening brace. A line that merely mentions model_call holds
-no such object and does not count.
+no such object and does not count. A line without reasoning_tokens comes from an agent that does
+not report them, and adds none to the reasoning column.
 """
 
 import json
@@ -25,6 +26,7 @@ class Total:
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
     output_tokens: int = 0
+    reasoning_tokens: int = 0
     cost: float = 0.0
 
     def add(self, call: dict) -> None:
@@ -33,6 +35,8 @@ class Total:
         self.cache_read_tokens += call["cache_read_tokens"]
         self.cache_write_tokens += call["cache_write_tokens"]
         self.output_tokens += call["output_tokens"]
+        if "reasoning_tokens" in call:
+            self.reasoning_tokens += call["reasoning_tokens"]
         self.cost += call["cost"]
 
 
@@ -57,13 +61,14 @@ def summarize(lines) -> str:
         total.add(call)
     header = (
         f"{'':<16}{'calls':>8}{'tokens in':>12}{'cache read':>12}{'cache write':>12}"
-        f"{'tokens out':>12}{'cost $':>10}"
+        f"{'tokens out':>12}{'reasoning':>12}{'cost $':>10}"
     )
 
     def row(label: str, t: Total) -> str:
         return (
             f"{label:<16}{t.calls:>8}{t.input_tokens:>12}{t.cache_read_tokens:>12}"
-            f"{t.cache_write_tokens:>12}{t.output_tokens:>12}{t.cost:>10.4f}"
+            f"{t.cache_write_tokens:>12}{t.output_tokens:>12}{t.reasoning_tokens:>12}"
+            f"{t.cost:>10.4f}"
         )
 
     out = ["by day (UTC)", header, *(row(d, by_day[d]) for d in sorted(by_day))]

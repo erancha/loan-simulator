@@ -1,5 +1,5 @@
 """Each model call logs one model_call line: its kind, the provider:model, the tokens billed at
-each rate and the dollars they cost at the listed prices."""
+each rate, the reasoning tokens among the output and the dollars they cost at the listed prices."""
 
 import json
 import logging
@@ -47,6 +47,7 @@ async def test_an_anthropic_call_bills_uncached_read_and_written_tokens_apart(
         "output_tokens": 200,
         "cache_read_tokens": 1000,
         "cache_write_tokens": 300,
+        "reasoning_tokens": 0,
         "seconds": line["seconds"],
         "cost": pytest.approx((200 * 0.10 + 200 * 0.50 + 1000 * 0.01 + 300 * 0.125) / 1e6),
     }
@@ -73,6 +74,7 @@ def test_an_openai_call_bills_its_cached_prefix_at_the_cached_price(
         output_tokens=50,
         total_tokens=1050,
         input_token_details={"cache_read": 800},
+        output_token_details={"reasoning": 30},
     )
     answering("openai:gpt-5-mini", "retry turn", usage).invoke("שלום")
 
@@ -82,7 +84,7 @@ def test_an_openai_call_bills_its_cached_prefix_at_the_cached_price(
         200,
         800,
     )
-    assert line["cache_write_tokens"] == 0
+    assert (line["cache_write_tokens"], line["reasoning_tokens"]) == (0, 30)
     assert line["cost"] == pytest.approx((200 * 0.25 + 50 * 2.00 + 800 * 0.025) / 1e6)
 
 

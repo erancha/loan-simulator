@@ -5,7 +5,8 @@ definition that scripts/lib/docker_helper.py, behind docker-helper.sh --costs, s
 
 Core building blocks:
 - PRICE_PER_MILLION: the listed prices of every model the repos run
-- Usage / call_cost: the tokens of one call at each rate, and the dollars they cost
+- Usage / call_cost: the tokens of one call at each rate, its reasoning tokens, and the dollars
+  they cost
 - require_price: refuses a provider:model whose prices are not listed, before a client is built
 - log_model_call: one JSON line per answered call on the MODEL_CALL_LOGGER logger
 """
@@ -34,14 +35,15 @@ PRICE_PER_MILLION = {
 
 @dataclass(frozen=True)
 class Usage:
-    """Billed tokens of one call; reasoning tokens count as output. input_tokens are the ones
-    billed at the full input price, so they leave out the tokens read from or written to the
-    prompt cache."""
+    """Billed tokens of one call. input_tokens are the ones billed at the full input price, so
+    they leave out the tokens read from or written to the prompt cache. output_tokens include
+    the reasoning, which reasoning_tokens counts apart; it is 0 when the provider reports none."""
 
     input_tokens: int
     output_tokens: int
     cache_read_tokens: int
     cache_write_tokens: int
+    reasoning_tokens: int
 
 
 def model_id(spec: str) -> str:
@@ -78,6 +80,7 @@ def log_model_call(kind: str, spec: str, usage: Usage, seconds: float) -> None:
         "output_tokens": usage.output_tokens,
         "cache_read_tokens": usage.cache_read_tokens,
         "cache_write_tokens": usage.cache_write_tokens,
+        "reasoning_tokens": usage.reasoning_tokens,
         "seconds": round(seconds, 2),
         "cost": call_cost(spec, usage),
     }

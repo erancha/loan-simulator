@@ -12,31 +12,33 @@ _spec.loader.exec_module(docker_helper)
 CALL = (
     '{{"event": "model_call", "kind": "{kind}", "model": "openai:gpt-5-mini", '
     '"input_tokens": {i}, "output_tokens": {o}, "cache_read_tokens": {r}, '
-    '"cache_write_tokens": 0, "seconds": 1.2, "cost": {c}}}'
+    '"cache_write_tokens": 0,{reasoning} "seconds": 1.2, "cost": {c}}}'
 )
 LINES = [
     "2026-11-20T23:59:58.100000000Z 2026-11-20T23:59:58Z [info     ] "
-    + CALL.format(kind="turn", i=100, o=10, r=900, c=0.0005)
+    + CALL.format(kind="turn", i=100, o=10, r=900, reasoning=' "reasoning_tokens": 4,', c=0.0005)
     + " [model_call]",
     "2026-11-21T00:00:03.000000000Z 2026-11-21 00:00:03.000 INFO 1 --- [main] model_call : "
-    + CALL.format(kind="turn", i=200, o=20, r=0, c=0.001),
-    "2026-11-21T08:15:00.000000000Z " + CALL.format(kind="retry turn", i=300, o=30, r=0, c=0.004),
+    + CALL.format(kind="turn", i=200, o=20, r=0, reasoning=' "reasoning_tokens": 6,', c=0.001),
+    # A line from an agent that does not report reasoning tokens.
+    "2026-11-21T08:15:00.000000000Z "
+    + CALL.format(kind="retry turn", i=300, o=30, r=0, reasoning="", c=0.004),
     '2026-11-21T08:16:00.000000000Z [info     ] the reply mentions "model_call" in passing',
 ]
 
 
 EXPECTED = """\
 by day (UTC)
-                   calls   tokens in  cache read cache write  tokens out    cost $
-2026-11-20             1         100         900           0          10    0.0005
-2026-11-21             2         500           0           0          50    0.0050
+                   calls   tokens in  cache read cache write  tokens out   reasoning    cost $
+2026-11-20             1         100         900           0          10           4    0.0005
+2026-11-21             2         500           0           0          50           6    0.0050
 
 by kind
-                   calls   tokens in  cache read cache write  tokens out    cost $
-retry turn             1         300           0           0          30    0.0040
-turn                   2         300         900           0          30    0.0015
+                   calls   tokens in  cache read cache write  tokens out   reasoning    cost $
+retry turn             1         300           0           0          30           0    0.0040
+turn                   2         300         900           0          30          10    0.0015
 
-total                  3         600         900           0          60    0.0055"""
+total                  3         600         900           0          60          10    0.0055"""
 
 
 def test_the_spend_is_summed_by_utc_day_by_kind_and_in_total() -> None:

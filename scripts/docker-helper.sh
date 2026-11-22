@@ -16,10 +16,10 @@
 #       Show the containers' status.
 #   ./scripts/docker-helper.sh --costs [--since <age>]
 #       The model calls of the stack's logs by UTC day and by kind of call: calls, tokens in and
-#       out, dollars at the prices in model_costs.py, which a provider price change does not reach
-#       until the table is updated and deployed. <age> is 30m, 6h or 2d (default 1h). The logs
-#       are those of the containers now running: a container a deploy recreated starts its log
-#       anew.
+#       out, the reasoning among the tokens out, dollars at the prices in model_costs.py, which a
+#       provider price change does not reach until the table is updated and deployed. <age> is
+#       30m, 6h or 2d (default 1h). The logs are those of the containers now running: a container
+#       a deploy recreated starts its log anew.
 #   ./scripts/docker-helper.sh --ec2 --delete-stack
 #       Delete the EC2 stack of the git branch: the instance, its address, the security group
 #       and the CloudFront distribution, after asking to type the stack's name. The instance's
