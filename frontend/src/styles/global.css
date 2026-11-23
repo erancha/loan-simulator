@@ -1,3 +1,5 @@
+@import "./landing.css";
+
 :root {
   --bg: #f6f7f9;
   --panel: #ffffff;
@@ -16,12 +18,6 @@
   --user-ink: var(--ink);
   --bot-bubble: #e6efeb;
   --side: #e9edf2;
-  --sign-in-border: #ccc;
-  --sign-in-mark: #1f4e8c;
-  /* The open sign-in explanation: dark green text on a green just off white, a calm cue of safety
-     that sets the text about Google apart from the pitch above it. */
-  --sign-in-panel: #f7fcf8;
-  --sign-in-panel-ink: #17633a;
   --fine-print: calc(0.85rem - 2px);
   color-scheme: light dark;
 }
@@ -31,10 +27,6 @@
     --bg: #12161c;
     --panel: #1b212a;
     --line: #2d3541;
-    --sign-in-border: #555e6b;
-    --sign-in-mark: var(--accent);
-    --sign-in-panel: #121d17;
-    --sign-in-panel-ink: #8fdcb0;
     --ink: #e8ecf1;
     --mute: #98a3b1;
     --accent: #6ea4f0;
@@ -60,284 +52,17 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-.landing {
-  min-height: 100vh;
-  box-sizing: border-box;
-  display: grid;
-  place-items: center;
-  /* The card and the links under it center as one block, rather than each in half the height. */
-  align-content: center;
-  padding: 16px;
-}
-
-.landing-card {
-  width: 100%;
-  max-width: 560px;
-  box-sizing: border-box;
-  padding: 32px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-}
-
-/* On a phone the text takes more of the narrow card, so the card reads less tall and thin. */
-@media (max-width: 48rem) {
-  .landing-card {
-    padding-inline: 22px;
-  }
-}
-
-.app-heading {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  justify-content: center;
-  margin: 0;
-  color: var(--accent);
-  font-size: min(2.2rem, 8vw);
-}
-
-.app-icon {
-  width: 2.4rem;
-  height: 2.4rem;
-}
-
-.landing-card p {
-  margin: 0 0 12px;
-  color: var(--mute);
-}
-
-/* Close under the title, so the two read as one heading. */
-.landing-card .app-tagline {
-  margin: 0;
-  color: var(--accent);
-  text-align: center;
-  font-size: 1rem;
-  font-weight: 600;
-  line-height: 1.3;
-}
-
-/* A footnote to the heading in small muted type, centered under it; its bottom margin is the gap
-   between the heading block and the pitch. */
-.landing-card .app-version {
-  margin: 12px 0 20px;
-  text-align: center;
-  font-size: calc(0.8rem - 1px);
-}
-
-/* The links under the card, centered beside each other, wrapping on a narrow phone. */
-.landing-links {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 14px 24px;
-  margin-block-start: 28px;
-  font-size: 0.9rem;
-}
-
-.landing-links a {
-  color: var(--mute);
-}
-
-.link-mark {
-  display: inline-block;
-  margin-inline-end: 4px;
-}
-
-.landing-card .landing-pitch {
-  color: var(--ink);
-  font-size: calc(1.05rem - 1px);
-  line-height: 1.5;
-}
-
-/* Each step opens on a numbered accent circle, so the three read as a sequence at a glance. */
-.landing-steps {
-  margin: 3px 0 15px;
-  padding: 0;
-  list-style: none;
-  counter-reset: step;
-  font-size: calc(1.05rem - 1px);
-  line-height: 1.5;
-}
-
-.landing-steps li {
-  display: flex;
-  gap: 12px;
-  align-items: baseline;
-  counter-increment: step;
-}
-
-.landing-steps li + li {
-  margin-block-start: 11px;
-}
-
-.landing-steps li::before {
-  content: counter(step);
-  flex: none;
-  display: inline-grid;
-  place-items: center;
-  width: 1.7rem;
-  height: 1.7rem;
-  border-radius: 50%;
-  background: var(--accent);
-  color: var(--panel);
-  font-weight: 700;
-  font-size: 0.95rem;
-}
-
-.landing-details {
-  margin: 0 0 12px;
-  padding-inline-start: 1.2rem;
-  line-height: 1.5;
-}
-
-.landing-details li + li {
-  margin-block-start: 6px;
-}
-
-/* The landing page's two toggles, each opening its text in place: a muted bold line led by an
-   arrow that turns down when open. */
-.landing-more,
-.sign-in-why {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--mute);
-  font: inherit;
-  font-size: 0.9rem;
-  cursor: pointer;
-  font-weight: 700;
-}
-
-.landing-more {
-  margin: 4px 0 20px;
-}
-
-/* One-second flashes when the element appears, between regular muted and bold red, draw the
-   eye to it; the element then rests at its own style. */
-.landing-more,
+/* The card's next-step title flashes like the landing page's details toggle, with landing.css's
+   keyframes, but longer: it appears below the options while the person is still reading them. */
 .attention-flash {
-  animation: attention-flash 1s step-end 5;
-}
-
-/* The card's next-step title flashes longer than the landing page's details toggle: it appears
-   below the options while the person is still reading them. */
-.attention-flash {
-  animation-iteration-count: 20;
-}
-
-@keyframes attention-flash {
-  0% {
-    font-weight: 400;
-  }
-
-  50% {
-    color: var(--red);
-    font-weight: 700;
-  }
+  animation: landing-attention-flash 1s step-end 20;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .landing-more,
   .attention-flash {
     animation: none;
   }
 }
-
-.landing-more::before,
-.sign-in-why::before {
-  content: "◂ ";
-}
-
-.landing-more[aria-expanded="true"]::before,
-.sign-in-why[aria-expanded="true"]::before {
-  content: "▾ ";
-}
-
-/* Full card width on a phone; from 48rem the button takes its content width at the start edge.
-   The area keeps the panel's padding and a clear border while closed, and its negative margin
-   spends the padding inside the card's own, so opening the explanation moves nothing: it only
-   colours the frame in. */
-.sign-in {
-  display: flex;
-  flex-direction: column;
-  margin: -11px -17px;
-  padding: 10px 16px;
-  border: 1px solid transparent;
-  border-radius: 10px;
-}
-
-.sign-in-open {
-  border-color: color-mix(in srgb, var(--sign-in-panel-ink) 30%, transparent);
-  background: var(--sign-in-panel);
-}
-
-.sign-in-open .sign-in-why,
-.sign-in-open .sign-in-why-close,
-.landing-card .sign-in-open .sign-in-why-text p,
-.sign-in-open .sign-in-why-text,
-.sign-in-open .sign-in-why-text a {
-  color: var(--sign-in-panel-ink);
-}
-
-.sign-in-button {
-  padding: 0.6rem 2.5rem;
-  border: 1px solid var(--sign-in-border);
-  border-radius: 999px;
-  background: var(--panel);
-  color: var(--ink);
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.sign-in-button:hover {
-  filter: brightness(0.93);
-}
-
-.sign-in-mark {
-  margin-inline-end: 0.6rem;
-  color: var(--sign-in-mark);
-  font-weight: 700;
-}
-
-@media (min-width: 48rem) {
-  .sign-in-button {
-    align-self: flex-start;
-  }
-}
-
-/* The toggle keeps its own width at the start edge, also on a phone, where the button above it
-   fills the card; while open, the close button sits at the end of its line. */
-.sign-in-why-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-block-start: 14px;
-}
-
-.sign-in-why-close {
-  padding: 2px 6px;
-  border: 0;
-  background: none;
-  font: inherit;
-  border-radius: 4px;
-  font-size: 1.3rem;
-  font-weight: 700;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.sign-in-why-close:hover {
-  background: color-mix(in srgb, var(--sign-in-panel-ink) 15%, transparent);
-  transform: scale(1.15);
-}
-
-.sign-in-why-text {
-  margin-block-start: 10px;
-  line-height: 1.5;
-}
-
 
 .panel-title {
   margin: 0 0 8px;
@@ -1538,8 +1263,11 @@ button.primary:disabled,
   background: var(--side);
 }
 
-/* Takes the space under the header, in place of the full viewport height of .landing. */
+/* The landing card in the signed-in page: it takes the space under the header, in the page's
+   flow, in place of the full-viewport layer of .landing. */
 .empty-checks {
+  position: static;
+  overflow-y: visible;
   flex: 1;
   min-height: 0;
   text-align: center;

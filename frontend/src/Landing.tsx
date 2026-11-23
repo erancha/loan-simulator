@@ -41,9 +41,14 @@ function LinkMark({ mark }: { mark: string }) {
  */
 export function Landing({ pitch = false, children }: { pitch?: boolean; children: ReactNode }) {
   const [expanded, setExpanded] = useState(false)
+  // Opening the sign-in explanation folds the details back, so one subject is open at a time.
+  const foldOnExplain = (event: { target: EventTarget }) => {
+    const toggle = (event.target as Element).closest('.sign-in-why')
+    if (toggle?.getAttribute('aria-expanded') === 'false') setExpanded(false)
+  }
   return (
     <main className="landing">
-      <div className="landing-card">
+      <div className="landing-card" onClick={foldOnExplain}>
         <h1 className="app-heading">
           {/* The same file as the tab's icon, so the two cannot drift apart; decorative. */}
           <img className="app-icon" src="/favicon.svg" alt="" /> {APP_TITLE}

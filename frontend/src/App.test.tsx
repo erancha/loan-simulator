@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, expect, test, vi } from 'vitest'
 import { SIGNED_OUT_EVENT } from './api/client.ts'
@@ -286,4 +286,14 @@ test('the more toggle adds the details under the pitch', async () => {
   await userEvent.click(more)
   expect(screen.getByText(/זה לא חובה/)).toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'פחות' })).toHaveAttribute('aria-expanded', 'true')
+})
+
+test('opening the sign-in explanation folds the details back', async () => {
+  stubApi(signedOut)
+  render(<App />)
+  const more = await screen.findByRole('button', { name: 'יותר' })
+  fireEvent.click(more)
+  fireEvent.click(document.querySelector('.sign-in-why') as HTMLElement)
+  expect(document.querySelector('.landing-card > .landing-details')).toBeNull()
+  expect(more).toHaveAttribute('aria-expanded', 'false')
 })

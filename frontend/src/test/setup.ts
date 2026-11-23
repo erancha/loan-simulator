@@ -10,3 +10,6 @@ globalThis.ResizeObserver = class {
   unobserve() {}
   disconnect() {}
 }
+
+// jsdom has no layout, so it has no scrollIntoView; a test that checks a scroll spies on this no-op.
+Element.prototype.scrollIntoView = () => {}

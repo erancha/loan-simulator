@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import { withBold } from '../check/emphasis.tsx'
 import {
   NEW_TAB,
@@ -28,6 +28,11 @@ export function SignInReasons({
   onOpenChange: (open: boolean) => void
 }) {
   const toggle = useRef<HTMLButtonElement>(null)
+  const text = useRef<HTMLDivElement>(null)
+  // Opening scrolls down to the explanation's last line, which on a phone opens below the fold.
+  useEffect(() => {
+    if (open) text.current!.scrollIntoView({ behavior: 'smooth', block: 'end' })
+  }, [open])
   return (
     <>
       <div className="sign-in-why-row">
@@ -56,7 +61,7 @@ export function SignInReasons({
         )}
       </div>
       {open && (
-        <div className="sign-in-why-text">
+        <div ref={text} className="sign-in-why-text">
           <p>{withBold(SIGN_IN_WHY_LEAD)}</p>
           <ul className="landing-details">
             {SIGN_IN_WHY_POINTS.map((point) => (
