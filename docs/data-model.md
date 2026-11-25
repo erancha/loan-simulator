@@ -33,7 +33,7 @@ Each table, with its primary key and its index:
 - `check_events` (`check_id`, `seq`; `user_id`, `type`, `created_at`) — the check's append-only
   event log ([Events](architecture/agent.md#events)).
 - `deleted_event_times` (`id`; `user_id`, `type`, `created_at`) — the times of a deleted check's
-  messages, kept only while the turn cap's window still counts them
+  counted messages (`message.counted`), kept only while the turn cap's window still counts them
   ([Turns and the turn cap](architecture/agent.md#turns-and-the-turn-cap)).
 
 ## Market data

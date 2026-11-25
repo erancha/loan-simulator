@@ -1,9 +1,22 @@
 /** The agent API's JSON shapes. Every money field is a decimal string, never a number. */
 
+/**
+ * Where the person stands against the message cap, which counts only the messages the model
+ * answers; a send code answers costs none.
+ */
+export interface MessageStatus {
+  limit: number
+  left: number
+  /** ISO time the next message frees; null while none is used. */
+  next_free: string | null
+}
+
 export interface User {
   id: string
   email: string | null
   name: string | null
+  /** Null on the demo page, which has no cap. */
+  messages: MessageStatus | null
 }
 
 /** What the person wants to borrow; the purpose is absent when they named none. */

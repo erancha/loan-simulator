@@ -296,6 +296,7 @@ def test_a_message_is_accepted_with_202_and_runs_a_turn(world: World, client: Te
     assert response.status_code == 202
     assert [event.type for event in world.events.rows[check_id]] == [
         "message.user",
+        "message.counted",
         "turn.status",
         "message.assistant",
         "turn.status",

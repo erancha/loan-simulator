@@ -21,8 +21,11 @@ with the time of the next allowed message in the body and in `Retry-After`
 
 - `GET /api/auth/config` — the public Google client id, for the page; no cookie needed.
 - `POST /api/auth/session` — takes the Google ID token as `credential`, verifies it and sets
-  the session cookie; answers the person's id, email and name.
-- `GET /api/auth/me` — the signed-in person.
+  the session cookie; answers the person as `GET /api/auth/me` does.
+- `GET /api/auth/me` — the signed-in person: id, email, name and `messages`, their standing
+  against the message cap (`limit`, `left`, and `next_free`, the time the next message frees,
+  null while none is used). The page asks again after each send, so the count it shows is the
+  one a send is refused on.
 - `DELETE /api/auth/session` — signs out by clearing the cookie (204).
 
 ### Checks
@@ -49,9 +52,9 @@ with the time of the next allowed message in the body and in `Retry-After`
 ### Messages and cards
 
 Each of these takes the line the person sends as `text`, stores it and answers 202; the reply
-arrives on the event stream, and each counts as a message under the cap. Only a message, and a
-term confirmation on some checks, reach the model; [Tools](architecture/agent.md#tools) has what
-each does.
+arrives on the event stream. Only a message, and a term confirmation on some checks, reach the
+model, and only those count under the cap; [Tools](architecture/agent.md#tools) has what each
+does.
 
 - `POST /api/checks/{check_id}/messages` — a message the model answers.
 - `POST /api/checks/{check_id}/opening` — the opening card's `purpose` and `amount`, saved as the

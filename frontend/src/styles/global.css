@@ -674,6 +674,21 @@ fieldset.field.changed {
   font-size: 0.9rem;
 }
 
+.chat-message-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.chat-message-status.low,
+.chat-message-status.out {
+  color: var(--amber);
+}
+
+.chat-message-status.low {
+  font-weight: 600;
+}
+
 .chat-samples {
   display: flex;
   flex-wrap: wrap;

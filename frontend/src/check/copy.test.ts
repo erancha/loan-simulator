@@ -6,6 +6,7 @@ import {
   scenarioTitle,
   answerLine,
   capNotice,
+  messagesLeft,
   amountText,
   checkTitle,
   confirmedReadingLine,
@@ -28,19 +29,19 @@ const now = new Date(2026, 9, 29, 22, 40)
 
 test('the cap notice gives the time alone when sending resumes today', () => {
   expect(capNotice(new Date(2026, 9, 29, 23, 5), now)).toBe(
-    'הגעתם למכסת ההודעות. אפשר להמשיך ב-23:05',
+    'הגעתם למכסת ההודעות מבוססות ה-AI. אפשר להמשיך ב-23:05',
   )
 })
 
 test('the cap notice says tomorrow when sending resumes on the next day', () => {
   expect(capNotice(new Date(2026, 9, 30, 7, 5), now)).toBe(
-    'הגעתם למכסת ההודעות. אפשר להמשיך מחר ב-07:05',
+    'הגעתם למכסת ההודעות מבוססות ה-AI. אפשר להמשיך מחר ב-07:05',
   )
 })
 
 test('the cap notice gives the date when sending resumes later than tomorrow', () => {
   expect(capNotice(new Date(2026, 10, 1, 9, 0), now)).toBe(
-    'הגעתם למכסת ההודעות. אפשר להמשיך ב-01.11 ב-09:00',
+    'הגעתם למכסת ההודעות מבוססות ה-AI. אפשר להמשיך ב-01.11 ב-09:00',
   )
 })
 
@@ -257,3 +258,19 @@ test('a scenario form names its movement, and its line states the yearly rise', 
   expect(scenarioLine('cpi', '3')).toBe('סימולציה: המדד יעלה 3% בשנה')
 })
 
+
+test('the message status names what it counts: the messages the model answers', () => {
+  expect(messagesLeft(20, 20, null, now)).toBe('נותרו 20 מתוך 20 הודעות מבוססות AI')
+})
+
+test('the message status says until when the count holds: today, the next day or a date', () => {
+  expect(messagesLeft(14, 20, new Date(2026, 9, 29, 23, 5), now)).toBe(
+    'נותרו 14 מתוך 20 הודעות מבוססות AI עד 23:05',
+  )
+  expect(messagesLeft(14, 20, new Date(2026, 9, 30, 9, 5), now)).toBe(
+    'נותרו 14 מתוך 20 הודעות מבוססות AI עד 09:05 ביום הבא',
+  )
+  expect(messagesLeft(14, 20, new Date(2026, 10, 1, 9, 0), now)).toBe(
+    'נותרו 14 מתוך 20 הודעות מבוססות AI עד 09:00 ב-01.11',
+  )
+})

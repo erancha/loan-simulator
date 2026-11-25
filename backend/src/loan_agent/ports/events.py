@@ -13,6 +13,9 @@ from contextlib import AbstractAsyncContextManager
 from typing import Any, Protocol, runtime_checkable
 
 MESSAGE_USER = "message.user"
+# Stored beside the message.user of a send the model answers; the message cap counts these, so a
+# send code answers costs the person nothing. No page listens for it.
+MESSAGE_COUNTED = "message.counted"
 MESSAGE_DELTA = "message.delta"
 # Live only: a streamed reply the page drops, since it will be rewritten.
 MESSAGE_RETRACTED = "message.retracted"

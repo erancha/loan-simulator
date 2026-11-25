@@ -1,8 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { FormEvent, KeyboardEvent, ReactNode } from 'react'
-import type { AwaitingOffer, Finances, Question, Reading } from '../api/types.ts'
+import type { AwaitingOffer, Finances, MessageStatus, Question, Reading } from '../api/types.ts'
 import {
-  INPUT_LABEL, INPUT_PLACEHOLDER,
+  FEW_MESSAGES_LEFT, INPUT_LABEL, INPUT_PLACEHOLDER,
   questionText,
   CEILING_CHIP,
   LONGER_TERMS_CHIP,
@@ -14,7 +14,9 @@ import {
   SEND_BUTTON,
   SHORTER_TERMS_CHIP,
   TO_CARD,
+  capNotice,
   cloneLine,
+  messagesLeft,
   withLastMonth,
 } from './copy.ts'
 import { ArchiveNote } from './ArchiveNote.tsx'
@@ -68,6 +70,8 @@ interface Props {
   failure: string | null
   /** Why the last send did not go through. */
   notice: string | null
+  /** The person's standing against the message cap; null on a page with no cap. */
+  messageStatus: MessageStatus | null
   /** Resolves true when the server accepted the text; the input then clears. */
   onSend: (text: string) => Promise<boolean>
   onAnswer: (answer: Answer) => Promise<boolean>
@@ -147,9 +151,35 @@ function EntryTime({ at, side }: { at: string | undefined; side: 'user' | 'assis
 }
 
 /**
+ * The person's standing against the message cap. While a message is left: the count, emphasized
+ * when few are left, with the time a used message frees. Once none is left: the time the next
+ * one frees.
+ */
+function MessageStatusLine({ status }: { status: MessageStatus }) {
+  // The moment the line's wording (today, tomorrow or a date) is measured from; the line is keyed
+  // by the time it names, so each new time is worded from when it arrived.
+  const [shownAt] = useState(() => new Date())
+  const next = status.next_free === null ? null : new Date(status.next_free)
+  if (status.left === 0) {
+    if (next === null) throw new Error('no message left, with no time the next one frees')
+    return (
+      <p className="chat-message-status out" role="status">
+        {capNotice(next, shownAt)}
+      </p>
+    )
+  }
+  const few = status.left <= FEW_MESSAGES_LEFT
+  return (
+    <p className={few ? 'chat-message-status low' : 'chat-message-status'}>
+      {messagesLeft(status.left, status.limit, next, shownAt)}
+    </p>
+  )
+}
+
+/**
  * The conversation of a check: its bubbles, question bubbles and the cards and replies of the
- * offers the person described, each with the time it was said, and the chips and message input,
- * which an archived check does not have. Under the reply that presented the check's
+ * offers the person described, each with the time it was said, and the chips, the message input
+ * and the person's message status under it, which an archived check does not have. Under the reply that presented the check's
  * recommendation a link leads to the recommendation's pane. A new check shows its opening card
  * alone until the card is sent. A request of the checks list scrolls an awaiting offer's card
  * into view and holds it there until the person scrolls or sends.
@@ -165,6 +195,7 @@ export function Chat({
   turnStartedAt,
   failure,
   notice,
+  messageStatus,
   onSend,
   onAnswer,
   onSkip,
@@ -203,6 +234,10 @@ export function Chat({
     announcement = lastEntry.leadIn === null ? text : `${lastEntry.leadIn} ${text}`
   }
   const locked = running || sending
+  // Typed text always reaches the model, so the box locks once no message is left; the chips and
+  // cards code answers cost none and stay usable.
+  const noMessageLeft = messageStatus !== null && messageStatus.left === 0
+  const boxLocked = locked || noMessageLeft
   const archived = isArchived({ messages: entries })
   const liveEntry = entries.find((entry) => entry.id === liveQuestionId)
   // A waiting offer form is the one step on screen: a chip that starts another step would leave
@@ -360,7 +395,7 @@ export function Chat({
 
   async function submit() {
     const text = draft.trim()
-    if (text === '' || locked) return
+    if (text === '' || boxLocked) return
     if (await deliver(text)) setDraft('')
   }
 
@@ -485,16 +520,19 @@ export function Chat({
             onKeyDown={onKeyDown}
             aria-label={INPUT_LABEL}
             placeholder={running ? INPUT_PLACEHOLDER.running : INPUT_PLACEHOLDER.idle}
-            disabled={locked}
+            disabled={boxLocked}
             rows={2}
             />
           </div>
-          <button type="submit" disabled={locked || draft.trim() === ''}>
+          <button type="submit" disabled={boxLocked || draft.trim() === ''}>
             {SEND_BUTTON}
           </button>
         </form>
       )}
       {notice !== null && <p className="chat-notice" role="status">{notice}</p>}
+      {!archived && opening === null && messageStatus !== null && (
+        <MessageStatusLine key={messageStatus.next_free} status={messageStatus} />
+      )}
     </div>
   )
 }

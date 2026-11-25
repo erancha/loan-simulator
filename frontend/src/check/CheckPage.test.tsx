@@ -1,7 +1,7 @@
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
-import type { CheckEvent, CheckSummary, Question } from '../api/types.ts'
+import type { CheckEvent, CheckSummary, MessageStatus, Question } from '../api/types.ts'
 import { FakeEventSource } from '../test/fakeEventSource.ts'
 import {
   assistantMessage,
@@ -120,6 +120,8 @@ function renderPage(
   showFinances = false,
   onTermCardLive = vi.fn(),
   onShowCard = vi.fn(),
+  messages: MessageStatus | null = { limit: 20, left: 20, next_free: null },
+  onMessagesChanged = vi.fn(),
 ) {
   render(
     <CheckPage
@@ -135,9 +137,17 @@ function renderPage(
       onTermCardLive={onTermCardLive}
       onCardReady={vi.fn()}
       onShowCard={onShowCard}
+      messages={messages}
+      onMessagesChanged={onMessagesChanged}
     />,
   )
-  return { onChecksChanged, onClone, onTermCardLive, onShowCard }
+  return { onChecksChanged, onClone, onTermCardLive, onShowCard, onMessagesChanged }
+}
+
+/** The page with this message status and every other argument at its default. */
+function renderWithStatus(messages: MessageStatus | null) {
+  const unset = undefined
+  return renderPage(unset, unset, unset, unset, unset, unset, unset, messages)
 }
 
 /** The page with its finances line asked for, as the checks list's finances link does. */
@@ -303,7 +313,7 @@ test('the offer chip sentence on a check with no loan goes to the model, which a
   expect(fetchStub.mock.calls.map(([path]) => path)).toEqual([MESSAGES])
 })
 
-test('a 429 shows when sending resumes and keeps the text', async () => {
+test('a 429 asks for the message status again and keeps the text', async () => {
   const today = new Date()
   const nextAllowed = new Date(
     today.getFullYear(),
@@ -315,14 +325,63 @@ test('a 429 shows when sending resumes and keeps the text', async () => {
   stubApi(() =>
     jsonResponse(429, { detail: 'daily message cap reached', next_allowed: nextAllowed }),
   )
-  renderPage()
+  const { onMessagesChanged } = renderPage()
   const input = screen.getByRole('textbox')
   await userEvent.type(input, 'שלום{Enter}')
 
-  expect(
-    await screen.findByText('הגעתם למכסת ההודעות. אפשר להמשיך מחר ב-07:05'),
-  ).toBeInTheDocument()
+  await waitFor(() => expect(onMessagesChanged).toHaveBeenCalledTimes(1))
   expect(input).toHaveValue('שלום')
+  expect(screen.queryByText(/לא נשלחה/)).not.toBeInTheDocument()
+})
+
+test('the chat shows how many messages the model answers are left, and until when', () => {
+  stubApi()
+  const today = new Date()
+  const nextFree = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1, 9, 5)
+  renderWithStatus({ limit: 20, left: 14, next_free: nextFree.toISOString() })
+
+  const status = screen.getByText('נותרו 14 מתוך 20 הודעות מבוססות AI עד 09:05 ביום הבא')
+  expect(status).not.toHaveClass('low')
+  expect(screen.getByRole('textbox')).toBeEnabled()
+})
+
+test('three messages left or fewer are emphasized', () => {
+  stubApi()
+  const today = new Date()
+  const nextFree = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1, 9, 5)
+  renderWithStatus({ limit: 20, left: 3, next_free: nextFree.toISOString() })
+
+  expect(screen.getByText(/^נותרו 3 מתוך 20 הודעות מבוססות AI עד/)).toHaveClass('low')
+})
+
+test('with no message left the chat says when the next one frees and locks the box', () => {
+  stubApi()
+  const today = new Date()
+  const nextFree = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1, 7, 5)
+  renderWithStatus({ limit: 20, left: 0, next_free: nextFree.toISOString() })
+
+  expect(
+    screen.getByText('הגעתם למכסת ההודעות מבוססות ה-AI. אפשר להמשיך מחר ב-07:05'),
+  ).toBeInTheDocument()
+  expect(screen.getByRole('textbox')).toBeDisabled()
+})
+
+test('a page with no cap shows no message status', () => {
+  stubApi()
+  renderWithStatus(null)
+
+  expect(screen.queryByText(/הודעות מבוססות/)).not.toBeInTheDocument()
+  expect(screen.getByRole('textbox')).toBeEnabled()
+})
+
+test('an accepted send asks for the message status again', async () => {
+  stubApi()
+  const { onMessagesChanged } = renderPage()
+  const input = screen.getByRole('textbox')
+  await userEvent.type(input, 'שלום{Enter}')
+  await waitFor(() => expect(input).toHaveValue(''))
+
+  expect(onMessagesChanged).toHaveBeenCalledTimes(1)
 })
 
 test('another failure names it and keeps the text', async () => {
@@ -540,9 +599,7 @@ test('a capped send after a saved answer keeps the bubble', async () => {
   const bubble = askExpenses()
   await answerExpenses(bubble, '4500')
 
-  expect(
-    await screen.findByText('הגעתם למכסת ההודעות. אפשר להמשיך מחר ב-07:05'),
-  ).toBeInTheDocument()
+  await waitFor(() => expect(sentTexts(fetchStub)).toHaveLength(1))
   expect(financesPuts(fetchStub)).toEqual([{ fixed_expenses: '4500' }])
   expect(within(bubble).getByRole('textbox', { name: 'הוצאות קבועות' })).toBeInTheDocument()
   expect(within(bubble).getByRole('button', { name: 'אישור' })).toBeEnabled()

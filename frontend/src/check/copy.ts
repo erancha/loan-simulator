@@ -292,8 +292,28 @@ function sameDay(a: Date, b: Date): boolean {
 }
 
 /**
- * The message cap counts a rolling window, so sending may resume today, tomorrow or later; `next`
- * is shown in local time.
+ * The chat's message status while a message is left: it names what the cap counts and, once a
+ * message is used, until when the count holds: `next`, when a used message frees, in local time.
+ */
+export function messagesLeft(left: number, limit: number, next: Date | null, now: Date): string {
+  const count = `נותרו ${left} מתוך ${limit} הודעות מבוססות AI`
+  if (next === null) return count
+  const time = `${twoDigits(next.getHours())}:${twoDigits(next.getMinutes())}`
+  const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
+  const day = sameDay(next, now)
+    ? ''
+    : sameDay(next, tomorrow)
+      ? ' ביום הבא'
+      : ` ב-${twoDigits(next.getDate())}.${twoDigits(next.getMonth() + 1)}`
+  return `${count} עד ${time}${day}`
+}
+
+/** At this many messages left or fewer, the message status is emphasized. */
+export const FEW_MESSAGES_LEFT = 3
+
+/**
+ * The chat's message status once no message is left. The message cap counts a rolling window, so
+ * sending may resume today, tomorrow or later; `next` is shown in local time.
  */
 export function capNotice(next: Date, now: Date): string {
   const time = `${twoDigits(next.getHours())}:${twoDigits(next.getMinutes())}`
@@ -303,7 +323,7 @@ export function capNotice(next: Date, now: Date): string {
     : sameDay(next, tomorrow)
       ? `מחר ב-${time}`
       : `ב-${twoDigits(next.getDate())}.${twoDigits(next.getMonth() + 1)} ב-${time}`
-  return `הגעתם למכסת ההודעות. אפשר להמשיך ${when}`
+  return `הגעתם למכסת ההודעות מבוססות ה-AI. אפשר להמשיך ${when}`
 }
 
 export function sendFailed(message: string): string {

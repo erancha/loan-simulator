@@ -54,6 +54,18 @@ class User:
 
 
 @dataclass(frozen=True)
+class MessageStatus:
+    """Where a person stands against the message cap, which counts the messages the model
+    answers."""
+
+    limit: int
+    left: int
+    next_free: datetime | None
+    """When a counted message next leaves the window, which raises left by one or, at none left,
+    allows the next message; None while the window holds no counted message."""
+
+
+@dataclass(frozen=True)
 class VerifiedToken:
     user: User
     expires_at: datetime

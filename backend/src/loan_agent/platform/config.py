@@ -54,8 +54,8 @@ class Settings(BaseSettings):
     engine_bearer_token: SecretStr
     """The engine's own ENGINE_BEARER_TOKEN, presented on every engine call."""
     agent_turn_limit: int = Field(default=20, gt=0)
-    """Messages a person may send, across all their checks, in any rolling window of
-    agent_turn_window_hours."""
+    """Messages the model answers that a person may send, across all their checks, in any rolling
+    window of agent_turn_window_hours."""
     agent_turn_limit_overrides: dict[str, PositiveInt] = Field(default_factory=dict)
     """Key: a person's email, lowercase. Value: the limit that replaces agent_turn_limit for
     them."""

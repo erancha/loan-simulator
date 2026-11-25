@@ -31,6 +31,7 @@ import {
 } from './copy.ts'
 import { TabBar } from './TabBar.tsx'
 import type { Pane } from './TabBar.tsx'
+import { useMessageStatusRefresh } from './useMessageStatusRefresh.ts'
 import { useTabSwipe } from './useTabSwipe.ts'
 
 const HASH_PREFIX = '#check='
@@ -47,6 +48,8 @@ interface Props {
   user: User
   /** Rejects when the server did not end the session. */
   onSignOut: () => Promise<void>
+  /** The person's message status may have changed: asks the server for it again. */
+  onMessagesChanged: () => void
 }
 
 /**
@@ -54,7 +57,8 @@ interface Props {
  * columns or, on a phone, as the pane the tab bar or a sideways swipe picks. The open check is
  * kept in the URL hash.
  */
-export function Shell({ user, onSignOut }: Props) {
+export function Shell({ user, onSignOut, onMessagesChanged }: Props) {
+  useMessageStatusRefresh(user.messages, onMessagesChanged)
   const [checks, setChecks] = useState<CheckSummary[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [createError, setCreateError] = useState<string | null>(null)
@@ -185,7 +189,13 @@ export function Shell({ user, onSignOut }: Props) {
     setCreateError(null)
     try {
       const { id: cloneId } = await cloneCheck(id)
-      if (line !== null) await sendMessage(cloneId, line)
+      if (line !== null) {
+        try {
+          await sendMessage(cloneId, line)
+        } finally {
+          onMessagesChanged()
+        }
+      }
       await openCheck(cloneId)
     } catch (error) {
       setCreateError(cloneFailed(errorText(error)))
@@ -308,6 +318,8 @@ export function Shell({ user, onSignOut }: Props) {
             onTermCardLive={setTermCardLive}
             onCardReady={setCardReady}
             onShowCard={() => setPane('card')}
+            messages={user.messages}
+            onMessagesChanged={onMessagesChanged}
           />
         </main>
       )}

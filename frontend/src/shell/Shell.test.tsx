@@ -24,7 +24,12 @@ import { Shell } from './Shell.tsx'
 import { wholeText } from '../test/wholeText.ts'
 
 const LOAN_TITLE = checkTitle(loan)
-const dana: User = { id: '1001', email: 'dana@example.com', name: 'Dana' }
+const dana: User = {
+  id: '1001',
+  email: 'dana@example.com',
+  name: 'Dana',
+  messages: { limit: 20, left: 20, next_free: null },
+}
 
 function summary(id: string, created_at: string, over: Partial<CheckSummary> = {}): CheckSummary {
   return {
@@ -103,7 +108,7 @@ test('the account menu names the person and signs out', async () => {
   stubApi([[summary('a', '2026-01-01T00:00:00Z')]])
   const onSignOut = vi.fn()
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={onSignOut} />)
+  render(<Shell user={dana} onSignOut={onSignOut} onMessagesChanged={vi.fn()} />)
 
   expect(screen.getByRole('heading', { level: 1, name: 'סימולטור הלוואות' })).toBeInTheDocument()
   expect(screen.queryByText('Dana')).not.toBeInTheDocument()
@@ -120,7 +125,7 @@ test('the account menu names the person and signs out', async () => {
 test('the account menu closes on Escape and on a press outside it', async () => {
   stubApi([[]])
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
 
   await user.click(screen.getByRole('button', { name: 'תפריט חשבון' }))
   await user.keyboard('{Escape}')
@@ -134,10 +139,13 @@ test('the account menu closes on Escape and on a press outside it', async () => 
 test('the account menu falls back to the email, then the id', async () => {
   stubApi([[]])
   const user = userEvent.setup()
-  const { rerender } = render(<Shell user={{ ...dana, name: null }} onSignOut={vi.fn()} />)
+  const { rerender } = render(
+    <Shell user={{ ...dana, name: null }} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />,
+  )
   await user.click(screen.getByRole('button', { name: 'תפריט חשבון' }))
   expect(screen.getByText('dana@example.com')).toBeInTheDocument()
-  rerender(<Shell user={{ id: '7', email: null, name: null }} onSignOut={vi.fn()} />)
+  const nameless = { ...dana, id: '7', email: null, name: null }
+  rerender(<Shell user={nameless} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
   expect(screen.getByText('7')).toBeInTheDocument()
   await screen.findByText('עוד אין בדיקות. מתחילים?')
 })
@@ -145,7 +153,7 @@ test('the account menu falls back to the email, then the id', async () => {
 test('no checks: the empty state; the button creates and opens a check', async () => {
   const fetchStub = stubApi([[], [summary('new', '2026-02-01T00:00:00Z')]])
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
 
   expect(await screen.findByText('עוד אין בדיקות. מתחילים?')).toBeInTheDocument()
   await user.click(screen.getByRole('button', { name: '+ בדיקה חדשה' }))
@@ -165,7 +173,7 @@ test('with an unused live check, the new-check button is disabled', async () => 
     ],
   ])
   window.history.replaceState(null, '', '#check=a')
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
 
   await waitFor(() => expect(openedStreams()).toEqual(['/api/checks/a/events']))
   expect(screen.getByRole('button', { name: '+ בדיקה חדשה' })).toBeDisabled()
@@ -182,7 +190,7 @@ test('lists checks with price and recommendation markers; the newest opens', asy
       summary('new', '2026-03-01T00:00:00Z'),
     ],
   ])
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
 
   const list = await screen.findByRole('navigation', { name: 'הבדיקות שלי' })
   const items = within(list).getAllByRole('listitem')
@@ -204,7 +212,7 @@ test('picking a check opens its recommendation if it has one, else its chat', as
     ],
   ])
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
   const list = await screen.findByRole('navigation', { name: 'הבדיקות שלי' })
   const [ready, open] = within(list).getAllByRole('listitem')
   await user.click(screen.getByRole('tab', { name: 'בדיקות' }))
@@ -231,7 +239,7 @@ test('the ready chip is for a comparison: examples and one offer alone have thei
       summary('offer', '2026-01-01T00:00:00Z', { loan, recommendation: RECOMMENDATION }),
     ],
   ])
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
 
   const list = await screen.findByRole('navigation', { name: 'הבדיקות שלי' })
   const [examples, offers, offer] = within(list).getAllByRole('listitem')
@@ -248,7 +256,7 @@ test('the hash selects a check; clicking another switches stream and hash', asyn
   stubApi([[summary('a', '2026-01-01T00:00:00Z'), summary('b', '2026-03-01T00:00:00Z')]])
   window.history.replaceState(null, '', '#check=a')
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
 
   await waitFor(() => expect(openedStreams()).toEqual(['/api/checks/a/events']))
   const [newest] = screen.getAllByRole('listitem')
@@ -261,7 +269,7 @@ test('the hash selects a check; clicking another switches stream and hash', asyn
 test('a hash naming an unknown check falls back to the newest and rewrites the hash', async () => {
   stubApi([[summary('a', '2026-01-01T00:00:00Z'), summary('b', '2026-03-01T00:00:00Z')]])
   window.history.replaceState(null, '', '#check=gone')
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
 
   await waitFor(() => expect(openedStreams()).toEqual(['/api/checks/b/events']))
   expect(window.location.hash).toBe('#check=b')
@@ -270,7 +278,7 @@ test('a hash naming an unknown check falls back to the newest and rewrites the h
 test('the link under the reply that presents a recommendation shows the recommendation pane', async () => {
   stubApi([[summary('a', '2026-01-01T00:00:00Z')]])
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
   await waitFor(() => expect(openedStreams()).toEqual(['/api/checks/a/events']))
   const stream = FakeEventSource.last()
   const events = [
@@ -314,7 +322,7 @@ async function holdAnOption() {
 test('the recommendation tab is disabled until the check holds an option', async () => {
   stubApi([[summary('a', '2026-01-01T00:00:00Z')]])
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
   await screen.findByRole('navigation', { name: 'הבדיקות שלי' })
   const page = document.querySelector('.check-page')!
   const card = screen.getByRole('tab', { name: 'המלצה' })
@@ -333,7 +341,7 @@ test('the recommendation tab is disabled until the check holds an option', async
 test('the tab bar switches the active pane', async () => {
   stubApi([[summary('a', '2026-01-01T00:00:00Z')]])
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
   await screen.findByRole('navigation', { name: 'הבדיקות שלי' })
   await holdAnOption()
   const page = document.querySelector('.check-page')!
@@ -349,7 +357,7 @@ test('the tab bar switches the active pane', async () => {
 
 test('a sideways swipe moves through the panes in Hebrew order, around the tab bar', async () => {
   stubApi([[summary('a', '2026-01-01T00:00:00Z')]])
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
   await screen.findByRole('navigation', { name: 'הבדיקות שלי' })
   await holdAnOption()
   const page = document.querySelector('.check-page')!
@@ -371,7 +379,7 @@ test('a sideways swipe moves through the panes in Hebrew order, around the tab b
 
 test('a short, vertical, edge or in-scroller swipe leaves the pane alone', async () => {
   stubApi([[summary('a', '2026-01-01T00:00:00Z')]])
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
   await screen.findByRole('navigation', { name: 'הבדיקות שלי' })
   const page = document.querySelector('.check-page')!
   const swipe = (dx: number, dy: number, at: Element, x = 500) => {
@@ -393,7 +401,7 @@ test('a short, vertical, edge or in-scroller swipe leaves the pane alone', async
 
 test('the side tab is named בדיקות', async () => {
   stubApi([[summary('a', '2026-01-01T00:00:00Z')]])
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
   await screen.findByRole('navigation', { name: 'הבדיקות שלי' })
   expect(screen.getByRole('tab', { name: 'בדיקות' })).toBeInTheDocument()
   expect(screen.queryByRole('tab', { name: 'פרופיל' })).not.toBeInTheDocument()
@@ -401,14 +409,14 @@ test('the side tab is named בדיקות', async () => {
 
 test('a failing list shows an alert', async () => {
   stubApi([jsonResponse(500, { detail: 'db down' })])
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
   expect(await screen.findByRole('alert')).toHaveTextContent('לא הצלחנו לטעון את הבדיקות: db down')
 })
 
 test('a failing create is reported and opens nothing', async () => {
   stubApi([[]], () => jsonResponse(500, { detail: 'no room' }))
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
   await user.click(await screen.findByRole('button', { name: '+ בדיקה חדשה' }))
   expect(await screen.findByRole('alert')).toHaveTextContent('לא הצלחנו לפתוח בדיקה חדשה: no room')
   expect(openedStreams()).toEqual([])
@@ -424,7 +432,7 @@ test('a refresh answered late does not overwrite a newer list', async () => {
     }),
   )
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
   await waitFor(() => expect(listAnswers).toHaveLength(1))
   listAnswers[0](jsonResponse(200, []))
   const create = await screen.findByRole('button', { name: '+ בדיקה חדשה' })
@@ -443,7 +451,7 @@ test('a refresh answered late does not overwrite a newer list', async () => {
 test('deleting asks first; a cancel keeps the check and sends nothing', async () => {
   const fetchStub = stubApi([[summary('a', '2026-01-01T00:00:00Z', ARCHIVED)]])
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
   await openArchive(user)
 
   await user.click(await screen.findByRole('button', { name: 'מחיקת הבדיקה: בדיקה חדשה' }))
@@ -463,7 +471,7 @@ test('a deleted open check gives way to the newest one left', async () => {
   const newer = summary('newer', '2026-02-01T00:00:00Z', { loan, ...ARCHIVED })
   const fetchStub = stubApi([[newer, older], [older]])
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
   await openArchive(user)
 
   await user.click(await screen.findByRole('button', { name: `מחיקת הבדיקה: ${LOAN_TITLE}` }))
@@ -480,7 +488,7 @@ test('a deleted open check gives way to the newest one left', async () => {
 test('deleting the last check leaves the empty state and a clean URL', async () => {
   stubApi([[summary('a', '2026-01-01T00:00:00Z', ARCHIVED)], []])
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
   await openArchive(user)
 
   await user.click(await screen.findByRole('button', { name: 'מחיקת הבדיקה: בדיקה חדשה' }))
@@ -495,7 +503,7 @@ test('a delete during a reply is refused with its reason and keeps the check', a
     jsonResponse(409, { detail: "check 'a' is still answering", check_id: 'a' })
   stubApi([[summary('a', '2026-01-01T00:00:00Z', ARCHIVED)]], undefined, refused)
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
   await openArchive(user)
 
   await user.click(await screen.findByRole('button', { name: 'מחיקת הבדיקה: בדיקה חדשה' }))
@@ -511,7 +519,7 @@ test('a failed delete is shown with its reason', async () => {
   const failed = () => jsonResponse(500, { detail: 'database down' })
   stubApi([[summary('a', '2026-01-01T00:00:00Z', ARCHIVED)]], undefined, failed)
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
   await openArchive(user)
 
   await user.click(await screen.findByRole('button', { name: 'מחיקת הבדיקה: בדיקה חדשה' }))
@@ -531,7 +539,7 @@ test('the duplicate icon clones a check and opens the copy', async () => {
     ],
   ])
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
 
   await user.click(await screen.findByRole('button', { name: `שכפול הבדיקה: ${LOAN_TITLE}` }))
 
@@ -549,7 +557,7 @@ test('an archived check is grouped and marked archived only, not ready', async (
       }),
     ],
   ])
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
 
   const list = await screen.findByRole('navigation', { name: 'הבדיקות שלי' })
   expect(within(list).getByText('בדיקות בארכיון (1)')).toBeInTheDocument()
@@ -566,7 +574,7 @@ test('archived checks are grouped under a collapsed section after the live ones'
     ],
   ])
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
 
   const list = await screen.findByRole('navigation', { name: 'הבדיקות שלי' })
   const group = list.querySelector('details')!
@@ -588,7 +596,7 @@ test('the archived group starts collapsed even when the open check is archived',
       summary('gone', '2026-02-01T00:00:00Z', { archived: true }),
     ],
   ])
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
 
   const list = await screen.findByRole('navigation', { name: 'הבדיקות שלי' })
   await waitFor(() => expect(openedStreams()).toEqual(['/api/checks/gone/events']))
@@ -602,7 +610,7 @@ test('the archived group starts unfolded when every check is archived', async ()
       summary('gone-2', '2026-01-01T00:00:00Z', { archived: true }),
     ],
   ])
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
 
   const list = await screen.findByRole('navigation', { name: 'הבדיקות שלי' })
   expect(list.querySelector('details')).toHaveAttribute('open')
@@ -614,7 +622,7 @@ test('a live check has an archive icon, no delete icon; archiving refreshes the 
     [summary('new', '2026-02-01T00:00:00Z'), summary('a', '2026-01-01T00:00:00Z', ARCHIVED)],
   ])
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
 
   const archive = await screen.findByRole('button', { name: 'העברה לארכיון: בדיקה חדשה' })
   expect(screen.queryByRole('button', { name: /^מחיקת הבדיקה/ })).not.toBeInTheDocument()
@@ -634,7 +642,7 @@ test('a check with a confirmed term shows it under its title', async () => {
       summary('open', '2026-01-01T00:00:00Z', { loan }),
     ],
   ])
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
 
   const [termed, open] = await screen.findAllByRole('button', { name: new RegExp(`^${LOAN_TITLE}`) })
   expect(termed).toHaveAccessibleName(`${LOAN_TITLE} 72 חודשים`)
@@ -644,7 +652,7 @@ test('a check with a confirmed term shows it under its title', async () => {
 
 test('a check showing only the opening card has only a delete icon', async () => {
   stubApi([[summary('empty', '2026-01-01T00:00:00Z', { started: false })]])
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
 
   expect(await screen.findByRole('button', { name: /^בדיקה חדשה/ })).toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'מחיקת הבדיקה: בדיקה חדשה' })).toBeInTheDocument()
@@ -661,7 +669,7 @@ test('an unused check is deleted at once, with no confirmation', async () => {
     [summary('a', '2026-01-01T00:00:00Z')],
   ])
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
 
   await user.click(await screen.findByRole('button', { name: 'מחיקת הבדיקה: בדיקה חדשה' }))
 
@@ -684,7 +692,7 @@ test('archiving the open check opens the newest live one in its place', async ()
     ],
   ])
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
   await waitFor(() => expect(window.location.hash).toBe('#check=open'))
 
   const live = await screen.findAllByRole('button', { name: /^העברה לארכיון/ })
@@ -703,7 +711,7 @@ test('archiving the last live check opens a new check', async () => {
     ],
   ])
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
   await waitFor(() => expect(window.location.hash).toBe('#check=open'))
 
   await user.click(await screen.findByRole('button', { name: /^העברה לארכיון/ }))
@@ -719,7 +727,7 @@ test('archiving a check that is not open keeps the open one', async () => {
     [summary('open', '2026-02-01T00:00:00Z'), summary('other', '2026-01-01T00:00:00Z', ARCHIVED)],
   ])
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
   await waitFor(() => expect(window.location.hash).toBe('#check=open'))
 
   const live = await screen.findAllByRole('button', { name: /^העברה לארכיון/ })
@@ -743,7 +751,7 @@ test('an archived check has a restore icon; restoring refreshes the list', async
     ],
   ])
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
   await openArchive(user)
 
   expect(screen.getAllByRole('button', { name: /^שחזור מהארכיון/ })).toHaveLength(2)
@@ -765,7 +773,7 @@ test('collapsing the archived group over the open check opens the newest live on
     ],
   ])
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
   await openArchive(user)
   const archivedGroup = () =>
     screen.getByRole('navigation', { name: 'הבדיקות שלי' }).querySelector('details')!
@@ -786,7 +794,7 @@ const AWAITING_BUBBLE = /ממתינ.* לבירור/
 
 test('a check with one awaiting offer shows a bubble with 1 and the singular tooltip', async () => {
   stubApi([[summary('c', '2026-01-01T00:00:00Z', { loan, awaiting_offers: [AVIS] })]])
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
 
   const bubble = await screen.findByRole('button', { name: ONE_TIP })
   expect(bubble).toHaveTextContent('1')
@@ -795,7 +803,7 @@ test('a check with one awaiting offer shows a bubble with 1 and the singular too
 test('three awaiting offers show 3 and the plural tooltip', async () => {
   const three = [AVIS, DIRECT, { ...AVIS, id: 'a-3' }]
   stubApi([[summary('c', '2026-01-01T00:00:00Z', { loan, awaiting_offers: three })]])
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
 
   const bubble = await screen.findByRole('button', {
     name: '3 הצעות ממתינות לבירור מול הגוף המלווה',
@@ -805,7 +813,7 @@ test('three awaiting offers show 3 and the plural tooltip', async () => {
 
 test('a check with no awaiting offer has no bubble', async () => {
   stubApi([[summary('c', '2026-01-01T00:00:00Z', { loan })]])
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
 
   await screen.findByRole('button', { name: `שכפול הבדיקה: ${LOAN_TITLE}` })
   expect(screen.queryByRole('button', { name: AWAITING_BUBBLE })).not.toBeInTheDocument()
@@ -814,7 +822,7 @@ test('a check with no awaiting offer has no bubble', async () => {
 test('the bubble opens and closes a list of links under its check', async () => {
   stubApi([[summary('c', '2026-01-01T00:00:00Z', { loan, awaiting_offers: [AVIS, DIRECT] })]])
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
 
   const bubble = await screen.findByRole('button', {
     name: '2 הצעות ממתינות לבירור מול הגוף המלווה',
@@ -840,7 +848,7 @@ test('a link opens its check on the conversation', async () => {
     ],
   ])
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
 
   await user.click(await screen.findByRole('button', { name: ONE_TIP }))
   await user.click(screen.getByRole('button', { name: AVIS_LINK }))
@@ -858,7 +866,7 @@ test('a link of the bubble opens its check and names the card to focus, on every
   ])
   const scrolled = stubScrollIntoView()
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
 
   await user.click(await screen.findByRole('button', { name: ONE_TIP }))
   await user.click(screen.getByRole('button', { name: AVIS_LINK }))
@@ -884,7 +892,7 @@ test('a link of the bubble opens its check and names the card to focus, on every
 test('an archived check shows no bubble', async () => {
   stubApi([[summary('c', '2026-01-01T00:00:00Z', { archived: true, awaiting_offers: [AVIS] })]])
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
 
   await user.click(await screen.findByText('בדיקות בארכיון (1)'))
   expect(screen.queryByRole('button', { name: AWAITING_BUBBLE })).not.toBeInTheDocument()
@@ -899,7 +907,7 @@ test('only a check with finances has the finances link, on its months row', asyn
       summary('untold', '2026-01-01T00:00:00Z', { loan, term_months: 30 }),
     ],
   ])
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
 
   const list = await screen.findByRole('navigation', { name: 'הבדיקות שלי' })
   const [told, untold] = within(list).getAllByRole('listitem')
@@ -917,7 +925,7 @@ test('the finances link opens its check on the chat with the line; again hides i
     ],
   ])
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
 
   await user.click(await screen.findByRole('button', { name: FINANCES_LINK }))
   await waitFor(() => expect(window.location.hash).toBe('#check=told'))
@@ -943,7 +951,7 @@ test('the finances link opens its check on the chat with the line; again hides i
 test('the open check hides its finances link while its term card takes the ceiling', async () => {
   stubApi([[summary('told', '2026-01-01T00:00:00Z', { loan, has_finances: true })]])
   const user = userEvent.setup()
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
 
   await user.click(await screen.findByRole('button', { name: FINANCES_LINK }))
   const stream = FakeEventSource.last()
@@ -959,7 +967,7 @@ test('the open check hides its finances link while its term card takes the ceili
 
 test('opening a check with finances starts with the finances line hidden', async () => {
   stubApi([[summary('told', '2026-01-01T00:00:00Z', { loan, has_finances: true })]])
-  render(<Shell user={dana} onSignOut={vi.fn()} />)
+  render(<Shell user={dana} onSignOut={vi.fn()} onMessagesChanged={vi.fn()} />)
 
   await waitFor(() => expect(openedStreams()).toEqual(['/api/checks/told/events']))
   const stream = FakeEventSource.last()

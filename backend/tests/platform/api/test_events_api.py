@@ -127,19 +127,19 @@ def test_the_stream_replays_after_last_event_id_then_streams_live(
         wait_until_idle(world, check_id)
 
         url = f"/api/checks/{check_id}/events"
-        with client.stream("GET", url, headers={"Last-Event-ID": "2"}) as response:
+        with client.stream("GET", url, headers={"Last-Event-ID": "3"}) as response:
             assert response.headers["content-type"].startswith("text/event-stream")
             stream = frames(response.iter_lines())
             replayed = until(stream, is_idle)
             client.post(f"/api/checks/{check_id}/messages", json={"text": "תקציב 4,000"})
             live = until(stream, is_idle)
 
-        with client.stream("GET", url, headers={"Last-Event-ID": "6"}) as response:
+        with client.stream("GET", url, headers={"Last-Event-ID": "8"}) as response:
             resumed = until(frames(response.iter_lines()), is_idle)
 
     assert [(frame["id"], frame["type"]) for frame in replayed] == [
-        (3, "message.assistant"),
-        (4, "turn.status"),
+        (4, "message.assistant"),
+        (5, "turn.status"),
     ]
     assert replayed[0]["data"]["text"] == FIRST_REPLY
     deltas = [frame for frame in live if frame["type"] == "message.delta"]
@@ -151,15 +151,16 @@ def test_the_stream_replays_after_last_event_id_then_streams_live(
     assert {frame["data"]["at"] for frame in stored} == {NOW.isoformat()}
     assert deltas[-1]["data"]["text"] == SECOND_REPLY
     assert [(frame["id"], frame["type"]) for frame in stored] == [
-        (5, "message.user"),
-        (6, "turn.status"),
-        (7, "message.assistant"),
+        (6, "message.user"),
+        (7, "message.counted"),
         (8, "turn.status"),
+        (9, "message.assistant"),
+        (10, "turn.status"),
     ]
-    assert {frame["data"]["message_id"] for frame in deltas} == {stored[2]["data"]["message_id"]}
+    assert {frame["data"]["message_id"] for frame in deltas} == {stored[3]["data"]["message_id"]}
     assert [(frame["id"], frame["type"]) for frame in resumed] == [
-        (7, "message.assistant"),
-        (8, "turn.status"),
+        (9, "message.assistant"),
+        (10, "turn.status"),
     ]
 
 

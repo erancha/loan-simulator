@@ -21,6 +21,7 @@ const exchange: ChatMessage[] = [
 /** The question props, for a chat whose entries hold no question. */
 const noQuestion = {
   liveQuestionId: null,
+  messageStatus: null,
   steps: [],
   turnStartedAt: null,
   finances: null,

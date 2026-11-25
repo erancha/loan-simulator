@@ -349,17 +349,22 @@ as of the data's date, its range and how many times it changed between months; t
 change and its monthly range), followed by the two charts. The data changes only when the Bank of
 Israel moves its rate or a month's CPI is published, so a model would only reword the same figures.
 The exchange is appended to the check's conversation, so a follow-up question reaches the model with
-it. It counts as a message, under the same guards as one, as do the runner's other replies written
+it. It passes the same guards as a message, the cap aside, as do the runner's other replies written
 without the model: the opening card, a confirmed term that brings the offer form, the offer chip, a
 ceiling typed on the term card, and a line nothing answers (a skip of the ceiling question, the
 offer form's "אין לי עדיין הצעה"), which gets no reply at all.
 
-Every message costs model calls, so a person may send at most `AGENT_TURN_LIMIT` messages (20),
-across all their checks, in any rolling window of `AGENT_TURN_WINDOW_HOURS` (24).
-`AGENT_TURN_LIMIT_OVERRIDES` replaces that limit for the people it names, by lowercase email. Over
-the cap the API answers 429 with the time of the next allowed message in the body and in
-`Retry-After`. The count is read from the stored `message.user` events and from
-`deleted_event_times`, so it survives restarts and deleting a check gives no messages back.
+A message the model answers costs model calls, so a person may send at most `AGENT_TURN_LIMIT` of
+those (20), across all their checks, in any rolling window of `AGENT_TURN_WINDOW_HOURS` (24).
+`AGENT_TURN_LIMIT_OVERRIDES` replaces that limit for the people it names, by lowercase email. A
+send code answers is not counted and is never refused by the cap. The window has no reset: each
+counted message leaves it one window after it was sent, so messages free one at a time. Over the cap
+the API answers 429 with the time of the next allowed message in the body and in `Retry-After`. The
+runner stores a `message.counted` event beside the `message.user` of each send that reaches the
+model, and the count is read from those events and from `deleted_event_times`, so it survives
+restarts and deleting a check gives no messages back. `GET /api/auth/me` reports the same count as
+the person's message status: the limit, the messages left and, once one is used, the time the next
+one frees.
 
 `DELETE /api/checks/{check_id}` removes a check's saved conversation, then, in one transaction, the
 check, its options, its awaiting offers, its recommendation and its events. The conversation goes
@@ -389,6 +394,7 @@ person may send another message.
 | Event | Meaning |
 |---|---|
 | `message.user` | The person's message. |
+| `message.counted` | Stored right after the `message.user` of a send that reaches the model; the message cap counts these. It carries nothing, and the page does not listen for it. |
 | `message.delta` | The reply's whole text so far while the model writes it. Live only, never stored. |
 | `message.retracted` | A reply being written that showed an English word, which the page drops while the model rewrites it. Live only, never stored. |
 | `message.assistant` | A complete model message with text, under the message id its fragments carry. |

@@ -2,6 +2,7 @@
 protected routes need it, and signing out drops it."""
 
 import time
+from datetime import datetime, timedelta
 from http.cookies import SimpleCookie
 from pathlib import Path
 
@@ -10,8 +11,10 @@ import pytest
 from app_world import DANA, DANA_TOKEN, World
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from langchain_core.messages import AIMessage
 
 from auth_keys import CLIENT_ID, OTHER_KEY, sign
+from fakes import NOW
 from loan_agent.adapters.google_tokens import CLOCK_SKEW
 from loan_agent.platform.api.auth import COOKIE
 
@@ -57,7 +60,12 @@ def test_sign_in_sets_a_cookie_that_lasts_as_long_as_the_token(
     with world.client(public_key, token=None) as client:
         response = client.post("/api/auth/session", json={"credential": token})
         assert response.status_code == 200
-        assert response.json() == {"id": DANA.id, "email": DANA.email, "name": DANA.name}
+        assert response.json() == {
+            "id": DANA.id,
+            "email": DANA.email,
+            "name": DANA.name,
+            "messages": {"limit": 20, "left": 20, "next_free": None},
+        }
         cookie = set_cookie(response)[COOKIE]
         assert cookie.value == token
         assert cookie["httponly"]
@@ -142,3 +150,23 @@ def test_sign_out_drops_the_cookie(world: World, public_key: Path) -> None:
         assert response.status_code == 204
         assert set_cookie(response)[COOKIE]["max-age"] == "0"
         assert client.get("/api/auth/me").status_code == 401
+
+
+def test_the_signed_in_person_comes_with_their_message_status(
+    world: World, public_key: Path
+) -> None:
+    world.replies(AIMessage("שלום"))
+    with world.client(public_key, agent_turn_limit=1, agent_turn_window_hours=24) as client:
+        fresh = {"limit": 1, "left": 1, "next_free": None}
+        assert client.get("/api/auth/me").json()["messages"] == fresh
+        signed_in = client.post("/api/auth/session", json={"credential": DANA_TOKEN})
+        assert signed_in.json()["messages"] == fresh
+
+        check_id = client.post("/api/checks").json()["id"]
+        client.post(f"/api/checks/{check_id}/messages", json={"text": "א"})
+        world.drain(client)
+
+        messages = client.get("/api/auth/me").json()["messages"]
+    assert messages["limit"] == 1
+    assert messages["left"] == 0
+    assert datetime.fromisoformat(messages["next_free"]) == NOW + timedelta(hours=24)

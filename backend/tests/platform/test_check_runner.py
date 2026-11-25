@@ -50,7 +50,15 @@ from loan_agent.domain.errors import (
     TurnConflictError,
     TurnLimitError,
 )
-from loan_agent.domain.models import Check, Finances, LoanRequest, Option, Recommendation, User
+from loan_agent.domain.models import (
+    Check,
+    Finances,
+    LoanRequest,
+    MessageStatus,
+    Option,
+    Recommendation,
+    User,
+)
 from loan_agent.platform.check_runner import (
     FAILURE_MESSAGE,
     OFFER_FORM_SHOWN,
@@ -192,14 +200,16 @@ async def test_send_emits_user_message_and_runs_turn(world: World) -> None:
     events = await stored(world, check.id)
     assert [type for type, _ in events] == [
         "message.user",
+        "message.counted",
         "turn.status",
         "message.assistant",
         "turn.status",
     ]
     assert events[0][1] == {"text": "אני רוצה לקנות רכב"}
-    assert events[1][1] == {"status": "running"}
-    assert events[2][1]["text"] == REPLY
-    assert events[3][1] == {"status": "idle"}
+    assert events[1][1] == {}
+    assert events[2][1] == {"status": "running"}
+    assert events[3][1]["text"] == REPLY
+    assert events[4][1] == {"status": "idle"}
     assert model.received[0][-1] == HumanMessage("אני רוצה לקנות רכב", id=model.received[0][-1].id)
 
 
@@ -387,6 +397,7 @@ async def test_second_message_while_running_is_conflict(world: World) -> None:
     assert user_messages == [{"text": "כמה ללוות?"}]
     assert [type for type, _ in await stored(world, other.id)] == [
         "message.user",
+        "message.counted",
         "turn.status",
         "message.assistant",
         "turn.status",
@@ -764,7 +775,11 @@ async def test_aclose_cancels_running_turns(world: World) -> None:
     await checks.aclose()
     await checks.drain()
 
-    assert [type for type, _ in await stored(world, check.id)] == ["message.user", "turn.status"]
+    assert [type for type, _ in await stored(world, check.id)] == [
+        "message.user",
+        "message.counted",
+        "turn.status",
+    ]
 
 
 async def recommended_check(world: World, checks: CheckRunner) -> Check:
@@ -1156,17 +1171,16 @@ async def test_the_next_turn_reads_the_market_answer(world: World) -> None:
     assert str(said[1].content).startswith("ריבית הפריים נכון ל-")
 
 
-async def test_the_market_sample_counts_as_a_message_and_keeps_the_send_guards(
+async def test_the_market_sample_costs_no_message_and_keeps_the_send_guards(
     world: World,
 ) -> None:
     checks = runner(world, ScriptedChatModel(replies=[]))
     check = await checks.create(PERSON)
-    for _ in range(TURN_LIMIT):
+    for _ in range(TURN_LIMIT + 1):
         await checks.send_market_sample(PERSON, check.id, MARKET_SAMPLE)
         await checks.drain()
 
-    with pytest.raises(TurnLimitError):
-        await checks.send_market_sample(PERSON, check.id, MARKET_SAMPLE)
+    assert (await checks.message_status(PERSON)).left == TURN_LIMIT
     await world.checks.archive(check.id, NOW)
     with pytest.raises(CheckArchivedError):
         await checks.send_market_sample(PERSON, check.id, MARKET_SAMPLE)
@@ -1522,6 +1536,7 @@ async def test_a_confirmed_term_with_a_saved_offer_runs_the_model(world: World) 
     await checks.send_term_confirmation(PERSON, check.id, TERM_CONFIRMED)
     await checks.drain()
 
+    assert (await checks.message_status(PERSON)).left == TURN_LIMIT - 1
     assert model.received[0][-1].content == TERM_CONFIRMED
     assert ("message.assistant", REPLY) in [
         (type, data.get("text")) for type, data in await stored(world, check.id)
@@ -1599,7 +1614,7 @@ async def test_a_skipped_ceiling_question_is_stored_with_no_model_call_and_no_re
     assert [message.content for message in said] == ["מה הריבית היום?"]
 
 
-async def test_the_two_replies_count_as_messages_and_keep_the_send_guards(
+async def test_the_two_replies_cost_no_message_and_keep_the_send_guards(
     world: World,
 ) -> None:
     checks = runner(world, ScriptedChatModel(replies=[]))
@@ -1609,13 +1624,11 @@ async def test_the_two_replies_count_as_messages_and_keep_the_send_guards(
     await checks.drain()
     await checks.send_term_confirmation(PERSON, check.id, TERM_CONFIRMED)
     await checks.drain()
+    await checks.send_term_confirmation(PERSON, check.id, TERM_CONFIRMED)
+    await checks.drain()
     fresh = await checks.create(PERSON)
 
-    with pytest.raises(TurnLimitError):
-        await checks.send_term_confirmation(PERSON, check.id, TERM_CONFIRMED)
-    with pytest.raises(TurnLimitError):
-        await checks.send_opening(PERSON, fresh.id, OPENING, "רכב", Decimal(45000))
-    assert (await world.checks.get(PERSON.id, fresh.id)).loan is None
+    assert (await checks.message_status(PERSON)).left == TURN_LIMIT
     await world.checks.archive(check.id, NOW)
     with pytest.raises(CheckArchivedError):
         await checks.send_term_confirmation(PERSON, check.id, TERM_CONFIRMED)
@@ -1637,3 +1650,49 @@ async def test_a_retry_never_reruns_an_earlier_retry_phrase(world: World) -> Non
 
     assert strong.received == []
     assert [received[-1].content for received in model.received] == ["נסה שוב, אח שלי"] * 2
+
+
+async def test_only_a_message_that_reaches_the_model_counts_toward_the_cap(world: World) -> None:
+    model = ScriptedChatModel(replies=[AIMessage(REPLY) for _ in range(TURN_LIMIT)])
+    checks = runner(world, model)
+    check = await checks.create(PERSON)
+
+    for _ in range(TURN_LIMIT + 1):
+        await checks.send_unanswered(PERSON, check.id, CEILING_SKIP)
+        await checks.drain()
+    assert await checks.message_status(PERSON) == MessageStatus(TURN_LIMIT, TURN_LIMIT, None)
+
+    for _ in range(TURN_LIMIT):
+        await checks.send(PERSON, check.id, "שלום")
+        await checks.drain()
+    await checks.send_unanswered(PERSON, check.id, CEILING_SKIP)
+    await checks.drain()
+    with pytest.raises(TurnLimitError):
+        await checks.send(PERSON, check.id, "שלום")
+
+
+async def test_message_status_counts_down_and_names_when_the_next_message_frees(
+    world: World,
+) -> None:
+    model = ScriptedChatModel(replies=[AIMessage(REPLY) for _ in range(TURN_LIMIT)])
+    checks = runner(world, model, turn_limit_overrides={OTHER_PERSON.email: TURN_LIMIT + 3})
+    check = await checks.create(PERSON)
+
+    await checks.send(PERSON, check.id, "שלום")
+    await checks.drain()
+    assert await checks.message_status(PERSON) == MessageStatus(
+        TURN_LIMIT, TURN_LIMIT - 1, NOW + WINDOW
+    )
+    assert await checks.message_status(OTHER_PERSON) == MessageStatus(
+        TURN_LIMIT + 3, TURN_LIMIT + 3, None
+    )
+
+    world.clock.value = NOW + timedelta(hours=1)
+    await checks.send(PERSON, check.id, "שלום")
+    await checks.drain()
+    assert await checks.message_status(PERSON) == MessageStatus(TURN_LIMIT, 0, NOW + WINDOW)
+
+    world.clock.value = NOW + WINDOW
+    assert await checks.message_status(PERSON) == MessageStatus(
+        TURN_LIMIT, 1, NOW + timedelta(hours=1) + WINDOW
+    )

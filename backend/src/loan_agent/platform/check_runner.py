@@ -18,6 +18,8 @@ Core building blocks:
   turn
 - CheckRunner.send_unanswered: stores a line nothing answers (a skip of the ceiling question,
   the offer form's no-offer choice) as the person's message, with no model call and no reply
+- CheckRunner.message_status: how many counted messages the person has left, and when the next
+  one frees
 - CheckRunner.delete: removes an idle check, its conversation and all it produced
 - CheckRunner.clone: copies an idle check, its conversation and all it produced into a new check,
   and leaves the source a check.cloned event naming the copy
@@ -34,10 +36,11 @@ Core building blocks:
 - CheckRunner.fail_interrupted: at startup, ends the turns a stopped process left running
 - CheckRunner.drain and aclose: wait for or cancel the turns in flight
 
-A check has at most one turn in flight; turns on different checks run concurrently. Every message
-costs model calls, so a person may send at most turn_limit messages, or their override's number,
-across all their checks, in any rolling window of the configured length, and deleting a check gives
-none of them back. Turns live in this process's memory, so the agent runs as one replica.
+A check has at most one turn in flight; turns on different checks run concurrently. A message the
+model answers costs model calls, so a person may send at most turn_limit of those, or their
+override's number, across all their checks, in any rolling window of the configured length, and
+deleting a check gives none of them back. A send code answers is not counted. Turns live in this
+process's memory, so the agent runs as one replica.
 
 A model turn that recommended an option whose term may move ends with the term card for the
 shortest term at which it still fits the ceiling, when that is shorter and no card showed it yet. A
@@ -97,13 +100,14 @@ from loan_agent.domain.errors import (
     TurnConflictError,
     TurnLimitError,
 )
-from loan_agent.domain.models import Check, Finances, ReadingKind, User
+from loan_agent.domain.models import Check, Finances, MessageStatus, ReadingKind, User
 from loan_agent.ports.events import (
     CHART_SHOWN,
     CHECK_ARCHIVED,
     CHECK_CLONED,
     CHECK_RESTORED,
     MESSAGE_ASSISTANT,
+    MESSAGE_COUNTED,
     MESSAGE_DELTA,
     MESSAGE_RETRACTED,
     MESSAGE_USER,
@@ -261,9 +265,9 @@ class CheckRunner:
     async def send(self, user: User, check_id: str, text: str) -> None:
         """Raises CheckNotFoundError for an unknown check or another person's, CheckArchivedError
         for an archived one, TurnConflictError while the check runs a turn, and TurnLimitError
-        when the person's messages are used up."""
+        when the person's messages are used up. It reaches the model, so it is counted."""
         answer = self._retry if self._may_retry(user, text) else self._run
-        await self._start(user, check_id, text, answer)
+        await self._start(user, check_id, text, answer, reaches_model=True)
 
     def _may_retry(self, user: User, text: str) -> bool:
         return (
@@ -276,30 +280,30 @@ class CheckRunner:
     async def send_term_ceiling(
         self, user: User, check_id: str, text: str, payment_ceiling: Decimal
     ) -> None:
-        """The term card's own ceiling: it counts as a message and raises as send does."""
+        """The term card's own ceiling: it raises as send does, the cap aside."""
 
         async def answer(user_id: str, check_id: str, text: str) -> None:
             await self._answer_term_ceiling(user_id, check_id, text, payment_ceiling)
 
-        await self._start(user, check_id, text, answer)
+        await self._start(user, check_id, text, answer, reaches_model=False)
 
     async def send_market_sample(self, user: User, check_id: str, text: str) -> None:
         """The page sends the market-data sample here, the person's own wording of it included;
-        it counts as a message and raises as send does."""
-        await self._start(user, check_id, text, self._answer_market)
+        it raises as send does, the cap aside."""
+        await self._start(user, check_id, text, self._answer_market, reaches_model=False)
 
     async def send_offer_sample(self, user: User, check_id: str, text: str) -> None:
         """The page sends the offer chip's sentence here; the offer form answers it with no model
-        call. It counts as a message and raises as send does."""
-        await self._start(user, check_id, text, self._answer_offer_sample)
+        call. It raises as send does, the cap aside."""
+        await self._start(user, check_id, text, self._answer_offer_sample, reaches_model=False)
 
     async def send_opening(
         self, user: User, check_id: str, text: str, purpose: str, amount: Decimal
     ) -> None:
         """The opening card's goal and amount: the loan is saved before the message is stored,
-        and the term card answers it with no model call. It counts as a message and raises as
-        send does, and ToolError for a check that already holds a loan or a loan set_loan
-        refuses; nothing is recorded then."""
+        and the term card answers it with no model call. It raises as send does, the cap aside,
+        and ToolError for a check that already holds a loan or a loan set_loan refuses; nothing
+        is recorded then."""
         tools = CheckTools(user.id, check_id, self._tool_deps)
 
         async def save_loan() -> None:
@@ -307,36 +311,40 @@ class CheckRunner:
                 raise ToolError("the check already holds a loan")
             await tools.set_loan(purpose, str(amount))
 
-        await self._start(user, check_id, text, self._answer_opening, before=save_loan)
+        await self._start(
+            user, check_id, text, self._answer_opening, reaches_model=False, before=save_loan
+        )
 
     async def send_term_confirmation(self, user: User, check_id: str, text: str) -> None:
         """The line of a term PUT /term saved. A check with no option, example or offer, and no
         awaiting offer is answered with the offer form and no model call; any other runs a model
         turn, since its options were priced again at the term and its recommendation is of the
-        previous one. It counts as a message and raises as send does."""
+        previous one. It raises as send does, and counts toward the cap only as a model turn."""
         answer: _Answer = self._run
 
-        async def choose_answer() -> None:
+        async def reaches_model() -> bool:
             nonlocal answer
-            if not await holds_option(self._tool_deps, check_id):
-                answer = self._answer_offer_sample
+            if await holds_option(self._tool_deps, check_id):
+                return True
+            answer = self._answer_offer_sample
+            return False
 
         async def respond(user_id: str, check_id: str, text: str) -> None:
             await answer(user_id, check_id, text)
 
-        await self._start(user, check_id, text, respond, before=choose_answer)
+        await self._start(user, check_id, text, respond, reaches_model=reaches_model)
 
     async def send_unanswered(self, user: User, check_id: str, text: str) -> None:
         """A line nothing answers, such as a skip of the ceiling question or the offer form's
         no-offer choice: stored as the person's message, so the page shows it and closes its
         question, and the person goes on as they choose. The model's conversation, which must end
         on a model message, never holds it: the model reads the person's next message on its own.
-        It counts as a message and raises as send does."""
+        It raises as send does, the cap aside."""
 
         async def answer(user_id: str, check_id: str, text: str) -> None:
             await self._sink.emit(check_id, TURN_STATUS, IDLE)
 
-        await self._start(user, check_id, text, answer)
+        await self._start(user, check_id, text, answer, reaches_model=False)
 
     async def clone(self, user: User, check_id: str) -> Check:
         """Raises CheckNotFoundError for an unknown check or another person's, and
@@ -372,7 +380,7 @@ class CheckRunner:
             if check_id in self._turns:
                 raise TurnConflictError(check_id)
             await delete_conversation(self._graph, check_id)
-            await self._checks.delete(check_id, MESSAGE_USER, self._clock() - self._window)
+            await self._checks.delete(check_id, MESSAGE_COUNTED, self._clock() - self._window)
 
     async def fail_interrupted(self) -> None:
         """Ends every turn whose latest turn.status is running while no turn of this process runs
@@ -401,15 +409,24 @@ class CheckRunner:
             return self._turn_limit
         return self._turn_limit_overrides.get(user.email.lower(), self._turn_limit)
 
-    async def _require_message_left(self, user: User) -> None:
+    async def message_status(self, user: User) -> MessageStatus:
+        """The count the cap refuses on, so what the page shows and what a send meets agree."""
         now = self._clock()
-        count, times = await self._events.count_since(user.id, MESSAGE_USER, now - self._window)
+        count, times = await self._events.count_since(user.id, MESSAGE_COUNTED, now - self._window)
         limit = self._limit_of(user)
-        if count >= limit:
-            # The message whose expiry leaves limit - 1 in the window frees the next one; a message
-            # stops counting once it is a full window old.
-            freeing = times[count - limit]
-            raise TurnLimitError(limit, freeing + self._window)
+        if count == 0:
+            return MessageStatus(limit, limit, None)
+        # A message stops counting once it is a full window old. With messages left, the oldest
+        # counted one frees the next; with none, the one whose expiry leaves limit - 1 in the
+        # window does.
+        freeing = times[max(count - limit, 0)]
+        return MessageStatus(limit, max(limit - count, 0), freeing + self._window)
+
+    async def _require_message_left(self, user: User) -> None:
+        status = await self.message_status(user)
+        if status.left == 0:
+            assert status.next_free is not None, "a used-up limit has a counted message"
+            raise TurnLimitError(status.limit, status.next_free)
 
     async def save_finances(self, user: User, check_id: str, update: Mapping[str, object]) -> Check:
         """Raises CheckNotFoundError for an unknown check or another person's, CheckArchivedError
@@ -492,17 +509,24 @@ class CheckRunner:
         check_id: str,
         text: str,
         answer: _Answer,
+        *,
+        reaches_model: bool | Callable[[], Awaitable[bool]],
         before: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
-        """Records the message and runs answer as the check's turn in the background. before runs
-        once the guards pass and before the message is stored, so a refusal of its records
-        nothing."""
+        """Records the message and runs answer as the check's turn in the background. A message
+        that reaches the model, as given or as the check's state decides when asked, needs one
+        left under the cap and is counted. before runs once the guards pass and before the
+        message is stored, so a refusal of its records nothing."""
         async with self._send_lock:
             await self._idle_open_check(user, check_id)
-            await self._require_message_left(user)
+            counted = reaches_model if isinstance(reaches_model, bool) else await reaches_model()
+            if counted:
+                await self._require_message_left(user)
             if before is not None:
                 await before()
             await self._sink.emit(check_id, MESSAGE_USER, {"text": text})
+            if counted:
+                await self._sink.emit(check_id, MESSAGE_COUNTED, {})
             await self._sink.emit(check_id, TURN_STATUS, RUNNING)
             turn = asyncio.create_task(answer(user.id, check_id, text))
             self._turns[check_id] = turn

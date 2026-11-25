@@ -181,8 +181,8 @@ to run its loan-first step on a database that still holds checks. The runner's t
 the model are proved with their routes: the opening card saves the loan and shows the term card,
 while a refused loan records nothing and answers 422 and a check that holds a loan is refused; a
 confirmed term opens the offer form for a check with no option and runs the model for one with
-examples, a saved or an awaiting offer; the form has no skip route; each counts as a message under
-the send guards, and another person's check answers 404.
+examples, a saved or an awaiting offer; the form has no skip route; each passes the send guards
+and costs no message under the cap, and another person's check answers 404.
 The confirmation route saves the chosen reading as the offer before any message, and answers 404 for
 an unknown offer, a second confirmation or another person's check, 409 on an archived check or while
 a turn runs, and 422 for a reading the offer lacks. The checks list carries each check's awaiting

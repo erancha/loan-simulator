@@ -5,7 +5,12 @@ import { SIGNED_OUT_EVENT } from './api/client.ts'
 import type { User } from './api/types.ts'
 import { App } from './App.tsx'
 
-const dana: User = { id: '1001', email: 'dana@example.com', name: 'Dana' }
+const dana: User = {
+  id: '1001',
+  email: 'dana@example.com',
+  name: 'Dana',
+  messages: { limit: 20, left: 20, next_free: null },
+}
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status })
@@ -82,6 +87,20 @@ test('a person the server knows goes straight into the app', async () => {
   stubApi({ ...noChecks, 'GET /api/auth/me': () => jsonResponse(200, dana) })
   render(<App />)
   expect(await screen.findByRole('button', { name: 'תפריט חשבון' })).toBeInTheDocument()
+})
+
+test('showing the tab again asks the server for the person once more', async () => {
+  const fetchStub = stubApi({ ...noChecks, 'GET /api/auth/me': () => jsonResponse(200, dana) })
+  render(<App />)
+  await screen.findByRole('button', { name: 'תפריט חשבון' })
+
+  act(() => {
+    document.dispatchEvent(new Event('visibilitychange'))
+  })
+
+  await waitFor(() =>
+    expect(fetchStub.mock.calls.filter(([path]) => path === '/api/auth/me')).toHaveLength(2),
+  )
 })
 
 test('clicking the button leaves for Google with a nonce this tab keeps', async () => {

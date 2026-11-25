@@ -13,7 +13,7 @@ import {
   sendTermCeiling,
   sendTermConfirmation,
 } from '../api/checks.ts'
-import { ApiException, isRecord } from '../api/client.ts'
+import { ApiException } from '../api/client.ts'
 import { buildCard } from './card.ts'
 import { CardBoundary } from './CardBoundary.tsx'
 import { CardResizer, useCardWidth } from './CardResizer.tsx'
@@ -22,7 +22,6 @@ import type { AwaitingFocus } from './Chat.tsx'
 import {
   amountCoveredLine,
   amountDeclinedLine,
-  capNotice,
   ceilingFormula,
   CONTINUE_TO_ANOTHER_OFFER,
   confirmedReadingLine,
@@ -46,25 +45,18 @@ import {
   termComparisons,
 } from './events.ts'
 import type { CheckState } from './events.ts'
-import type { AwaitingOffer, CheckSummary, Reading } from '../api/types.ts'
+import type { AwaitingOffer, CheckSummary, MessageStatus, Reading } from '../api/types.ts'
 import { isMarketSample, isOfferSample } from './serverSamples.ts'
 import { useCheckEvents } from './useCheckEvents.ts'
 
-/** A 429's detail carries the ISO time the next message is allowed. */
-function nextAllowed(detail: unknown): Date {
-  if (!isRecord(detail) || typeof detail.next_allowed !== 'string') {
-    throw new Error(`a 429 without next_allowed: ${JSON.stringify(detail)}`)
-  }
-  return new Date(detail.next_allowed)
-}
-
 /** The notice for a refused send; anything that is not an Error propagates. */
 function sendFailureText(error: unknown): string {
-  if (error instanceof ApiException && error.status === 429) {
-    return capNotice(nextAllowed(error.detail), new Date())
-  }
   if (error instanceof Error) return sendFailed(error.message)
   throw error
+}
+
+function isStatus(error: unknown, status: number): boolean {
+  return error instanceof ApiException && error.status === status
 }
 
 /** Builds the card while rendering, inside the boundary, so a throw from buildCard is contained. */
@@ -117,6 +109,10 @@ interface Props {
   /** Shows the recommendation's pane, on a screen that shows one pane at a time; the reply that
    * presents a recommendation links to its table of figures. */
   onShowCard: () => void
+  /** The person's standing against the message cap; null on a page with no cap. */
+  messages: MessageStatus | null
+  /** A send was accepted or refused over the cap, so the message status may have changed. */
+  onMessagesChanged: () => void
 }
 
 /**
@@ -139,6 +135,8 @@ export function CheckPage({
   onTermCardLive,
   onCardReady,
   onShowCard,
+  messages,
+  onMessagesChanged,
 }: Props) {
   const { state } = useCheckEvents(checkId)
   const [notice, setNotice] = useState<string | null>(null)
@@ -194,7 +192,8 @@ export function CheckPage({
 
   /**
    * Runs a request that starts a turn, with a send's notices and its wait for the turn's end. An
-   * error `propagates` accepts is rethrown to the control that asked, with no notice.
+   * error `propagates` accepts is rethrown to the control that asked, with no notice. A send the
+   * cap refused (429) shows no notice either: the message status, asked for again, says it.
    */
   async function deliver(
     request: () => Promise<void>,
@@ -205,11 +204,11 @@ export function CheckPage({
       await request()
     } catch (error) {
       if (propagates(error)) throw error
-      if (!(error instanceof ApiException && error.status === 409)) {
-        setNotice(sendFailureText(error))
-      }
+      if (isStatus(error, 429)) onMessagesChanged()
+      else if (!isStatus(error, 409)) setNotice(sendFailureText(error))
       return false
     }
+    onMessagesChanged()
     setNotice(null)
     awaitedAfter.current = turnsEndedBefore
     setAccepted((count) => count + 1)
@@ -317,6 +316,7 @@ export function CheckPage({
             turnStartedAt={state.turnStartedAt}
             failure={state.failure}
             notice={notice}
+            messageStatus={messages}
             onSend={sendTyped}
             onAnswer={answer}
             onSkip={send}

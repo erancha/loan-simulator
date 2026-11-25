@@ -9,7 +9,7 @@ the verifier: routes act for the person it names.
 Core building blocks:
 - current_user / CurrentUser: the dependency protected routes take; 401 without a valid cookie
 - router: /api/auth/config (the public client id), /api/auth/session (sign in, sign out),
-  /api/auth/me (who is signed in)
+  /api/auth/me (who is signed in); a signed-in person is answered with their message status
 - register_error_handlers: a missing or bad token answers 401 with the reason
 """
 
@@ -22,8 +22,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from loan_agent.domain.errors import InvalidTokenError
-from loan_agent.domain.models import User, VerifiedToken
-from loan_agent.platform.dependencies import Deps
+from loan_agent.domain.models import MessageStatus, User, VerifiedToken
+from loan_agent.platform.dependencies import Deps, Runner
 
 COOKIE = "ls_id_token"
 NOT_SIGNED_IN = "sign in to continue"
@@ -53,14 +53,32 @@ class CredentialRequest(BaseModel):
     """The ID token Google's redirect hands the page."""
 
 
+class MessageStatusResponse(BaseModel):
+    """The person's standing against the message cap, which counts the messages the model
+    answers."""
+
+    limit: int
+    left: int
+    next_free: datetime | None
+    """When the next message frees; null while none is used."""
+
+
 class UserResponse(BaseModel):
     id: str
     email: str | None
     name: str | None
+    messages: MessageStatusResponse
 
     @classmethod
-    def of(cls, user: User) -> Self:
-        return cls(id=user.id, email=user.email, name=user.name)
+    def of(cls, user: User, messages: MessageStatus) -> Self:
+        return cls(
+            id=user.id,
+            email=user.email,
+            name=user.name,
+            messages=MessageStatusResponse(
+                limit=messages.limit, left=messages.left, next_free=messages.next_free
+            ),
+        )
 
 
 @router.get("/config")
@@ -70,16 +88,16 @@ async def config(deps: Deps) -> dict[str, str]:
 
 @router.post("/session")
 async def sign_in(
-    body: CredentialRequest, request: Request, response: Response, deps: Deps
+    body: CredentialRequest, request: Request, response: Response, deps: Deps, runner: Runner
 ) -> UserResponse:
     verified = deps.verifier.verify(body.credential)
     set_session_cookie(response, request, body.credential, verified, https_only=deps.https_only)
-    return UserResponse.of(verified.user)
+    return UserResponse.of(verified.user, await runner.message_status(verified.user))
 
 
 @router.get("/me")
-async def me(user: CurrentUser) -> UserResponse:
-    return UserResponse.of(user)
+async def me(user: CurrentUser, runner: Runner) -> UserResponse:
+    return UserResponse.of(user, await runner.message_status(user))
 
 
 @router.delete("/session", status_code=status.HTTP_204_NO_CONTENT)

@@ -133,6 +133,7 @@ def test_the_app_serves_a_turn_on_postgres(
 
     assert [event for event, _ in asyncio.run(stored_types(pg_url, check_id))] == [
         "message.user",
+        "message.counted",
         "turn.status",
         "loan.set",
         "message.assistant",

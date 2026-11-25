@@ -63,7 +63,7 @@ const TURN_ROUTES = [
   'offer-skip',
 ]
 const SOURCE_CHECK_ID = 'demo-source'
-const DEMO_USER: User = { id: 'demo', email: 'demo@example.com', name: 'הדגמה' }
+const DEMO_USER: User = { id: 'demo', email: 'demo@example.com', name: 'הדגמה', messages: null }
 // The checks list's created_at, which the list shows; the replay starts the check now, and a clone
 // is listed a moment after its source, so the list puts it first, as it does the newest check.
 const STARTED_AT = new Date().toISOString()

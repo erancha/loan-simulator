@@ -86,8 +86,8 @@ export POSTGRES_DB="loan"
 # export AUTH_PUBLIC_KEY_FILE=""
 
 # ── Turn cap ─────────────────────────────────────────────────────────────────────
-# Messages one person may send, across all their checks, in any rolling window; each message costs
-# model calls. AGENT_TURN_LIMIT_OVERRIDES of params.sh replaces it per person.
+# Messages the model answers that one person may send, across all their checks, in any rolling
+# window; each costs model calls. AGENT_TURN_LIMIT_OVERRIDES of params.sh replaces it per person.
 # export AGENT_TURN_LIMIT="20"
 # The length of that rolling window, in hours.
 # export AGENT_TURN_WINDOW_HOURS="24"

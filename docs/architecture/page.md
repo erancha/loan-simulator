@@ -386,10 +386,21 @@ measure nothing the person is deciding. A real offer stays, since it carries its
 It holds a table of total cost today and the range across history for each listed option, and
 the assumptions.
 
-**The cap.** When the agent refuses a message because the turn cap is reached (429), the page
-keeps the typed text and shows when the next message is allowed, in the viewer's local time. The
-cap counts a rolling window, so the notice gives the time alone for today, "tomorrow" with the
-time, or the date and time when it is later. Any other refusal shows its message; a 409, a turn
+**The cap.** A line under the chat box shows the person's message status, which arrives with the
+signed-in person from `GET /api/auth/me` (`useSession`): "נותרו 14 מתוך 20 הודעות מבוססות AI עד
+09:05 ביום הבא", the messages left of the limit and, once one is used, the time a used message
+frees and the count rises, emphasized at 3 or fewer. The cap counts only the messages the model
+answers, and the line's wording says so. Once none is left the line reads "הגעתם למכסת ההודעות
+מבוססות ה-AI. אפשר להמשיך" with the time the next message frees, in the viewer's local time: the
+time alone for today, "tomorrow" with the time, or the date and time when it is later, since the
+cap counts a rolling window. The chat box is locked then, because typed text always reaches the
+model; the chips and cards code answers stay usable. The demo page has no cap and no line.
+
+The page asks for the status again after each send the server accepts or refuses over the cap
+(429), when the time the line names passes, and when the tab is shown again
+(`shell/useMessageStatusRefresh.ts`), so a message sent from another tab or one that left the
+window shows. A 429 keeps the typed text and shows no notice of its own, since the status line
+says it. Any other refusal shows its message; a 409, a turn
 already running, shows nothing. A message the page shows is Hebrew: a server-given detail text
 passes through, while an English validation list or an answer without a detail becomes a Hebrew
 sentence of the page's own, and the English is logged with `console.error`.

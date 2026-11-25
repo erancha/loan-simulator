@@ -3,6 +3,7 @@ import { me, signIn, signOut as signOutRequest } from '../api/auth.ts'
 import { ApiException, SIGNED_OUT_EVENT, errorText } from '../api/client.ts'
 import type { User } from '../api/types.ts'
 import { SIGN_IN_REFUSED } from '../copy.ts'
+import { useLatest } from '../latest.ts'
 import { takeRedirectResult, type RedirectResult } from './googleRedirect.ts'
 
 /** Google's error code for a person who closed the sign-in page. */
@@ -19,7 +20,8 @@ export type Session =
  * redirect posts the token it carries; any other page asks the server who is signed in. A
  * sign-out or any 401 from the API drops back to signed-out. A server that cannot be asked at all
  * is a failure, shown as such rather than as a sign-in screen. A sign-in Google or the server
- * refused is signed-out with a refusal to show, except when the person cancelled.
+ * refused is signed-out with a refusal to show, except when the person cancelled. `refresh` asks
+ * the server again for the signed-in person, whose message status changes as they send.
  */
 export function useSession() {
   const [session, setSession] = useState<Session>({ state: 'loading' })
@@ -72,9 +74,22 @@ export function useSession() {
   }, [])
 
   const signedIn = useCallback((user: User) => setSession({ state: 'signed-in', user }), [])
+  const latest = useLatest()
+  const refresh = useCallback(() => {
+    const request = latest.begin()
+    // A 401 signs the person out through SIGNED_OUT_EVENT; any other failure keeps the status
+    // the page already shows, and the next refresh asks again.
+    me().then(
+      (user) => {
+        if (!latest.accept(request)) return
+        setSession((current) => (current.state === 'signed-in' ? { ...current, user } : current))
+      },
+      (error: unknown) => console.error('the message status was not refreshed', error),
+    )
+  }, [latest])
   const signOut = useCallback(async () => {
     await signOutRequest()
     setSession({ state: 'signed-out' })
   }, [])
-  return { session, signedIn, signOut }
+  return { session, signedIn, signOut, refresh }
 }

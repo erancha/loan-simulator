@@ -8,7 +8,7 @@ document.documentElement.lang = 'he'
 document.documentElement.dir = 'rtl'
 
 export function App() {
-  const { session, signOut } = useSession()
+  const { session, signOut, refresh } = useSession()
   switch (session.state) {
     case 'loading':
       return (
@@ -31,6 +31,6 @@ export function App() {
         </Landing>
       )
     case 'signed-in':
-      return <Shell user={session.user} onSignOut={signOut} />
+      return <Shell user={session.user} onSignOut={signOut} onMessagesChanged={refresh} />
   }
 }
