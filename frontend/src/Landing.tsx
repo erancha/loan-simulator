@@ -55,7 +55,7 @@ export function Landing({ pitch = false, children }: { pitch?: boolean; children
           <img className="app-icon" src="/favicon.svg" alt="" /> {APP_TITLE}
         </h1>
         {/* Siblings of the heading, so the heading's accessible name stays the bare title. */}
-        <p className="app-tagline">{APP_TAGLINE}</p>
+        <p className="app-tagline landing-flash">{APP_TAGLINE}</p>
         <p className="app-version">{versionLine(__APP_VERSION__, __APP_COMMIT_DATE__)}</p>
         {pitch && (
           <>
@@ -82,7 +82,7 @@ export function Landing({ pitch = false, children }: { pitch?: boolean; children
             )}
             <button
               type="button"
-              className="landing-more"
+              className="landing-more landing-flash"
               aria-expanded={expanded}
               onClick={() => setExpanded(!expanded)}
             >
@@ -98,7 +98,7 @@ export function Landing({ pitch = false, children }: { pitch?: boolean; children
               link into the simulator can return here. */}
           <a
             href={DEMO_PATH}
-            className={demoFlashClass()}
+            className={`landing-flash ${demoFlashClass() ?? ''}`}
             target="_blank"
             rel="opener"
             title={DEMO_HINT}
