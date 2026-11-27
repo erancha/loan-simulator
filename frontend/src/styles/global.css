@@ -1761,7 +1761,8 @@ button.primary:disabled,
   cursor: default;
 }
 
-/* The two speeds join into one control, the chosen one filled. */
+/* The two speeds join into one control. The speed playing sits greyed like a pressed key, and
+   the other is in bold accent, as the one to tap. */
 .demo-speed {
   display: inline-flex;
 }
@@ -1770,10 +1771,15 @@ button.primary:disabled,
   margin-inline-start: -1px;
 }
 
+.demo-speed button[aria-pressed="false"] {
+  color: var(--accent);
+  font-weight: 700;
+}
+
 .demo-speed button[aria-pressed="true"] {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--panel);
+  background: var(--line);
+  color: var(--mute);
+  cursor: default;
 }
 
 .demo-time {

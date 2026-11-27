@@ -17,6 +17,7 @@ import {
   SOURCE_LINK,
   versionLine,
 } from './copy.ts'
+import { demoFlashClass } from './demoFlash.ts'
 import { whatsAppInviteUrl } from './invite.ts'
 
 // The recorded check replayed in the real page, built beside it from demo.html.
@@ -95,7 +96,13 @@ export function Landing({ pitch = false, children }: { pitch?: boolean; children
         <footer className="landing-links">
           {/* The demo is this site's own page: its tab keeps the tie to this one, so the demo's
               link into the simulator can return here. */}
-          <a href={DEMO_PATH} target="_blank" rel="opener" title={DEMO_HINT}>
+          <a
+            href={DEMO_PATH}
+            className={demoFlashClass()}
+            target="_blank"
+            rel="opener"
+            title={DEMO_HINT}
+          >
             <LinkMark mark={DEMO_MARK} />
             {DEMO_LINK.before}
             <sup>{DEMO_LINK.mark}</sup>
