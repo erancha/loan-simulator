@@ -1,25 +1,29 @@
 __pycache__/
 *.py[cod]
 .venv/
-# The settings files init-env.sh creates from their committed .example.sh files.
-/scripts/lib/secrets.sh
-/scripts/lib/params.sh
-/scripts/lib/aws-config.sh
-# The throwaway Instance Connect key pair and the socket of the EC2 instance's Docker daemon.
-/scripts/lib/.ssh/
-.env
-.env.*
 *.egg-info/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 node_modules/
 dist/
+
+.env
+.env.*
+# The settings files init-env.sh creates from their committed .example.sh files.
+/scripts/lib/secrets.sh
+/scripts/lib/params.sh
+/scripts/lib/aws-config.sh
+# The throwaway Instance Connect key pair and the socket of the EC2 instance's Docker daemon.
+/scripts/lib/.ssh/
+
+# Working files of AI sessions.
 docs/superpowers/*
 .claude/*
 !.claude/skills/
 CLAUDE.local.md
 .superpowers/
 
-# Local copies of a previous .env, kept for reference.
+# Kept copies of old settings files and database dumps (sql-helper.sh --backup), which hold
+# secrets and people's records.
 backup/

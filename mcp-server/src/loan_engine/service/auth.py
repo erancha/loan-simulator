@@ -9,6 +9,9 @@ _CLIENT_ID = "agent"
 
 
 class StaticTokenVerifier:
+    """The token verifier the MCP server is built with: accepts the one configured token and
+    identifies every holder of it as the same client."""
+
     def __init__(self, token: SecretStr) -> None:
         self._token = token.get_secret_value().encode()
 

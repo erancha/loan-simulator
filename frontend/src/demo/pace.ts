@@ -15,6 +15,6 @@ export const PACE: Pace = {
   entryMs: 1000,
 }
 
-/** The speed the demo starts at, so a first watch takes about a minute; the playback bar's 1×
- * slows it to the pace above. */
+/** The speed the demo starts at, so a first watch takes the seconds the landing page's demo link
+ * promises (DEMO_SECONDS); the playback bar's 1× slows it to the pace above. */
 export const START_RATE: Rate = 2

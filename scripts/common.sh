@@ -67,7 +67,8 @@ require_docker() {
 }
 
 # Compose reads the ${...} values and the keys each service lists in its environment from this
-# shell, so the settings are loaded first, with the build the agent image's page names.
+# shell, so the settings are loaded first, and with them the version and commit date the agent
+# image's page shows (lib/build-info.sh).
 compose() {
   load_settings
   local build_info line

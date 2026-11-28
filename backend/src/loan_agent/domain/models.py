@@ -328,6 +328,9 @@ class Recommendation:
     loan_amount: Decimal
     payment_ceiling: Decimal | None
     created_at: datetime
+    # What the person said when they chose the preferred option themselves, in their words;
+    # None when the rule chose it.
+    person_choice: str | None = None
 
     def __post_init__(self) -> None:
         _require_utc("created_at", self.created_at)

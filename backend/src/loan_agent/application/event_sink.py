@@ -14,6 +14,10 @@ def check_channel(check_id: str) -> str:
 
 
 class CheckEventSink:
+    """The EventSink of the checks, over the event log and the bus: emit stores an event and
+    publishes it, publish_live publishes one without storing it, and latest and since read a
+    check's stored events back."""
+
     def __init__(self, store: CheckEventStore, bus: EventBus) -> None:
         self._store = store
         self._bus = bus

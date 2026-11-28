@@ -1,3 +1,5 @@
+"""The HTTP app answers /mcp only to the configured bearer token and to an allowed Host."""
+
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 

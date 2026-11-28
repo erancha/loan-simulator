@@ -2,12 +2,25 @@
 
 People sign in to the loan simulator with a Google account, and there is no other way in. Every
 piece of data belongs to the person who signed in: their checks, the figures held in them and the
-conversations on them.
-This page explains how sign-in works and how to set up the Google side, behind
-[Architecture](architecture.md#the-agent). The "התחברות עם Google" button is on the page
+conversations on them. This page explains how sign-in works and how to set up the Google side,
+behind [Architecture](architecture.md#the-agent). The "התחברות עם Google" button is on the page
 ([architecture/page.md](architecture/page.md)); the agent's sign-in API is what it calls.
 
 ## How it works
+
+```mermaid
+sequenceDiagram
+  participant B as Page (browser)
+  participant G as Google
+  participant A as Agent
+  B->>G: authorization request (response_type=id_token, client id, nonce)
+  G-->>B: redirect to the page with the ID token in the URL fragment
+  B->>B: compare the token's nonce with the stored one
+  B->>A: POST /api/auth/session (credential)
+  A->>A: verify signature, issuer, expiry, audience
+  A-->>B: the person, and the token as the ls_id_token cookie
+  B->>A: later requests with the cookie, verified each time
+```
 
 1. The page gets a Google ID token by redirect. The "התחברות עם Google" button stores a random
    nonce in the tab's `sessionStorage` and sends the browser to Google's authorization endpoint
@@ -59,15 +72,13 @@ The app needs its own Google Cloud project with one OAuth client.
 4. **Create the client.** Open **Clients → Create client**, choose **Web application**, give it
    a name, and under **Authorized JavaScript origins** add `http://localhost:8101`, the agent's
    address at `AGENT_HOST_PORT`. If you change that port in `scripts/lib/stack-params.sh`,
-   change the origin to match.
-   To run the page with `npm run dev` (Vite's server, which proxies `/api` to the agent), add
-   `http://localhost:5173` as a second origin.
-   Under **Authorized redirect URIs** add `<origin>/`, with the trailing slash: for local use
+   change the origin to match. To run the page with `npm run dev` (Vite's server, which proxies
+   `/api` to the agent), add `http://localhost:5173` as a second origin. Under **Authorized
+   redirect URIs** add `<origin>/`, with the trailing slash: for local use
    `http://localhost:8101/` (and `http://localhost:5173/` for `npm run dev`). **Create** shows the
-   client id, a long string ending in
-   `.apps.googleusercontent.com`, next to a client secret and a JSON download. Only the client
-   id is needed. Ignore the secret and the download: the agent verifies tokens and never redeems
-   codes, so nothing in this repo has a place for the secret.
+   client id, a long string ending in `.apps.googleusercontent.com`, next to a client secret and
+   a JSON download. Only the client id is needed. Ignore the secret and the download: the agent
+   verifies tokens and never redeems codes, so nothing in this repo has a place for the secret.
 5. **Give it to the agent.** Copy the client id into `GOOGLE_CLIENT_ID` in
    `scripts/lib/params.sh`, the file `./scripts/init-env.sh` wrote with that key blank.
 6. **Start the agent.** Run `./scripts/deploy.sh`, which starts it with the client id. Without

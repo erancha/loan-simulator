@@ -43,5 +43,5 @@ volume; [Market data](market-data.md#storage) has its format and how a save repl
 
 ## The page
 
-The page keeps only browser conveniences: the sign-in nonce in the tab's `sessionStorage`, and in
-`localStorage` the card's width and the day the person last tapped the market-data sample.
+The page keeps only browser conveniences: the sign-in nonce in the tab's `sessionStorage`, and
+the recommendation card's width in `localStorage`.

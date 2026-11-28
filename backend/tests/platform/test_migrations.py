@@ -184,3 +184,38 @@ async def test_migration_0007_refuses_a_moving_option_without_a_saved_range(
             connection.execute(text("DELETE FROM checks"))
         engine.dispose()
     command.upgrade(config, "head")
+
+
+async def test_migration_0008_records_no_person_choice_on_each_stored_recommendation(
+    pg_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", pg_url)
+    config = Config(str(BACKEND_DIR / "alembic.ini"))
+    config.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    command.downgrade(config, "0007")
+    engine = create_engine(pg_url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text("INSERT INTO checks (id, user_id, created_at) VALUES ('c1', 'p', :at)"),
+                {"at": datetime(2026, 10, 1, tzinfo=UTC)},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO recommendations (check_id, data, created_at) "
+                    "VALUES ('c1', CAST(:data AS jsonb), :at)"
+                ),
+                {
+                    "data": json.dumps({"preferred_option_id": "o1", "reasoning": "כי"}),
+                    "at": datetime(2026, 10, 1, tzinfo=UTC),
+                },
+            )
+        command.upgrade(config, "head")
+        with engine.begin() as connection:
+            data = connection.execute(text("SELECT data FROM recommendations")).scalar_one()
+        assert data == {"preferred_option_id": "o1", "reasoning": "כי", "person_choice": None}
+    finally:
+        with engine.begin() as connection:
+            connection.execute(text("DELETE FROM recommendations"))
+            connection.execute(text("DELETE FROM checks"))
+        engine.dispose()

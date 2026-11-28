@@ -1,3 +1,6 @@
+"""simulate() prices a track on the base path and replays it over each historical window, reporting
+the worst one; price() and resolved() price a scenario the person names."""
+
 import dataclasses
 from collections.abc import Sequence
 from datetime import date

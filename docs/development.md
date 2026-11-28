@@ -45,8 +45,8 @@ it first on every run, and stops with a list of every setting it needs that is s
 
 Every other setting is committed in [stack-params.sh](../scripts/lib/stack-params.sh): the
 ports, the database name and the addresses built from them. The agent refuses to start while
-`LLM_MODEL`, `GOOGLE_CLIENT_ID` or `LLM_API_KEY` is blank. An edit to any of the three files
-takes a `deploy.sh` run.
+`LLM_MODEL`, `GOOGLE_CLIENT_ID` or `LLM_API_KEY` is blank. An edit to `stack-params.sh`,
+`params.sh` or `secrets.sh` takes a `deploy.sh` run.
 
 The engine's keys are `ENGINE_`-prefixed, the agent's are not. Compose hands each container only
 the keys it reads, listed once per service in `docker-compose.yml`, so the engine never receives
@@ -62,11 +62,11 @@ one of its secrets or email addresses, the license contact of `params.sh` except
 sets `core.hooksPath` to `.githooks`, whose `pre-commit` hook makes the same check on every
 commit's staged changes.
 
-The scripts export the three files into their shell before calling Compose, so a bare
-`docker compose` call has no settings. The files hold the host forms of `DATABASE_URL` and
-`ENGINE_URL`; Compose overrides both with the in-network addresses (`db:<DB_PORT>`,
-`engine:<ENGINE_PORT>`). Host commands (pytest, uvicorn) run from the repo root, because the
-agent reads the settings files by their path from the working directory.
+The scripts export `stack-params.sh`, `params.sh` and `secrets.sh` into their shell before
+calling Compose, so a bare `docker compose` call has no settings. The files hold the host forms
+of `DATABASE_URL` and `ENGINE_URL`; Compose overrides both with the in-network addresses
+(`db:<DB_PORT>`, `engine:<ENGINE_PORT>`). Host commands (pytest, uvicorn) run from the repo root,
+because the agent reads the settings files by their path from the working directory.
 
 ## Backend tests
 
@@ -88,8 +88,7 @@ Docker runs the stack; `deploy.sh` and `docker-helper.sh` stop when it is not re
 
 - [`deploy.sh`](../scripts/deploy.sh) — builds the images, starts Postgres (with its schema
   migration), the engine and the agent in Docker, and returns once the engine and the agent
-  answer. Then open http://localhost:8101, sign in with a Google account,
-  and start a check.
+  answer. Then open http://localhost:8101, sign in with a Google account, and start a check.
 - `deploy.sh --ec2` — deploys to one EC2 instance in the account of `aws-config.sh`, and needs
   the AWS CLI, `ssh` and `curl`. It creates or updates the CloudFormation stack of
   [`template-ec2.yaml`](../scripts/template-ec2.yaml), builds the images here for ARM, loads them
@@ -99,10 +98,11 @@ Docker runs the stack; `deploy.sh` and `docker-helper.sh` stop when it is not re
   deploys.
 - `deploy.sh --ec2 --preview` — runs the working tree beside production on the same instance;
   [The preview on EC2](#the-preview-on-ec2) covers it, from the first deploy to its removal.
-- [`docker-helper.sh`](../scripts/docker-helper.sh) — `--stop [--volumes]`, `--logs [-e]`,
-  `--ps` or `--costs [--since <age>]` for the stack; `--volumes` also removes the stored market
-  data and the database. `--costs` sums the model calls of the running containers' logs by UTC
-  day and by kind of call (a turn, a retry turn), in dollars at the prices of
+- [`docker-helper.sh`](../scripts/docker-helper.sh) — `--stop [--volumes] [--images]`,
+  `--logs [-e]`, `--ps` or `--costs [--since <age>]` for the stack; `--volumes` also removes the
+  stored market data and the database, and `--images`, with `--ec2` only, the images this repo
+  built for the instance. `--costs` sums the model calls of the running containers' logs by UTC
+  day and by kind of call (a turn, a follow-up, a retry turn), in dollars at the prices of
   `backend/src/loan_agent/adapters/model_costs.py`. With `--ec2` as its first argument it acts
   on the instance, and `--ec2 --delete-stack` deletes the EC2 stack.
 - [`test.sh`](../scripts/test.sh) — the quality gate, above.

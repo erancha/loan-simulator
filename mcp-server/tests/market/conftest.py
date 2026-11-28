@@ -1,3 +1,5 @@
+"""Fixtures of the market tests: the recorded responses and an HTTP client answered by a handler."""
+
 from collections.abc import Callable
 from pathlib import Path
 

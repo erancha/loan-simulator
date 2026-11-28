@@ -12,7 +12,7 @@ export const TOOL_ACTIVITY: Readonly<Record<string, string>> = {
   save_offer: 'מחשב את ההצעה',
   read_offer: 'מזהה את סוג ההצעה',
   answer_offer_amount: 'שומר את תשובת הגוף המלווה',
-  present_recommendation: 'מכין את ההמלצה',
+  choose_option: 'מעדכן את ההמלצה לבחירה שלך',
   compare_terms: 'משווה בין תקופות',
   ask: 'מנסח שאלה',
   ask_term: 'מחשב את מספר החודשים',

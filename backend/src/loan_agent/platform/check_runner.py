@@ -13,6 +13,9 @@ Core building blocks:
   engine's data with no model call, as a turn the conversation keeps
 - CheckRunner.send_opening: saves the opening card's goal and amount as the check's loan, records
   the card's line and shows the term card, with no model call
+- CheckRunner.send_offer: saves the offer the page's form sent as fields, records the form's line
+  and the save, as a save_offer call of the model's with its result, and runs the turn, whose
+  first model call presents the recommendation
 - CheckRunner.send_term_confirmation: records the line of a term the person confirmed; a check
   with no option and no awaiting offer gets the offer form with no model call, any other a model
   turn
@@ -55,11 +58,11 @@ A turn streams the model's text to open pages as live message.delta events, each
 whole text of its message so far, so a page that joins mid-reply catches up from the next one.
 A reply that shows an English word the person did not write is withdrawn with a live
 message.retracted at that word, since the graph has it rewritten before it is stored.
-It stores each complete model message with text as message.assistant under the same message id,
-so a page that replays the log sees complete messages only. A turn ends with turn.status idle,
-preceded by turn.failed when it raised or was cut short by a restart; the error itself goes to the
-log, never to the page. A cut-short turn leaves the thread at its last checkpoint, and the next
-turn continues from there.
+A turn stores each complete model message with text as message.assistant under the same message
+id, so a page that replays the log sees complete messages only. A turn ends with turn.status
+idle, preceded by turn.failed when it raised or was cut short by a restart; the error itself goes
+to the log, never to the page. A cut-short turn leaves the thread at its last checkpoint, and the
+next turn continues from there.
 """
 
 import asyncio
@@ -77,8 +80,10 @@ from langgraph.graph import MessagesState
 
 from loan_agent.application.agent_graph import (
     MODEL_NODE,
+    SAVE_OFFER,
     AgentGraph,
     check_config,
+    code_call,
     copy_conversation,
     delete_conversation,
     people_said,
@@ -227,6 +232,11 @@ def _term_card_terms(events: Sequence[StoredEvent]) -> set[int]:
 
 
 class CheckRunner:
+    """Starts each check's turn as a background task of this process and keeps it until it ends.
+    Every send and every save passes the same guards under one lock: the check is the person's,
+    open and without a turn in flight, and a message the model answers has one left under the
+    person's cap."""
+
     def __init__(
         self,
         graph: AgentGraph,
@@ -314,6 +324,33 @@ class CheckRunner:
         await self._start(
             user, check_id, text, self._answer_opening, reaches_model=False, before=save_loan
         )
+
+    async def send_offer(
+        self,
+        user: User,
+        check_id: str,
+        text: str,
+        lender: str,
+        tracks: Sequence[Mapping[str, object]],
+        max_term_months: int,
+    ) -> None:
+        """An offer the page's form sent as fields beside its line: the offer is saved before the
+        line is stored, so the model never reads it back from the line, and code recommends before
+        the turn's first call. The model's conversation records the save as the model's own
+        save_offer call with its result, so the model sees the offer saved as when it
+        saves a typed one. It reaches the model, so it is counted. It raises as send does, and
+        ToolError for an offer save_offer refuses; nothing is recorded then."""
+        tools = CheckTools(user.id, check_id, self._tool_deps)
+        recorded: list[AIMessage | ToolMessage] = []
+
+        async def save() -> None:
+            arguments, result = await tools.save_form_offer(lender, tracks, max_term_months)
+            recorded.extend(code_call(SAVE_OFFER, arguments, result))
+
+        async def answer(user_id: str, check_id: str, text: str) -> None:
+            await self._run_on(self._graph, user_id, check_id, text, recorded)
+
+        await self._start(user, check_id, text, answer, reaches_model=True, before=save)
 
     async def send_term_confirmation(self, user: User, check_id: str, text: str) -> None:
         """The line of a term PUT /term saved. A check with no option, example or offer, and no
@@ -553,13 +590,22 @@ class CheckRunner:
         )
         await self._run_on(self._retry_route.graph, user_id, check_id, said[-1])
 
-    async def _run_on(self, graph: AgentGraph, user_id: str, check_id: str, text: str) -> None:
+    async def _run_on(
+        self,
+        graph: AgentGraph,
+        user_id: str,
+        check_id: str,
+        text: str,
+        after_text: Sequence[AIMessage | ToolMessage] = (),
+    ) -> None:
+        """after_text: what the conversation records right after the person's text and before
+        the model's first call, such as a save the runner made for the model."""
         config = check_config(user_id, check_id)
         started = self._clock()
         model_calls = 0
         try:
             unfinished = await self._close_unfinished_tool_calls(config)
-            turn_input = MessagesState(messages=[*unfinished, HumanMessage(text)])
+            turn_input = MessagesState(messages=[*unfinished, HumanMessage(text), *after_text])
             earlier = (await graph.aget_state(config)).values.get("messages", [])
             draft = _Draft(people=[*people_said(earlier), text])
             async for part in graph.astream(

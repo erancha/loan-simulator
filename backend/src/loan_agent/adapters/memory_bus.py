@@ -7,7 +7,11 @@ from typing import Any
 
 
 class InMemoryEventBus:
+    """The EventBus port within one process: publish puts an event on the queue of every open
+    subscription to its channel, and a subscription ends with its context."""
+
     def __init__(self) -> None:
+        # Each entry: a channel and the queue of one open subscription to it.
         self._subscriptions: set[tuple[str, asyncio.Queue[dict[str, Any]]]] = set()
 
     async def publish(self, channel: str, event: dict[str, Any]) -> None:

@@ -1,3 +1,6 @@
+"""offer_readings() gives each loan an offer may mean, from its stated number or from its payment,
+and leaves out a reading outside the priced ranges."""
+
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 

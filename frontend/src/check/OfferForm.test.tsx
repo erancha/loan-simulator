@@ -108,7 +108,31 @@ test('a filled form sends one line with the lender, every track and the period',
   await user.type(monthsBox(), '84')
   await user.click(proceed())
   expect(onAnswer).toHaveBeenCalledTimes(1)
-  expect(onAnswer).toHaveBeenCalledWith({ line: PENSION_FUND_LINE, update: null })
+  expect(onAnswer).toHaveBeenCalledWith({
+    line: PENSION_FUND_LINE,
+    offer: {
+      lender: 'קרן הפנסיה',
+      tracks: [
+        { rate_kind: 'prime', rate: '0.5', cpi_linked: false },
+        { rate_kind: 'fixed', rate: '3.5', cpi_linked: true },
+      ],
+      max_term_months: 84,
+    },
+  })
+})
+
+test('a prime minus track is sent as a negative margin over prime', async () => {
+  const user = userEvent.setup()
+  const onAnswer = form({ ...EMPTY, lender: 'הבנק', max_term_months: 60 })
+  await user.type(rateBox(1), '-0.5')
+  await user.click(proceed())
+  expect(onAnswer).toHaveBeenCalledWith(
+    expect.objectContaining({
+      offer: expect.objectContaining({
+        tracks: [{ rate_kind: 'prime', rate: '-0.5', cpi_linked: false }],
+      }),
+    }),
+  )
 })
 
 test('a minus typed on a prime row turns it into prime minus; a fixed rate keeps the sign', async () => {

@@ -98,7 +98,7 @@ body {
   margin-block-end: 0;
 }
 
-/* The tooltip anchors to the whole field, not the ? button: it opens above the field, clear of
+/* The tooltip anchors to the whole field, not the i button: it opens above the field, clear of
    the pointer, which hangs below its tip, and at the field's width, inside the scrolling side
    column. */
 .field {
@@ -171,7 +171,7 @@ fieldset.field label {
 
 .ceiling-formula,
 .term-planning {
-  color: var(--muted);
+  color: var(--mute);
   font-size: 0.85em;
 }
 
@@ -676,7 +676,7 @@ fieldset.field.changed {
 
 .chat-message-status {
   margin: 0;
-  color: var(--muted);
+  color: var(--mute);
   font-size: 0.8rem;
 }
 
@@ -1091,7 +1091,7 @@ button.primary:disabled,
   text-align: center;
 }
 
-/* An amount keeps its ₪ on its own line. */
+/* An amount and its ₪ stay on one line. */
 .scenario td {
   white-space: nowrap;
 }

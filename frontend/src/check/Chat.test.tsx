@@ -18,7 +18,8 @@ const exchange: ChatMessage[] = [
   { id: 'a1', role: 'assistant', text: 'בשמחה, כמה הוא עולה?', complete: true },
 ]
 
-/** The question props, for a chat whose entries hold no question. */
+/** Every Chat prop but the messages, the turn's state and onSend, as a chat has them with no live
+ * question, no chip beyond the market one and no card to show. */
 const noQuestion = {
   liveQuestionId: null,
   messageStatus: null,

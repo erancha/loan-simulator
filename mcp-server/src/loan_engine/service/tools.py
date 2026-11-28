@@ -6,8 +6,9 @@
   TrackSuggestions, MarketSeries (PrimeMonth, CpiMonth), OfferReadings (Reading)
 - register_tools(): adds the tools to a server; each reads market data from history_provider
 
-simulate_loan returns its LoanSimulation as structured content and only a short summary as text,
-so the agent will be able to pass the schedule to the page without it filling the model's context.
+simulate_loan and simulate_scenario return their simulation as structured content and only a short
+summary as text, so simulate_loan's month-by-month schedule reaches the agent without filling the
+model's context.
 
 Argument validation failures, the domain's NoHistoryWindowError and an offer with neither a
 number nor a payment reach the caller as tool errors whose message names the field or the term at
@@ -522,7 +523,7 @@ def register_tools(
         """
         market = history_provider()
         # The aligned months end at the latest published CPI, which trails the daily rate by
-        # weeks; the rate's own month closes the prime series, so the chart reaches today.
+        # weeks; the rate's own month closes the prime series, so the series reaches today.
         prime_window = list(zip(market.months, market.boi_rate, strict=True))
         this_month = market.rate_as_of.replace(day=1)
         if this_month > market.months[-1]:

@@ -682,7 +682,7 @@ it('an income answer hands its update with its line', async () => {
 })
 
 /** The terms card of a car loan under a ceiling of 2,000: 72 months as recommended, then 66 and
- * 60, whose worst-period payment passes the ceiling. */
+ * 60; only the 60-month worst-period payment passes the ceiling. */
 const termsQuestion: Question = {
   kind: 'terms',
   direction: 'shorter',

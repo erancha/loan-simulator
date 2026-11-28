@@ -1,5 +1,5 @@
 """Tables of the loan agent: checks with their options, awaiting offers, recommendation and event
-log.
+log, and the times of deleted checks' events.
 
 Every row belongs to a Google account id; options, awaiting offers and recommendations reach it
 through their check, while events also carry it themselves. Money inside JSONB columns is a

@@ -76,14 +76,16 @@ person states, and the payment ceiling, the only household figure, is optional
 ([ADR 0010](adr/0010-loan-first-with-an-optional-ceiling.md)). An offer described in words is
 read in code: the model extracts its figures, the engine prices each loan they may mean, and the
 quoted payment decides between them ([ADR 0011](adr/0011-a-vague-offer-is-read-in-code.md)).
+Code, not the model, chooses the recommended option by its rule, and the model explains it
+([ADR 0016](adr/0016-code-chooses-the-recommendation.md)).
 The chat model is whichever provider `LLM_MODEL` names, so the model changes without a code change
 ([ADR 0006](adr/0006-model-provider-is-a-setting.md)). People sign in with a Google ID token that
 the agent verifies on every request and never passes on
 ([ADR 0005](adr/0005-google-id-token-sign-in.md), [Sign-in](sign-in.md)), and any Google account
 may sign in ([ADR 0015](adr/0015-any-google-account-can-sign-in.md)).
 
-Why the agent is built here, how a conversation runs, the guardrail, the turn cap and the events
-are in [architecture/agent.md](architecture/agent.md).
+Why the agent is built here, how a conversation runs, the recommendation, the turn cap and the
+events are in [architecture/agent.md](architecture/agent.md).
 
 ## The page
 

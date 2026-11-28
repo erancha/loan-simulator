@@ -141,7 +141,8 @@ const FORMS: Form[] = [
       label: [TEXT, ANY],
       amount: [SHEKELS, SHEKEL_FIGURE],
     }),
-    // A label the data panel no longer shows has no sentence, so its line shows as stored.
+    // A stored line may name a label the finances panel does not show; it has no sentence, so
+    // the line shows as stored.
     say: ({ label, amount }) => {
       const field = SPOKEN.updatedField[label]
       return field === undefined ? null : SPOKEN.updated(field, amount)

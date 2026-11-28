@@ -6,7 +6,7 @@ market data, with money as Decimal.
 - Bounds, Simulation, ScenarioFigures, OfferTerm, ProposedTerm, OfferReadings, MarketSeries:
   their parsed results
 - EngineError: a call the engine refused, or a loan of more than one track, which the agent does
-  not price yet; the message names the fault
+  not price; the message names the fault
 """
 
 from collections.abc import Mapping

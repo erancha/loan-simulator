@@ -5,13 +5,17 @@ each check's conversation is one checkpoint thread.
 
 - build_agent_graph: the model node and the tool node over the thread's messages, as an
   AgentGraph; a reply's tool calls skip the tool node and are refused when an argument holds a
-  NUL character, and a prompt the provider's usage filter flags is sent once more; a call made
-  while the card no longer describes the check is bound to present_recommendation, and every
-  call publishes a live turn.step event when it starts and when it chooses tools
+  NUL character, and a prompt the provider's usage filter flags is sent once more; before a model
+  call made while the card no longer describes the check, code recommends and records it as a
+  recommend call; every call but a turn's first runs on the follow-up model, which thinks less,
+  and every call publishes a live turn.step event when it starts and when it chooses tools
+- code_call: a call code made, with its result, recorded in the conversation as if the model had
+  made it, so the model reads it as its own
 - check_config: the run configuration naming the person and the check, with the turn's step
   limit
 - delete_conversation, copy_conversation: remove a check's saved conversation, or start
   another check's with its messages
+- record_exchange: append messages answered outside the model to a check's conversation
 - last_message: the last message of a check's conversation
 - people_said: the texts of the person's own messages, whose English words a reply may repeat
 - SYSTEM_PROMPT: the Hebrew instructions sent ahead of the messages on every model call, followed
@@ -26,12 +30,20 @@ the model can only act on the check it is talking about.
 import json
 import logging
 import re
+import uuid
 from collections.abc import Sequence
 from importlib.resources import files
 from typing import Annotated, Any, Final, Literal, Self
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolCall,
+    ToolMessage,
+)
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, StructuredTool, ToolException
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -58,7 +70,10 @@ log = logging.getLogger(__name__)
 
 # The graph node that calls the chat model; each of its updates in a turn is one model call.
 MODEL_NODE: Final = "model"
-PRESENT_RECOMMENDATION: Final = "present_recommendation"
+RECOMMEND: Final = "recommend"
+SAVE_OFFER: Final = "save_offer"
+# The id prefix of a call code made in the model's place; such a call is no model call.
+_CODE_CALL: Final = "code-"
 
 SYSTEM_PROMPT = (files(__package__) / "prompts" / "system_he.md").read_text(encoding="utf-8")
 
@@ -79,20 +94,17 @@ class RepeatedToolCallsError(Exception):
 
 
 RECOMMENDATION_HEADING = "ההמלצה שלי"
-"""The section of a reply that recommends, as the system prompt writes it. The person's card
-changes only through present_recommendation, so this section without that call is a false
-promise."""
+"""The section of a reply that recommends, as the system prompt writes it. The card holds code's
+recommendation, so this section on a check with none is a made-up one."""
 EVALUATION_HEADING = "ההצעה שבדקתי"
-"""The section of a reply that evaluates the check's only option in place of recommending one;
-the card changes through present_recommendation all the same."""
+"""The section of a reply that evaluates the check's only option in place of recommending one."""
 _RECOMMENDATION_SECTION = re.compile(
     rf"^\W*(?:{RECOMMENDATION_HEADING}|{EVALUATION_HEADING})\W*$", re.MULTILINE
 )
-_REDO_THE_RECOMMENDATION = (
+_NO_RECOMMENDATION = (
     "Your reply was discarded and the person did not see it: it has a recommendation section, but "
-    "present_recommendation did not succeed in this turn, so nothing was calculated or saved. Make "
-    "the calls the recommendation needs, ending with present_recommendation, and write the reply "
-    "from their results. If no recommendation is possible, write the reply without that section."
+    "the check has no recommendation, since it holds no option of its loan amount and term. Write "
+    "the reply without that section."
 )
 
 _REWRITE_IN_HEBREW = (
@@ -312,17 +324,9 @@ class AnswerOfferAmountArgs(_Args):
     )
 
 
-class PresentRecommendationArgs(_Args):
-    preferred_option_id: str = Field(description="option_id from save_examples or save_offer")
-    reasoning: str = Field(description="Why this option fits the person, in Hebrew")
-    alternative_option_id: str | None = Field(
-        default=None, description="option_id of a second choice, if any"
-    )
-    person_preference: str | None = Field(
-        default=None,
-        description="What the person said that makes the preferred option suit them although "
-        "another of its kind costs less in total, in their words; omit it otherwise",
-    )
+class ChooseOptionArgs(_Args):
+    option_id: str = Field(description="option_id of the option the person chose, from offers")
+    person_words: str = Field(description="What the person said when choosing it, in their words")
 
 
 QuestionField = Literal[
@@ -546,16 +550,8 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
     ) -> str:
         return await _tools_for(config, deps).answer_offer_amount(awaiting_id, covers, reading)
 
-    async def present_recommendation(
-        preferred_option_id: str,
-        reasoning: str,
-        config: RunnableConfig,
-        alternative_option_id: str | None = None,
-        person_preference: str | None = None,
-    ) -> str:
-        return await _tools_for(config, deps).present_recommendation(
-            preferred_option_id, reasoning, alternative_option_id, person_preference
-        )
+    async def choose_option(option_id: str, person_words: str, config: RunnableConfig) -> str:
+        return await _tools_for(config, deps).choose_option(option_id, person_words)
 
     async def show_chart(series: str, months: int, config: RunnableConfig) -> str:
         return await _tools_for(config, deps).show_chart(series, months)
@@ -661,7 +657,7 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
         ),
         StructuredTool.from_function(
             coroutine=save_offer,
-            name="save_offer",
+            name=SAVE_OFFER,
             description="Save a real offer the person received, with every track it names in "
             "one call: each track is priced for the check's loan amount and kept as an option "
             "of its own, and when one is refused none is saved. Returns each track's option_id "
@@ -693,14 +689,13 @@ def _check_model_tools(deps: ToolDeps) -> list[BaseTool]:
             args_schema=AnswerOfferAmountArgs,
         ),
         StructuredTool.from_function(
-            coroutine=present_recommendation,
-            name=PRESENT_RECOMMENDATION,
-            description="Present the recommendation card: the preferred option and an optional "
-            "alternative, with your reasoning. Without a ceiling the card says it is not yet "
-            "checked against what the person can pay. Refused, with the reason and the remedy "
-            "to offer, when a named option's worst-case payment is above the ceiling, and when "
-            "another option of the preferred one's term fits and costs less in total.",
-            args_schema=PresentRecommendationArgs,
+            coroutine=choose_option,
+            name="choose_option",
+            description="Call this only when the person says which saved option they want, "
+            "although the card recommends another: the card then recommends theirs, quoting "
+            "their words, while it fits the ceiling. Refused, with what to tell them, for an "
+            "option above the ceiling.",
+            args_schema=ChooseOptionArgs,
         ),
         StructuredTool.from_function(
             coroutine=ask,
@@ -756,22 +751,20 @@ def _question_call_count(state: MessagesState) -> int:
     return sum(call["name"] in _QUESTION_TOOLS for call in _last_ai_message(state).tool_calls)
 
 
-def _recommends_without_the_tool(reply: AIMessage, messages: Sequence[BaseMessage]) -> bool:
-    """A model can write the recommendation as text and skip the tools. The check runs before the
-    reply reaches the conversation, so a discarded reply is never stored; a second one stands
-    whatever it says, because a reply about a case with no recommendation may share the heading."""
-    if reply.tool_calls or _RECOMMENDATION_SECTION.search(reply.text) is None:
-        return False
-    for message in reversed(messages):
-        if isinstance(message, HumanMessage):
-            return True
-        if (
-            isinstance(message, ToolMessage)
-            and message.name == PRESENT_RECOMMENDATION
-            and message.status != "error"
-        ):
-            return False
-    raise AssertionError("a turn starts with the person's message")
+def _by_code(message: BaseMessage) -> bool:
+    """Whether the message is a call code made in the model's place, recorded by code_call."""
+    return (
+        isinstance(message, AIMessage)
+        and bool(message.tool_calls)
+        and all(str(call["id"]).startswith(_CODE_CALL) for call in message.tool_calls)
+    )
+
+
+def code_call(name: str, args: dict[str, Any], result: str) -> list[AIMessage | ToolMessage]:
+    """A call code made in the model's place, with its result, as the conversation records it."""
+    call_id = f"{_CODE_CALL}{name}-{uuid.uuid4().hex}"
+    call: ToolCall = {"name": name, "args": args, "id": call_id, "type": "tool_call"}
+    return [AIMessage("", tool_calls=[call]), ToolMessage(result, name=name, tool_call_id=call_id)]
 
 
 def _model_calls_this_turn(messages: Sequence[BaseMessage]) -> int:
@@ -780,19 +773,8 @@ def _model_calls_this_turn(messages: Sequence[BaseMessage]) -> int:
     for message in reversed(messages):
         if isinstance(message, HumanMessage):
             return count
-        if isinstance(message, AIMessage):
+        if isinstance(message, AIMessage) and not _by_code(message):
             count += 1
-    raise AssertionError("a turn starts with the person's message")
-
-
-def _tried_to_present(messages: Sequence[BaseMessage]) -> bool:
-    """Whether the model's last reply of this turn called present_recommendation; a refused call
-    goes back to the model unforced, so it can make what the refusal names first."""
-    for message in reversed(messages):
-        if isinstance(message, HumanMessage):
-            return False
-        if isinstance(message, AIMessage):
-            return any(call["name"] == PRESENT_RECOMMENDATION for call in message.tool_calls)
     raise AssertionError("a turn starts with the person's message")
 
 
@@ -811,7 +793,7 @@ def _require_new_calls(reply: AIMessage, messages: Sequence[BaseMessage]) -> Non
     for message in reversed(messages):
         if isinstance(message, HumanMessage) or len(earlier) == SAME_CALLS_LIMIT:
             break
-        if isinstance(message, AIMessage):
+        if isinstance(message, AIMessage) and not _by_code(message):
             earlier.append(message)
     if len(earlier) == SAME_CALLS_LIMIT and all(
         _calls_of(reply) == _calls_of(message) for message in earlier
@@ -825,14 +807,21 @@ def people_said(messages: Sequence[BaseMessage]) -> list[str]:
     return [message.text for message in messages if isinstance(message, HumanMessage)]
 
 
-def _correction_for(reply: AIMessage, messages: Sequence[BaseMessage], check_id: str) -> str | None:
+def _correction_for(
+    reply: AIMessage, messages: Sequence[BaseMessage], check_id: str, recommended: bool
+) -> str | None:
     """What the model must redo before its reply reaches the conversation: a recommendation
-    written without its tool, a promise of results later in place of the answer, a NUL character
-    in its text, which Postgres cannot store in the reply's event, or English words the person
-    did not write themselves, which are logged as a warning so their source can be found. A
-    reply is redone once, whatever the second one says, so a turn never loops on a correction."""
-    if _recommends_without_the_tool(reply, messages):
-        return _REDO_THE_RECOMMENDATION
+    section on a check that has no recommendation, a promise of results later in place of the
+    answer, a NUL character in its text, which Postgres cannot store in the reply's event, or
+    English words the person did not write themselves, which are logged as a warning so their
+    source can be found. A reply is redone once, whatever the second one says, so a turn never
+    loops on a correction."""
+    if (
+        not recommended
+        and not reply.tool_calls
+        and _RECOMMENDATION_SECTION.search(reply.text) is not None
+    ):
+        return _NO_RECOMMENDATION
     if not reply.tool_calls and _LATER_RESULTS.search(reply.text):
         log.warning("reply rejected for promising later results in check %s", check_id)
         return _ANSWER_NOW
@@ -936,39 +925,46 @@ async def _reply_of(
 
 def build_agent_graph(
     model: BaseChatModel,
+    *,
+    follow_up_model: BaseChatModel,
     engine_tools: Sequence[BaseTool],
     tool_deps: ToolDeps,
     checkpointer: BaseCheckpointSaver[Any],
 ) -> AgentGraph:
     tools = [*engine_tools, *_check_model_tools(tool_deps)]
-    bound = model.bind_tools(tools)
-    # The card changes only through present_recommendation, so while it no longer describes the
-    # check the model's next call is that one; the model still chooses and explains the option.
-    presenting = model.bind_tools(tools, tool_choice=PRESENT_RECOMMENDATION)
+    # Only a turn's first call reads what the person wrote, which may be anything. Every other
+    # call acts on tool results and refusals already in the conversation, so it runs on
+    # follow_up_model, built to think less.
+    reading = model.bind_tools(tools)
+    following = follow_up_model.bind_tools(tools)
 
     async def call_model(state: MessagesState, config: RunnableConfig) -> MessagesState:
         configurable = config["configurable"]
+        check_tools = _tools_for(config, tool_deps)
+        # The card is code's to keep up to date, so the model's call reads the recommendation that
+        # the tools' changes call for as a result of its own.
+        recorded: list[AIMessage | ToolMessage] = []
+        if await check_tools.recommendation_due():
+            recorded = code_call(RECOMMEND, {}, await check_tools.recommend())
+        messages = [*state["messages"], *recorded]
         block = await turn_state(configurable[_USER_ID], configurable[_CHECK_ID], tool_deps)
-        prefix = [SystemMessage(SYSTEM_PROMPT), SystemMessage(block)]
-        conversation = [*prefix, *state["messages"]]
-        due = not _tried_to_present(state["messages"]) and (
-            await _tools_for(config, tool_deps).recommendation_due()
-        )
-        chosen = presenting if due else bound
+        conversation = [SystemMessage(SYSTEM_PROMPT), SystemMessage(block), *messages]
+        step = _model_calls_this_turn(messages) + 1
+        chosen = reading if step == 1 else following
         check_id = configurable[_CHECK_ID]
-        step = _model_calls_this_turn(state["messages"]) + 1
         await tool_deps.sink.publish_live(check_id, TURN_STEP, {"step": step, "tools": []})
         reply = await _reply_of(chosen, conversation, config)
-        correction = _correction_for(reply, state["messages"], check_id)
+        recommended = await tool_deps.recommendations.latest(check_id) is not None
+        correction = _correction_for(reply, messages, check_id, recommended)
         if correction is not None:
             reply = await _reply_of(
                 chosen, [*conversation, reply, HumanMessage(correction)], config
             )
-        _require_new_calls(reply, state["messages"])
+        _require_new_calls(reply, messages)
         if reply.tool_calls:
             names = list(dict.fromkeys(call["name"] for call in reply.tool_calls))
             await tool_deps.sink.publish_live(check_id, TURN_STEP, {"step": step, "tools": names})
-        return {"messages": [reply]}
+        return {"messages": [*recorded, reply]}
 
     builder = StateGraph(MessagesState)
     builder.add_node(MODEL_NODE, call_model)

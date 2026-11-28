@@ -1,3 +1,7 @@
+"""The domain models refuse values they cannot hold (a zero loan amount, a negative figure, a
+ceiling without its source, a timestamp without a time zone), derive figures from their own
+fields, and encode option figures and readings as JSON-ready text that decodes back."""
+
 import dataclasses
 from datetime import UTC, date, datetime
 from decimal import Decimal

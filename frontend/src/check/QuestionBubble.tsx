@@ -1,5 +1,12 @@
 import { type FormEvent, useState } from 'react'
-import type { Finances, Question, QuestionField, TermBasis, TermRow } from '../api/types.ts'
+import type {
+  Finances,
+  FormOffer,
+  Question,
+  QuestionField,
+  TermBasis,
+  TermRow,
+} from '../api/types.ts'
 import { exceeds, formatAmount, formatShekels, normaliseMoneyInput } from '../money.ts'
 import {
   ANSWER,
@@ -43,13 +50,15 @@ import { rejectionText } from './rejection.ts'
 /**
  * The person's message for the question and what goes with it: finances figures, or a confirmed
  * term with any ceiling typed beside it, saved before the line; or a new ceiling alone from the
- * term card, which the server saves and answers with a term card for it. The offer form's answer
- * is its line alone, with no update: the model saves the offer from the line.
+ * term card, which the server saves and answers with a term card for it; or the offer form's
+ * offer as fields, which the server saves before the turn, so the model never reads the offer
+ * back from the line.
  */
 export type Answer =
   | { line: string; update: Partial<Finances> | null }
   | { line: string; term: number; ceiling: string | null }
   | { line: string; ceiling: string }
+  | { line: string; offer: FormOffer }
 
 /**
  * The answer that confirms a term, and a new ceiling when one is given: saved by the page, so
@@ -73,7 +82,7 @@ function isFinancesField(field: QuestionField): field is keyof Finances {
 
 /**
  * A question with a field of its own or the model's own sentence: everything but the term card,
- * the terms card and the offer form.
+ * the terms card, the offer form and the scenario form.
  */
 type FieldQuestion = Exclude<Question, { kind: 'term' | 'terms' | 'offer' | 'scenario' }>
 

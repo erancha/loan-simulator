@@ -87,14 +87,16 @@ to its lender under the same id, saved only by the lender's yes, and that a smal
 each offer again at it; for a new term, that the recommendation goes; and each case in which a
 recommendation is due. The ceiling and finances tools prove a
 stated ceiling, a derived one that replaces it, a bad figure or an engine refusal that saves
-nothing, and the request to recommend again after a ceiling change. The guardrail's tests prove an
-unchecked recommendation without a ceiling and a checked one within it, an option of another amount,
-an unknown option refused with the options it can recommend, an example of another term refused
-and not named as fitting, and each answer above the ceiling: a
-refusal naming a saved option that fits, else a recommendation presented above the ceiling with its
-remedy, a longer term, the largest loan when 84 months do not fit, and none for a ceiling too low
-for any loan; for a check with offers, the longer term an open offer allows or the turn to the
-lenders, with no example search; a term that fits today and passes the ceiling only in the worst
+nothing, and the note that code recommends again after a ceiling change. The recommendation's
+tests prove the rule: the cheapest in total with the next as the alternative, an unchecked
+recommendation without a ceiling and a checked one within it, the option that fits over a cheaper
+one above the ceiling, the card's sentence for each case, the person's choice kept while it fits
+and given up once it does not, `choose_option` refusing an option of another amount or term, an
+unknown one with the options it can choose, an option above the ceiling and empty words, and each
+answer when nothing fits: a recommendation presented above the ceiling with its remedy, a longer
+term, the largest loan when 84 months do not fit, and none for a ceiling too low for any loan; for
+a check with offers, the longer term an open offer allows or the turn to the lenders, with no
+example search; a term that fits today and passes the ceiling only in the worst
 window is presented with no remedy; and a balloon is judged on its recurring payment. An
 explanation quoting a shekel amount no tool result gave is refused, naming the amounts it may
 quote, while the tools' amounts rounded to the shekel pass. The terms comparison prices the
@@ -139,11 +141,11 @@ never reaches a checkpoint (a test scans every saved blob). For ask it proves th
 after a successful ask, even beside a failed sibling call, and that each refusal returns to the
 model as an error result: two asks in one message, a question with both or neither of field and
 text, an empty question, a single choice. For the recommendation section it proves that one written
-without its tool is discarded and redone once, and that a call from an earlier turn does not count;
-a reply promising results later is rewritten once the same way. It proves that a model call made
-while an option has no recommendation covering it is bound to `present_recommendation`, that a
-refused forced call returns to the model unforced, and that each model call publishes its step and
-the tools it chose.
+on a check with no recommendation is discarded and redone once, and that it stands once the check
+has one; a reply promising results later is rewritten once the same way. It proves that code
+recommends an option no recommendation covers before the model's call, recorded as a `recommend`
+call, that such a turn still reads the person on its first call, that a person's choice moves the
+card, and that each model call publishes its step and the tools it chose.
 For the state block it proves that a figure the page saved reaches the model without a tool call,
 that the block is built fresh at each model call within a turn and is absent from the checkpoint,
 and that `ask_term` ends the turn like `ask`, refused beside a second question. For `read_offer`

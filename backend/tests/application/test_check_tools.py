@@ -1,6 +1,6 @@
 """The agent's own tools save the loan, its term, its ceiling and the finances on the check, and
-refuse a recommendation that breaks the rules, with messages the model can act on: every named
-option borrows the loan amount, and with a ceiling every one fits it. read_offer saves an offer
+recommend by the rule: the person's choice while it fits, else the cheapest in total of the
+options that fit the ceiling, with refusals the model can act on. read_offer saves an offer
 that one of the engine's readings fits, and keeps an offer that several readings fit, or that is
 quoted for less than the loan, awaiting the person's answer."""
 
@@ -29,6 +29,13 @@ from fakes import (
     readings_of,
 )
 from loan_agent.application.check_tools import (
+    _WHY_CHEAPEST,
+    _WHY_CHEAPEST_FITTING,
+    _WHY_CHOSEN,
+    _WHY_NONE_FITS,
+    _WHY_ONE_FITS,
+    _WHY_ONLY,
+    _WHY_ONLY_ABOVE,
     ASKED_RESULT,
     READING_ON_SCREEN,
     CheckTools,
@@ -85,7 +92,6 @@ BALLOON_TRACK = {
     "method": "balloon",
     "balloon_amount": "30000",
 }
-REASONING = "העלות הכוללת הנמוכה ביותר"
 
 
 def worst_case(simulation: Simulation, payment: str) -> Simulation:
@@ -510,16 +516,16 @@ async def test_a_ceiling_change_asks_to_recheck_the_recommendation(world: World)
     before = await world.tools.set_ceiling("2500")
     # The example fits with room, so the engine also prices it at the shorter term it finds.
     world.engine.simulations = [PRIME_SIMULATION]
-    await world.tools.present_recommendation("option-1", REASONING)
+    await world.tools.recommend()
 
     stated = await world.tools.set_ceiling("2000")
     partial = await world.tools.update_finances(net_fixed_income="18000")
     derived = await world.tools.update_finances(fixed_expenses="9000")
 
-    assert "present_recommendation" not in before
-    assert "present_recommendation" in stated
-    assert "present_recommendation" not in partial
-    assert "present_recommendation" in derived
+    assert "under recommend" not in before
+    assert "under recommend" in stated
+    assert "under recommend" not in partial
+    assert "under recommend" in derived
 
 
 async def test_save_offer_stores_engine_figures_and_emits_structured(world: World) -> None:
@@ -551,7 +557,7 @@ async def test_save_offer_stores_engine_figures_and_emits_structured(world: Worl
         assert figure in track
     assert "price interest_cost 10623 on 80000; rate_today 6.25%, below " in track
     assert "schedule" not in summary
-    assert "present_recommendation" in next_step
+    assert "under recommend" in next_step
 
 
 async def test_save_offer_saves_every_track_as_an_option_of_its_own(world: World) -> None:
@@ -574,7 +580,7 @@ async def test_save_offer_saves_every_track_as_an_option_of_its_own(world: World
     assert lines[1].startswith("track 2: option_id option-2, ")
     # Each track is compared with its sibling, which is saved by the same call.
     assert "against option option-2" in lines[0]
-    assert "present_recommendation" in lines[-1]
+    assert "under recommend" in lines[-1]
 
 
 async def test_save_offer_saves_none_of_its_tracks_when_one_is_refused(world: World) -> None:
@@ -688,7 +694,7 @@ async def test_a_real_offer_removes_the_examples_and_a_recommendation_naming_one
     world: World,
 ) -> None:
     await ready_for_recommendation(world)
-    await world.tools.present_recommendation("option-1", REASONING)
+    await world.tools.recommend()
     world.sink.events.clear()
     world.engine.simulations = [PRIME_SIMULATION]
 
@@ -918,26 +924,72 @@ async def two_offer_tracks(world: World) -> None:
     await world.tools.save_offer([track, {**track, "prime_spread": "1"}], "Fund")
 
 
-async def test_recommendation_refuses_a_dearer_option_while_a_cheaper_one_fits(
+async def test_recommend_prefers_the_cheapest_in_total_with_the_next_as_the_alternative(
     world: World,
 ) -> None:
     await two_offer_tracks(world)
 
-    with pytest.raises(ToolError, match="option option-2 costs 100 less in total"):
-        await world.tools.present_recommendation("option-1", REASONING)
+    result = await world.tools.recommend()
 
-    assert world.events_of(RECOMMENDATION_PRESENTED) == []
+    recommendation = world.recommendations.rows[CHECK]
+    assert (recommendation.preferred_option_id, recommendation.alternative_option_id) == (
+        "option-2",
+        "option-1",
+    )
+    assert recommendation.person_choice is None
+    (presented,) = world.events_of(RECOMMENDATION_PRESENTED)
+    assert presented["reasoning"] == _WHY_CHEAPEST
+    assert "chosen_by: the rule" in result
 
 
-async def test_a_dearer_option_is_recommended_for_what_the_person_said(world: World) -> None:
+async def test_choose_option_recommends_a_dearer_option_in_the_persons_words(
+    world: World,
+) -> None:
+    await two_offer_tracks(world)
+    await world.tools.recommend()
+
+    result = await world.tools.choose_option("option-1", "אני שונאת הפתעות")
+
+    recommendation = world.recommendations.rows[CHECK]
+    assert (recommendation.preferred_option_id, recommendation.alternative_option_id) == (
+        "option-1",
+        "option-2",
+    )
+    assert recommendation.person_choice == "אני שונאת הפתעות"
+    presented = world.events_of(RECOMMENDATION_PRESENTED)[-1]
+    assert presented["reasoning"] == _WHY_CHOSEN.format(words="אני שונאת הפתעות")
+    assert "chosen_by: the person" in result
+
+
+async def test_the_persons_choice_stands_while_it_fits_and_yields_to_the_rule_once_it_does_not(
+    world: World,
+) -> None:
+    await world.tools.set_loan(None, "24000")
+    await world.tools.set_term(48)
+    dearer = worst_case(figures_of("760", "27400"), "2850")
+    world.engine.simulations = [figures_of("751", "27035"), dearer]
+    track = {**PRIME_TRACK, "principal": "24000"}
+    await world.tools.save_offer([track, {**track, "prime_spread": "2"}], "Fund")
+    await world.tools.choose_option("option-2", "את השני")
+
+    await world.tools.set_ceiling("3000")
+    await world.tools.recommend()
+    kept = world.recommendations.rows[CHECK]
+    await world.tools.set_ceiling("2500")
+    await world.tools.recommend()
+    ruled = world.recommendations.rows[CHECK]
+
+    assert (kept.preferred_option_id, kept.person_choice) == ("option-2", "את השני")
+    assert (ruled.preferred_option_id, ruled.person_choice) == ("option-1", None)
+
+
+async def test_choose_option_refuses_empty_words(world: World) -> None:
     await two_offer_tracks(world)
 
-    await world.tools.present_recommendation(
-        "option-1", REASONING, person_preference="אני שונאת הפתעות"
-    )
+    with pytest.raises(ToolError, match="person_words is empty"):
+        await world.tools.choose_option("option-1", "  ")
 
-    (presented,) = world.events_of(RECOMMENDATION_PRESENTED)
-    assert presented["preferred"]["option_id"] == "option-1"
+    assert world.recommendations.rows == {}
 
 
 async def fitting_with_room(world: World, offered: OfferTerm, **offer: object) -> str:
@@ -950,7 +1002,7 @@ async def fitting_with_room(world: World, offered: OfferTerm, **offer: object) -
     world.engine.offer_terms = offered
     track = {**PRIME_TRACK, "principal": "24000"}
     await world.tools.save_offer([track], "Fund", **offer)
-    return await world.tools.present_recommendation("option-1", REASONING)
+    return await world.tools.recommend()
 
 
 async def test_a_fitting_recommendation_names_its_margin_under_the_ceiling(world: World) -> None:
@@ -974,7 +1026,7 @@ async def test_an_option_whose_payment_never_changes_gives_no_historical_figures
     world.engine.simulations = [replace(PRIME_SIMULATION, figures=steady)]
     await add_example(world, PRIME_TRACK)
 
-    result = await world.tools.present_recommendation("option-1", REASONING)
+    result = await world.tools.recommend()
 
     (figures,) = [line for line in result.splitlines() if line.startswith("preferred_figures: ")]
     assert "payment_changes never" in figures
@@ -995,7 +1047,7 @@ async def test_a_fitting_recommendation_names_the_margin_of_its_alternative_too(
     track = {**PRIME_TRACK, "principal": "24000"}
     await world.tools.save_offer([track, {**track, "prime_spread": "2"}], "Fund")
 
-    result = await world.tools.present_recommendation("option-1", REASONING, "option-2")
+    result = await world.tools.recommend()
 
     lines = result.splitlines()
     assert "preferred_ceiling_margin: 961 (32%)" in lines
@@ -1064,9 +1116,7 @@ async def test_an_offer_with_a_fixed_term_is_not_offered_a_shorter_one(world: Wo
 async def test_a_recommendation_gives_the_named_options_current_figures(world: World) -> None:
     await ready_for_recommendation(world)
 
-    result = await world.tools.present_recommendation(
-        "option-1", REASONING, alternative_option_id="option-2"
-    )
+    result = await world.tools.recommend()
 
     lines = result.splitlines()
     assert any(
@@ -1101,7 +1151,7 @@ async def test_one_real_offer_alone_is_evaluated_with_its_price_not_recommended(
     world.engine.simulations = [PRIME_SIMULATION]
     await world.tools.save_offer([PRIME_TRACK], lender="לאומי")
 
-    result = await world.tools.present_recommendation("option-1", REASONING)
+    result = await world.tools.recommend()
 
     lines = result.splitlines()
     assert "preferred_price: interest_cost 10623 on 80000; rate_today 6.25%, below " in "\n".join(
@@ -1111,6 +1161,8 @@ async def test_one_real_offer_alone_is_evaluated_with_its_price_not_recommended(
     for words in ("only offer", "never call it preferred or recommended", "interest_cost"):
         assert words in only
     assert "another offer" in only
+    (presented,) = world.events_of(RECOMMENDATION_PRESENTED)
+    assert presented["reasoning"] == _WHY_ONLY
 
 
 async def test_an_option_saved_before_the_engine_priced_rates_gives_only_its_interest_cost(
@@ -1120,14 +1172,14 @@ async def test_an_option_saved_before_the_engine_priced_rates_gives_only_its_int
     (prime, _) = await world.options.list(CHECK)
     await world.options.replace(replace(prime, summary=replace(prime.summary, price=None)))
 
-    result = await world.tools.present_recommendation("option-1", REASONING, "option-2")
+    result = await world.tools.recommend()
 
     assert "preferred_price: interest_cost 10623 on 80000\n" in result
 
 
 async def test_recommendation_needs_a_loan(world: World) -> None:
     with pytest.raises(ToolError, match="set_loan"):
-        await world.tools.present_recommendation("option-1", REASONING)
+        await world.tools.recommend()
 
     assert world.recommendations.rows == {}
 
@@ -1135,7 +1187,7 @@ async def test_recommendation_needs_a_loan(world: World) -> None:
 async def test_recommendation_without_a_ceiling_is_unchecked(world: World) -> None:
     await ready_for_recommendation(world)
 
-    summary = await world.tools.present_recommendation("option-1", REASONING, "option-2")
+    summary = await world.tools.recommend()
 
     recommendation = world.recommendations.rows[CHECK]
     assert (recommendation.preferred_option_id, recommendation.alternative_option_id) == (
@@ -1156,7 +1208,7 @@ async def test_recommendation_without_a_ceiling_is_unchecked(world: World) -> No
     }
     preferred = event.data["preferred"]
     assert isinstance(preferred, dict) and preferred["option_id"] == "option-1"
-    assert event.data["reasoning"] == REASONING
+    assert event.data["reasoning"] == _WHY_CHEAPEST
     assert {"checked: false", "payment_ceiling: none"} <= set(summary.splitlines())
 
 
@@ -1166,11 +1218,13 @@ async def test_recommendation_within_a_ceiling_is_checked(world: World) -> None:
     # The example fits with room, so the engine also prices it at the shorter term it finds.
     world.engine.simulations = [PRIME_SIMULATION]
 
-    await world.tools.present_recommendation("option-1", REASONING, "option-2")
+    await world.tools.recommend()
 
     recommendation = world.recommendations.rows[CHECK]
     assert recommendation.payment_ceiling == Decimal(2500)
     assert recommendation.checked
+    (presented,) = world.events_of(RECOMMENDATION_PRESENTED)
+    assert presented["reasoning"] == _WHY_CHEAPEST_FITTING
 
 
 async def test_nothing_fitting_at_the_term_presents_above_the_ceiling_and_names_a_longer_term(
@@ -1184,7 +1238,7 @@ async def test_nothing_fitting_at_the_term_presents_above_the_ceiling_and_names_
         worst_case(PRIME_SIMULATION, "1004"),
     ]
 
-    summary = await world.tools.present_recommendation("option-2", REASONING)
+    summary = await world.tools.recommend()
 
     assert "option-2" in summary and "1482.61" in summary and "1000" in summary
     assert "card marks the recommendation above the ceiling" in summary
@@ -1202,6 +1256,8 @@ async def test_nothing_fitting_at_the_term_presents_above_the_ceiling_and_names_
     )
     assert (await world.check()).term_months == 48
     assert len(await world.options.list(CHECK)) == 2
+    (presented,) = world.events_of(RECOMMENDATION_PRESENTED)
+    assert presented["reasoning"] == _WHY_NONE_FITS
 
 
 async def offer_above_the_ceiling(world: World, offered: OfferTerm, **offer: object) -> str:
@@ -1213,7 +1269,7 @@ async def offer_above_the_ceiling(world: World, offered: OfferTerm, **offer: obj
     await world.tools.save_offer([PRIME_TRACK], "Bank", **offer)
     await world.tools.set_ceiling("1000")
     world.engine.offer_terms = offered
-    return await world.tools.present_recommendation("option-1", REASONING)
+    return await world.tools.recommend()
 
 
 async def test_an_offer_above_the_ceiling_names_a_longer_term_its_lender_allows(
@@ -1253,47 +1309,47 @@ async def test_an_option_of_another_term_is_neither_recommended_nor_offered_as_f
     await world.tools.set_ceiling("1000")
     world.engine.comfortable_terms = 84
 
-    with pytest.raises(ToolError, match="option-3 is an example for another term"):
-        await world.tools.present_recommendation("option-3", REASONING)
+    with pytest.raises(ToolError, match="option-3 is not one of the check's options"):
+        await world.tools.choose_option("option-3", "את הקצרה")
     world.engine.simulations = [
         worst_case(BALLOON_SIMULATION, "932"),
         worst_case(PRIME_SIMULATION, "1004"),
     ]
-    summary = await world.tools.present_recommendation("option-2", REASONING)
+    summary = await world.tools.recommend()
 
     assert "option-3" not in summary
     assert "card marks the recommendation above the ceiling" in summary
 
 
-async def test_an_option_above_the_ceiling_names_a_saved_option_that_fits(world: World) -> None:
-    await ready_for_recommendation(world)
-    await world.tools.set_ceiling("1500")
-
-    with pytest.raises(ToolError) as refused:
-        await world.tools.present_recommendation("option-1", REASONING, "option-2")
-
-    message = str(refused.value)
-    assert "option-1" in message and "2038.63" in message
-    assert "the preferred option option-1" in message
-    assert "option-2 fits" in message
-    assert "name an option that fits as preferred_option_id" in message
-    assert "comfortable_term" not in [name for name, _ in world.engine.calls]
-
-
-async def test_an_alternative_above_the_ceiling_is_refused_by_name_and_the_preferred_stands(
+async def test_recommend_prefers_the_option_that_fits_over_a_cheaper_one_above_the_ceiling(
     world: World,
 ) -> None:
     await ready_for_recommendation(world)
     await world.tools.set_ceiling("1500")
+    # The balloon example fits with room, so the engine also prices it at the shorter term.
+    world.engine.simulations = [BALLOON_SIMULATION]
+
+    await world.tools.recommend()
+
+    recommendation = world.recommendations.rows[CHECK]
+    assert (recommendation.preferred_option_id, recommendation.alternative_option_id) == (
+        "option-2",
+        None,
+    )
+    (presented,) = world.events_of(RECOMMENDATION_PRESENTED)
+    assert presented["reasoning"] == _WHY_ONE_FITS
+
+
+async def test_choose_option_refuses_an_option_above_the_ceiling(world: World) -> None:
+    await ready_for_recommendation(world)
+    await world.tools.set_ceiling("1500")
 
     with pytest.raises(ToolError) as refused:
-        await world.tools.present_recommendation("option-2", REASONING, "option-1")
+        await world.tools.choose_option("option-1", "אני רוצה פריים")
 
     message = str(refused.value)
-    assert "the alternative option option-1" in message and "2038.63" in message
-    assert "the preferred option option-2" not in message
-    assert "with preferred_option_id option-2 and without alternative_option_id" in message
-    assert "or with an alternative that fits" not in message
+    assert "option-1" in message and "2038.63" in message
+    assert "above the payment_ceiling of 1500" in message
     assert world.recommendations.rows == {}
 
 
@@ -1303,7 +1359,7 @@ async def test_nothing_fits_even_at_84_months_names_the_largest_loan(world: Worl
     world.engine.comfortable_terms = None
     world.engine.largest_loans = Decimal(45000)
 
-    message = await world.tools.present_recommendation("option-2", REASONING)
+    message = await world.tools.recommend()
 
     assert "no term up to 84 months" in message
     assert "45000" in message and "48 months" in message
@@ -1320,7 +1376,7 @@ async def test_a_ceiling_too_low_for_any_loan_names_none(world: World) -> None:
     world.engine.comfortable_terms = None
     world.engine.largest_loans = None
 
-    message = await world.tools.present_recommendation("option-2", REASONING)
+    message = await world.tools.recommend()
 
     assert "no loan the simulator prices fits" in message
     assert "largest loan" not in message
@@ -1337,9 +1393,8 @@ async def test_expenses_above_income_give_a_zero_ceiling(world: World) -> None:
 
     check = await world.check()
     assert (check.payment_ceiling, check.ceiling_source) == (Decimal(0), "finances")
-    for option_id in ("option-1", "option-2"):
-        summary = await world.tools.present_recommendation(option_id, REASONING)
-        assert "no loan the simulator prices fits" in summary
+    summary = await world.tools.recommend()
+    assert "no loan the simulator prices fits" in summary
     # The engine's searches take a positive ceiling only.
     searched = {"comfortable_term", "largest_loan", "suggest"}
     assert searched.isdisjoint(name for name, _ in world.engine.calls)
@@ -1356,25 +1411,25 @@ async def test_a_zero_ceiling_keeps_an_open_offer_at_its_longest_term(world: Wor
     assert "offer_term" not in [name for name, _ in world.engine.calls]
 
 
-async def test_recommendation_refuses_an_option_of_another_amount(world: World) -> None:
+async def test_choose_option_refuses_an_option_of_another_amount(world: World) -> None:
     await ready_for_recommendation(world)
     await world.checks.set_loan(CHECK, LoanRequest(None, Decimal(90000)))
 
-    with pytest.raises(ToolError, match="option-2 borrows 80000.*90000"):
-        await world.tools.present_recommendation("option-2", REASONING)
+    with pytest.raises(ToolError, match="option-2 is not one of the check's options"):
+        await world.tools.choose_option("option-2", "את הבלון")
     assert world.recommendations.rows == {}
 
 
 async def test_a_new_amount_withdraws_the_recommendation_of_examples(world: World) -> None:
     await ready_for_recommendation(world)
-    await world.tools.present_recommendation("option-1", REASONING)
+    await world.tools.recommend()
     world.sink.events.clear()
 
     same = await world.tools.set_loan(None, "80000")
     changed = await world.tools.set_loan(None, "90000")
 
     assert "next_step" not in same
-    assert "call save_examples, then present_recommendation" in changed
+    assert "call save_examples in this turn" in changed
     assert world.recommendations.rows == {}
     assert await world.options.list(CHECK) == []
     assert world.events_of(OPTIONS_REMOVED) == [
@@ -1388,7 +1443,7 @@ async def save_prime_offer(world: World) -> None:
     await world.tools.set_term(48)
     world.engine.simulations = [PRIME_SIMULATION]
     await world.tools.save_offer([PRIME_TRACK], "הראל")
-    await world.tools.present_recommendation("option-1", REASONING)
+    await world.tools.recommend()
     world.sink.events.clear()
     world.engine.calls.clear()
 
@@ -1479,7 +1534,7 @@ async def test_a_recommendation_is_due_until_one_covers_the_options(world: World
     await ready_for_recommendation(world)
     assert await world.tools.recommendation_due() is True
 
-    await world.tools.present_recommendation("option-1", REASONING)
+    await world.tools.recommend()
     assert await world.tools.recommendation_due() is False
 
     world.clock.value += timedelta(minutes=1)
@@ -1490,7 +1545,7 @@ async def test_a_recommendation_is_due_until_one_covers_the_options(world: World
 
 async def test_a_recommendation_of_another_ceiling_or_amount_is_due_again(world: World) -> None:
     await ready_for_recommendation(world)
-    await world.tools.present_recommendation("option-1", REASONING)
+    await world.tools.recommend()
 
     await world.checks.set_ceiling(CHECK, Decimal(3000), "stated")
     assert await world.tools.recommendation_due() is True
@@ -1499,14 +1554,15 @@ async def test_a_recommendation_of_another_ceiling_or_amount_is_due_again(world:
     world.recommendations.rows[CHECK] = checked
     assert await world.tools.recommendation_due() is False
 
-    # A recommendation of another amount, saved before set_loan withdrew such ones.
+    # set_loan withdraws a recommendation when the amount changes, so only a row an older
+    # release saved is of another amount.
     world.recommendations.rows[CHECK] = replace(checked, loan_amount=Decimal(70000))
     assert await world.tools.recommendation_due() is True
 
 
 async def test_a_new_term_withdraws_the_recommendation(world: World) -> None:
     await ready_for_recommendation(world)
-    await world.tools.present_recommendation("option-1", REASONING)
+    await world.tools.recommend()
     world.sink.events.clear()
 
     await world.tools.set_term(48)
@@ -1530,7 +1586,7 @@ async def test_an_unknown_option_is_refused_with_the_options_it_can_recommend(
     await ready_for_recommendation(world)
 
     with pytest.raises(ToolError, match=r"no option 'awaiting-9'.*are: option-1 \(.*; option-2"):
-        await world.tools.present_recommendation("awaiting-9", REASONING)
+        await world.tools.choose_option("awaiting-9", "את השלישית")
 
 
 async def test_balloon_option_judged_on_recurring_payment(world: World) -> None:
@@ -1541,34 +1597,9 @@ async def test_balloon_option_judged_on_recurring_payment(world: World) -> None:
     # The example fits with room, so the engine also prices it at the shorter term it finds.
     world.engine.simulations = [BALLOON_SIMULATION]
 
-    await world.tools.present_recommendation("option-2", REASONING)
+    await world.tools.recommend()
 
     assert world.recommendations.rows[CHECK].preferred_option_id == "option-2"
-
-
-async def test_recommendation_refused_for_unknown_option(world: World) -> None:
-    await ready_for_recommendation(world)
-
-    with pytest.raises(ToolError, match="alternative_option_id.*option-9"):
-        await world.tools.present_recommendation("option-2", REASONING, "option-9")
-
-
-async def test_recommendation_refused_when_reasoning_names_an_option_id(world: World) -> None:
-    await ready_for_recommendation(world)
-
-    with pytest.raises(ToolError, match="names an option by its id"):
-        await world.tools.present_recommendation("option-2", "ממליץ על option-2 כי הוא זול")
-
-    assert world.recommendations.rows == {}
-
-
-async def test_recommendation_reasoning_with_an_english_word_is_refused(world: World) -> None:
-    await ready_for_recommendation(world)
-
-    with pytest.raises(ToolError, match="reasoning has the English word 'prime'"):
-        await world.tools.present_recommendation("option-2", "מסלול prime זול יותר")
-
-    assert world.recommendations.rows == {}
 
 
 async def test_ask_emits_the_question_and_ends_with_the_fixed_result(world: World) -> None:
@@ -1886,7 +1917,7 @@ async def test_leumis_offer_is_identified_as_prime_plus_6(world: World) -> None:
     assert identified["monthly_payment"] == "972"  # type: ignore[index]
     (asked,) = offer_readings_calls(world)
     assert asked["prime_total"] is True  # type: ignore[index]
-    assert "present_recommendation" in result
+    assert "under recommend" in result
     assert await world.awaiting.list(CHECK) == []
 
 
@@ -1980,7 +2011,7 @@ async def test_the_lender_lending_the_loan_amount_saves_the_offer_at_it(world: W
             "reading": offer.readings[0].to_json(),
         }
     ]
-    assert "present_recommendation" in result
+    assert "under recommend" in result
 
 
 async def test_the_lender_not_lending_the_loan_amount_drops_the_offer(world: World) -> None:
@@ -2093,7 +2124,7 @@ async def test_an_awaiting_offer_removes_the_examples(world: World) -> None:
     of_the_check = {"principal": "45000", "term_months": 60}
     await add_example(world, {**PRIME_TRACK, **of_the_check})
     await add_example(world, {**BALLOON_TRACK, **of_the_check})
-    await world.tools.present_recommendation("option-1", REASONING)
+    await world.tools.recommend()
 
     await world.tools.read_offer("אוויס", "45000", 60, None, "969", [], None)
 
@@ -2267,8 +2298,8 @@ async def test_confirming_an_unknown_offer_or_kind_is_refused(world: World) -> N
     assert await world.options.list(CHECK) == []
 
 
-# The terms card and the ceiling's worst period, over the case a person tried by hand: 100,000 for
-# a car under a stated ceiling of 2,000, with one offer at prime + 1% for up to 84 months.
+# The terms card, and a term above the ceiling only in its worst period, on one case: 100,000
+# for a car under a stated ceiling of 2,000, with one offer at prime + 1% for up to 84 months.
 
 CAR_TRACK = {**PRIME_TRACK, "principal": "100000", "term_months": 72, "prime_spread": "1"}
 
@@ -2301,7 +2332,7 @@ async def car_offer_recommended(world: World, **offer: object) -> None:
     world.engine.simulations = [AT_72]
     world.engine.offer_terms = OfferTerm(term_months=72, comfortable=True)
     await world.tools.save_offer([CAR_TRACK], "Bank", **offer)
-    await world.tools.present_recommendation("option-1", REASONING)
+    await world.tools.recommend()
     world.sink.events.clear()
     world.engine.calls.clear()
 
@@ -2425,7 +2456,7 @@ async def test_a_term_above_the_ceiling_only_in_the_worst_period_is_not_pushed_b
     world.engine.simulations = [AT_60]
     await world.tools.save_offer([{**CAR_TRACK, "term_months": 60}], "Bank", max_term_months=84)
 
-    summary = await world.tools.present_recommendation("option-1", REASONING)
+    summary = await world.tools.recommend()
 
     (next_step,) = [line for line in summary.splitlines() if line.startswith("next_step")]
     assert "2100.93, above the payment_ceiling of 2000" in next_step
@@ -2433,30 +2464,5 @@ async def test_a_term_above_the_ceiling_only_in_the_worst_period_is_not_pushed_b
     assert "Do not suggest another term" in next_step
     assert "offer_term" not in [name for name, _ in world.engine.calls]
     assert world.recommendations.rows[CHECK].preferred_option_id == "option-1"
-
-
-async def test_reasoning_quoting_an_amount_no_tool_gave_is_refused(world: World) -> None:
-    await world.tools.set_loan("רכב", "100000")
-    await world.tools.set_term(60)
-    await world.tools.set_ceiling("2000")
-    world.engine.simulations = [AT_60]
-    await world.tools.save_offer([{**CAR_TRACK, "term_months": 60}], "Bank", max_term_months=84)
-    made_up = "בתקופה ההיסטורית הגרועה ההחזר היה מגיע עד 2,336 ₪, מעל התקרה של 2,000 ₪."
-
-    with pytest.raises(ToolError, match="quotes 2,336 ₪") as refused:
-        await world.tools.present_recommendation("option-1", made_up)
-
-    assert "2101" in str(refused.value)
-    assert CHECK not in world.recommendations.rows
-
-
-async def test_reasoning_quoting_the_tools_amounts_rounded_is_accepted(world: World) -> None:
-    await car_offer_recommended(world, max_term_months=84)
-    reasoning = (
-        "בתקופה ההיסטורית הגרועה ההחזר היה מגיע עד 1,799 ₪, מתחת לתקרה של 2,000 ₪; ריבית של "
-        'כ-18,477 ₪ ומרווח של 201 ש"ח.'
-    )
-
-    await world.tools.present_recommendation("option-1", reasoning)
-
-    assert world.recommendations.rows[CHECK].reasoning == reasoning
+    (presented,) = world.events_of(RECOMMENDATION_PRESENTED)
+    assert presented["reasoning"] == f"{_WHY_ONLY} {_WHY_ONLY_ABOVE}"

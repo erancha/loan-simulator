@@ -7,6 +7,10 @@ import { Shell } from './shell/Shell.tsx'
 document.documentElement.lang = 'he'
 document.documentElement.dir = 'rtl'
 
+/**
+ * The page's root: the landing page while the session is being checked, failed or signed out,
+ * and the shell once a person is signed in.
+ */
 export function App() {
   const { session, signOut, refresh } = useSession()
   switch (session.state) {

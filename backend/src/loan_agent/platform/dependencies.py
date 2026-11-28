@@ -50,6 +50,8 @@ class Infrastructure:
     engine_tools: list[BaseTool]
     """The engine's tools as the model calls them."""
     model: BaseChatModel
+    follow_up_model: BaseChatModel
+    """Answers every call after a turn's first."""
     retry_model: RetryModel | None
     """None without LLM_RETRY_MODEL."""
     checkpointer: BaseCheckpointSaver[Any]

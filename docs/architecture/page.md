@@ -272,11 +272,13 @@ for it.
 The offer form (`check/OfferForm.tsx`), titled "פרטי ההצעה", opens with a line inviting the person
 to describe their offers there or in the chat, for the simulator to compare. It asks for the lender,
 up to four tracks, each a margin over or under prime or a fixed rate, linked to the CPI or not, and
-the longest term the lender allows; המשך sends the offer as one worded message, which the model
-saves; the lender's name follows its own label ("הגוף המלווה: מקס"), and the agent refuses "גוף
-מלווה" and its like as a name. A line under the boxes says the offer may be described in words in
-the chat box instead, and the form has no skip. Its "אין לי עדיין הצעה" button answers the form with
-that line, which `POST /api/checks/<id>/unanswered` stores with no reply. The line closes the form,
+the longest term the lender allows; המשך sends the offer's fields beside the worded line the chat
+shows (`offerLine` of `check/copy.ts`), and the server saves the fields with no model call, so the
+model reads the line only as part of the conversation. In the line, the lender's name follows its
+own label ("הגוף המלווה: מקס"), and the agent refuses "גוף מלווה" and its like as a name. A line
+under the boxes says the offer may be described in words in the chat box instead, and the form
+has no skip. Its "אין לי עדיין הצעה" button answers the form with that line, which
+`POST /api/checks/<id>/unanswered` stores with no reply. The line closes the form,
 the chips return, and an arc sweeps the edges of the "דוגמאות" and "הצעה מגוף מלווה" chips for 4
 seconds, so the person decides which way to go. The button shows only while "דוגמאות" is offered.
 

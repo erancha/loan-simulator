@@ -1,3 +1,6 @@
+"""schedule() amortizes one track month by month: each repayment method, a changing rate, CPI
+linkage, fees, and a final balance of exactly zero."""
+
 from decimal import ROUND_HALF_UP, Decimal
 from itertools import pairwise
 

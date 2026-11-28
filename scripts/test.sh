@@ -7,6 +7,7 @@
 #   ./scripts/test.sh engine         # the MCP server in mcp-server/  (alias: en)
 #   ./scripts/test.sh backend        # the loan agent in backend/  (alias: be)
 #   ./scripts/test.sh frontend       # the page in frontend/  (alias: fe)
+#   -h, --help                       # show this help
 #
 # Targets combine, so several may be given.
 #

@@ -1,3 +1,6 @@
+"""Settings come from the ENGINE_ environment variables, require every key without a default and
+refuse malformed values."""
+
 from pathlib import Path
 
 import pytest

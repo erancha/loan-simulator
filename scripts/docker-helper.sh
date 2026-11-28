@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# Docker Compose helper for the stack: teardown, logs, status. Bringing it up is deploy.sh's job.
+# Operate the Compose stack: stop it, follow its logs, show its status, sum its model spend, or
+# delete its EC2 stack. Bringing it up is deploy.sh's job.
 # With --ec2 as the first argument it acts on the stack's EC2 instance instead of this machine;
 # --ec2 --preview acts on the preview beside it (deploy.sh --ec2 --preview).
 #
@@ -28,6 +29,7 @@
 #       one confirmation: its containers, database, market data and images on the instance, then
 #       its stack (port rule and CloudFront distribution); production is not touched.
 #   -h, --help
+#       Show this help.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh

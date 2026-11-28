@@ -64,6 +64,9 @@ CLOCK_SKEW = timedelta(seconds=60)
 
 
 class GoogleTokenVerifier:
+    """The TokenVerifier port: decodes an ID token with the key its KeySource gives, and raises
+    InvalidTokenError naming the check that failed."""
+
     def __init__(self, client_id: str, issuer: str, keys: KeySource) -> None:
         self._client_id = client_id
         self._issuers = [issuer, "accounts.google.com"] if issuer == GOOGLE_ISSUER else [issuer]

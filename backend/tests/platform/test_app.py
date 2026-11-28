@@ -33,6 +33,7 @@ def production_settings(public_key: Path, database_url: str) -> Settings:
         database_url=database_url,
         llm_model="anthropic:claude-test",
         llm_api_key="sk-test",
+        llm_follow_up_effort=None,
         google_client_id=CLIENT_ID,
         engine_url=ENGINE_URL,
         engine_bearer_token=ENGINE_TOKEN,
@@ -64,12 +65,15 @@ class StubEngine(FakeLoanEngine):
 @pytest.fixture
 def stubbed(monkeypatch: pytest.MonkeyPatch) -> ScriptedChatModel:
     """The production wiring with the engine and the chat model replaced by the returned
-    ScriptedChatModel and a StubEngine; on teardown, checks both were built from the settings."""
+    ScriptedChatModel and a StubEngine; on teardown, checks the engine and both chat models were
+    built from the settings."""
     model = ScriptedChatModel(replies=[])
-    built: list[tuple[str, str, str]] = []
+    built: list[tuple[str, str, str, str | None]] = []
 
-    def build_chat_model(spec: str, api_key: str, kind: str) -> ScriptedChatModel:
-        built.append((spec, api_key, kind))
+    def build_chat_model(
+        spec: str, api_key: str, kind: str, reasoning_effort: str | None = None
+    ) -> ScriptedChatModel:
+        built.append((spec, api_key, kind, reasoning_effort))
         return model
 
     StubEngine.opened = []
@@ -77,7 +81,10 @@ def stubbed(monkeypatch: pytest.MonkeyPatch) -> ScriptedChatModel:
     monkeypatch.setattr(app_module, "build_chat_model", build_chat_model)
     yield model
     assert StubEngine.opened == [(ENGINE_URL, ENGINE_TOKEN)]
-    assert built == [("anthropic:claude-test", "sk-test", "turn")]
+    assert built == [
+        ("anthropic:claude-test", "sk-test", "turn", None),
+        ("anthropic:claude-test", "sk-test", "follow-up", None),
+    ]
 
 
 async def seed_interrupted_turn(database_url: str, check_id: str) -> None:

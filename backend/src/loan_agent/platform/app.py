@@ -4,9 +4,10 @@ Core building blocks:
 - create_app: routes (sign-in, checks, events), error mapping and probes; its lifespan
   opens the infrastructure, builds the event sink, the agent graph and the CheckRunner, and ends
   the turns a stopped process left running before the app serves
-- production_infrastructure: the engine adapter (which must list its tools), the chat model, the
-  Postgres checkpointer, the database engine and the Postgres repositories, closed in reverse
-  order on shutdown
+- production_infrastructure: the engine adapter (which must list its tools), the chat models (of
+  a turn's first call, of its later calls, and of the retry phrase when one is set), the Postgres
+  checkpointer, the database engine and the Postgres repositories, closed in reverse order on
+  shutdown
 - /health answers while the process runs; /ready also needs the database to answer SELECT 1
 - signal_shutdown: tells open event streams to end when the server is asked to stop
 
@@ -95,6 +96,9 @@ async def production_infrastructure(settings: Settings) -> AsyncIterator[Infrast
         ) from error
     api_key = settings.llm_api_key.get_secret_value()
     model = build_chat_model(settings.llm_model, api_key, "turn")
+    follow_up_model = build_chat_model(
+        settings.llm_model, api_key, "follow-up", settings.llm_follow_up_effort
+    )
     retry_model = (
         None
         if settings.llm_retry_model is None
@@ -123,6 +127,7 @@ async def production_infrastructure(settings: Settings) -> AsyncIterator[Infrast
             engine=engine,
             engine_tools=engine_tools,
             model=model,
+            follow_up_model=follow_up_model,
             retry_model=retry_model,
             checkpointer=checkpointer,
             ready=ready,
@@ -203,7 +208,11 @@ def create_app(
                 new_id=lambda: str(uuid.uuid4()),
             )
             graph = build_agent_graph(
-                opened.model, opened.engine_tools, tool_deps, opened.checkpointer
+                opened.model,
+                follow_up_model=opened.follow_up_model,
+                engine_tools=opened.engine_tools,
+                tool_deps=tool_deps,
+                checkpointer=opened.checkpointer,
             )
             retry = (
                 None
@@ -211,9 +220,10 @@ def create_app(
                 else RetryRoute(
                     build_agent_graph(
                         opened.retry_model.chat,
-                        opened.engine_tools,
-                        tool_deps,
-                        opened.checkpointer,
+                        follow_up_model=opened.retry_model.chat,
+                        engine_tools=opened.engine_tools,
+                        tool_deps=tool_deps,
+                        checkpointer=opened.checkpointer,
                     ),
                     opened.retry_model.name,
                     settings.llm_retry_emails,

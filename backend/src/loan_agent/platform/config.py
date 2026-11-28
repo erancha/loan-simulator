@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     llm_model: str
     """provider:model, for a provider in SUPPORTED_PROVIDERS."""
     llm_api_key: SecretStr
+    llm_follow_up_effort: Literal["minimal", "low", "medium", "high"] | None = None
+    """How long an OpenAI reasoning model thinks on the calls that act on tool results rather than
+    read the person's message, every call after a turn's first; the provider's default when
+    unset. A turn's first call, which reads what the person wrote, keeps the default."""
     llm_retry_model: str | None = None
     """provider:model of the model the retry phrase switches a turn to, of llm_model's provider,
     since it calls with the same llm_api_key."""

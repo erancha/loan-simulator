@@ -306,7 +306,7 @@ async def test_recommendation_replaced_per_check(repos: Repos) -> None:
     await repos.checks.add(make_check("c-rec"))
     assert await repos.recommendations.latest("c-rec") is None
 
-    def rec(preferred: str, reasoning: str) -> Recommendation:
+    def rec(preferred: str, reasoning: str, person_choice: str | None) -> Recommendation:
         return Recommendation(
             "c-rec",
             preferred,
@@ -315,10 +315,11 @@ async def test_recommendation_replaced_per_check(repos: Repos) -> None:
             Decimal("90000.00"),
             Decimal("2000.00"),
             T0,
+            person_choice,
         )
 
-    await repos.recommendations.save(rec("o-1", "first"))
-    second = rec("o-2", "second")
+    await repos.recommendations.save(rec("o-1", "first", None))
+    second = rec("o-2", "second", "אני רוצה את הקבוע")
     await repos.recommendations.save(second)
     assert await repos.recommendations.latest("c-rec") == second
 

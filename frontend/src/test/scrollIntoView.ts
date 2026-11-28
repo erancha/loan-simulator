@@ -1,6 +1,6 @@
 import { vi } from 'vitest'
 
-// The property as the test environment defines it: absent in jsdom, which has no layout.
+// The property as the test environment defines it: the no-op of setup.ts, as jsdom has none.
 const ORIGINAL = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollIntoView')
 
 /** Stands in a mock for scrollIntoView on every element; restoreScrollIntoView undoes it. */

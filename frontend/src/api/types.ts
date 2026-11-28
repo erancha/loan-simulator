@@ -298,6 +298,13 @@ export interface OfferTrackDraft {
   cpi_linked: boolean
 }
 
+/** An offer the person filled in on the offer form, every rate given. */
+export interface FormOffer {
+  lender: string
+  tracks: (OfferTrackDraft & { rate: string })[]
+  max_term_months: number
+}
+
 /** Hands the source check's conversation over to its copy. */
 export interface CheckCloned {
   clone_id: string

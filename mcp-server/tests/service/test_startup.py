@@ -1,3 +1,6 @@
+"""run() refreshes market data once before serving; a refresh that fails, at startup or on a later
+day, ends the run with the error."""
+
 import asyncio
 from datetime import timedelta
 

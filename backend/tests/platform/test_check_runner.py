@@ -1,6 +1,6 @@
 """The runner runs one turn per check at a time within the person's message cap, streams the
 reply's text live, stores the complete reply, and reports a failed turn without losing the check.
-It answers the opening card, a confirmed term with no option and a skipped offer form without
+It answers the opening card, a confirmed term with no option and a skipped question without
 calling the model, and saves a confirmed reading or an amount answer before any message."""
 
 import asyncio
@@ -37,6 +37,7 @@ from fakes import (
 )
 from loan_agent.adapters.memory_bus import InMemoryEventBus
 from loan_agent.application.agent_graph import (
+    RECOMMEND,
     SAME_CALLS_LIMIT,
     TURN_STEP_LIMIT,
     build_agent_graph,
@@ -129,6 +130,7 @@ def runner(
 
     graph = build_agent_graph(
         model,
+        follow_up_model=model,
         engine_tools=[] if engine_tools is None else engine_tools,
         tool_deps=world.deps,
         checkpointer=checkpointer,
@@ -139,6 +141,7 @@ def runner(
         else RetryRoute(
             build_agent_graph(
                 retry_model,
+                follow_up_model=retry_model,
                 engine_tools=[] if engine_tools is None else engine_tools,
                 tool_deps=world.deps,
                 checkpointer=checkpointer,
@@ -688,7 +691,11 @@ async def test_saved_sibling_of_a_failed_call_is_reported_as_possibly_done(world
     await checks.send(PERSON, check.id, "ננסה שוב")
     await checks.drain()
 
-    answers = [message for message in model.received[1] if isinstance(message, ToolMessage)]
+    answers = [
+        message
+        for message in model.received[1]
+        if isinstance(message, ToolMessage) and message.name != RECOMMEND
+    ]
     assert {(answer.tool_call_id, answer.content) for answer in answers} == {
         ("call-save", TOOL_CALL_OUTCOME_UNKNOWN),
         ("call-size", TOOL_CALL_OUTCOME_UNKNOWN),
@@ -1273,12 +1280,6 @@ async def open_offer_under_the_ceiling(world: World, checks: CheckRunner) -> Che
     return check
 
 
-def recommends_option_1() -> AIMessage:
-    args = {"preferred_option_id": "option-1", "reasoning": "הזולה ביותר"}
-    call = {"name": "present_recommendation", "args": args, "id": "call-rec", "type": "tool_call"}
-    return AIMessage(content="", tool_calls=[call])
-
-
 def term_cards(events: list[tuple[str, dict[str, Any]]]) -> list[dict[str, Any]]:
     return [
         data["question"]
@@ -1290,7 +1291,7 @@ def term_cards(events: list[tuple[str, dict[str, Any]]]) -> list[dict[str, Any]]
 async def test_a_recommendation_with_room_under_the_ceiling_ends_with_the_shorter_term_card(
     world: World,
 ) -> None:
-    model = ScriptedChatModel(replies=[recommends_option_1(), AIMessage(REPLY), AIMessage(REPLY)])
+    model = ScriptedChatModel(replies=[AIMessage(REPLY), AIMessage(REPLY)])
     checks = runner(world, model)
     check = await open_offer_under_the_ceiling(world, checks)
 
@@ -1309,14 +1310,14 @@ async def test_a_recommendation_with_room_under_the_ceiling_ends_with_the_shorte
 
 
 async def test_a_term_a_card_already_offered_is_not_offered_again(world: World) -> None:
-    model = ScriptedChatModel(
-        replies=[recommends_option_1(), AIMessage(REPLY), recommends_option_1(), AIMessage(REPLY)]
-    )
+    model = ScriptedChatModel(replies=[AIMessage(REPLY), AIMessage(REPLY)])
     checks = runner(world, model)
     check = await open_offer_under_the_ceiling(world, checks)
     await checks.send(PERSON, check.id, "מה כדאי?")
     await checks.drain()
     world.engine.simulations = [PRIME_SIMULATION] * 2
+    # Withdrawn, so the next turn recommends again and the card's term comes up again.
+    await world.deps.recommendations.remove(check.id)
 
     await checks.send(PERSON, check.id, "נשאר עם 48 חודשים")
     await checks.drain()
@@ -1327,7 +1328,7 @@ async def test_a_term_a_card_already_offered_is_not_offered_again(world: World) 
 
 
 def read_avis_offer() -> AIMessage:
-    """The model's call reading Avis's 969 a month, which has no number and no type."""
+    """The model's call reading Avis's 969 a month, which states no rate and no type."""
     args = {"lender": "אוויס", "amount": "45000", "term_months": 60, "monthly_payment": "969"}
     return AIMessage(
         content="",
@@ -1472,6 +1473,63 @@ async def test_an_opening_on_a_check_that_has_a_loan_is_refused(world: World) ->
 
     assert (await world.checks.get(PERSON.id, check.id)).loan == LOAN
     assert await stored(world, check.id) == []
+
+
+OFFER_LINE = "קיבלתי הצעה. הגוף המלווה: בנק. (1) פריים פלוס 1.5%, לא צמוד למדד."
+FORM_TRACK = {"rate_kind": "prime", "rate": "1.5", "cpi_linked": False}
+
+
+async def test_an_offer_from_the_form_is_saved_before_the_turn_and_never_read_by_the_model(
+    world: World,
+) -> None:
+    model = ScriptedChatModel(replies=[AIMessage(REPLY)])
+    checks = runner(world, model)
+    check = await checks.create(PERSON)
+    tools = CheckTools(PERSON.id, check.id, world.deps)
+    await tools.set_loan(None, "80000")
+    await tools.set_term(48)
+    world.engine.simulations = [PRIME_SIMULATION] * 6
+
+    await checks.send_offer(PERSON, check.id, OFFER_LINE, "בנק", [FORM_TRACK], 84)
+    await checks.drain()
+
+    (option,) = await world.options.list(check.id)
+    assert (option.loan, option.lender, option.max_term_months) == (
+        {"tracks": [PRIME_TRACK]},
+        "בנק",
+        84,
+    )
+    types = [type for type, _ in await stored(world, check.id)]
+    assert types.index("option.saved") < types.index("message.user")
+    assert model.tool_choices == [None]
+    person, saving, saved, recommending, recommended = model.received[0][-5:]
+    assert isinstance(person, HumanMessage) and person.content == OFFER_LINE
+    assert isinstance(saving, AIMessage) and isinstance(saved, ToolMessage)
+    (call,) = saving.tool_calls
+    assert (call["name"], call["args"]["tracks"], call["args"]["lender"]) == (
+        "save_offer",
+        [PRIME_TRACK],
+        "בנק",
+    )
+    assert saved.tool_call_id == call["id"]
+    assert "track 1" in str(saved.content)
+    assert [call["name"] for call in recommending.tool_calls] == [RECOMMEND]
+    assert "preferred_option_id: option-1" in str(recommended.content)
+
+
+async def test_an_offer_from_the_form_before_a_term_is_refused_and_records_nothing(
+    world: World,
+) -> None:
+    checks = runner(world, ScriptedChatModel(replies=[]))
+    check = await checks.create(PERSON)
+    await CheckTools(PERSON.id, check.id, world.deps).set_loan(None, "80000")
+    before = await stored(world, check.id)
+
+    with pytest.raises(ToolError, match="term"):
+        await checks.send_offer(PERSON, check.id, OFFER_LINE, "בנק", [FORM_TRACK], 84)
+
+    assert await world.options.list(check.id) == []
+    assert await stored(world, check.id) == before
 
 
 TERM_CONFIRMED = "אישור: 60 חודשים"

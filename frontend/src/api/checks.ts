@@ -1,5 +1,10 @@
+/**
+ * The agent API's routes for checks, one function per route: the checks list, a check's lifecycle
+ * (create, clone, archive, restore, delete), the sends of the person's messages, and the saves of a
+ * term, finances and an awaiting offer's answer.
+ */
 import { apiDelete, apiGet, apiPost, apiPut } from './client.ts'
-import type { CheckSummary, CheckView, Finances, ReadingKind } from './types.ts'
+import type { CheckSummary, CheckView, Finances, FormOffer, ReadingKind } from './types.ts'
 
 export function listChecks(): Promise<CheckSummary[]> {
   return apiGet('/api/checks')
@@ -34,6 +39,14 @@ export function getCheck(id: string): Promise<CheckView> {
 /** The server accepts the message with an empty 202; the answer arrives on the event stream. */
 export function sendMessage(id: string, text: string): Promise<void> {
   return apiPost(`/api/checks/${id}/messages`, { text })
+}
+
+/**
+ * An offer from the offer form, as its fields beside the line the chat shows: the server saves it
+ * before the turn, so the model never reads it back from the line.
+ */
+export function sendOffer(id: string, line: string, offer: FormOffer): Promise<void> {
+  return apiPost(`/api/checks/${id}/messages`, { offer: { line, ...offer } })
 }
 
 /** A ceiling typed on the term card: the server saves it and shows a term card for it. */

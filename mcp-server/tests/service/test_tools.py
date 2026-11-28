@@ -1,3 +1,6 @@
+"""The tools and the rates resources, called through an MCP client connected to the server in
+process: structured results with money in agorot, and tool errors that name the fault."""
+
 import json
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any

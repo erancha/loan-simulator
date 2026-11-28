@@ -1,3 +1,7 @@
+"""Alembic environment: runs the revisions against the database DATABASE_URL names, with the
+ORM tables as the target metadata. An online run then creates the LangGraph checkpointer's
+tables, or brings them to the installed library's version, which no revision does."""
+
 import os
 
 from alembic import context

@@ -1,3 +1,6 @@
+"""The typical tracks are priced from the published average rate; the term and loan searches keep
+payments within a ceiling or under a limit; an unlinked rate is set against the average."""
+
 import dataclasses
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal

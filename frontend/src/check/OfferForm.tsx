@@ -1,5 +1,5 @@
 import { type FormEvent, useState } from 'react'
-import type { OfferTrackDraft, Question } from '../api/types.ts'
+import type { FormOffer, OfferTrackDraft, Question } from '../api/types.ts'
 import {
   CONTINUE,
   OFFER_ADD_TRACK,
@@ -56,6 +56,15 @@ function rowOf(track: OfferTrackDraft): Omit<Row, 'key'> {
   return rate.startsWith('-')
     ? { kind: 'prime_minus', rate: rate.slice(1), linked: false }
     : { kind: 'prime_plus', rate, linked: false }
+}
+
+/** A row as the server takes a track: a prime minus row is a negative margin over prime. */
+function trackOf(track: OfferTrack): FormOffer['tracks'][number] {
+  if (track.kind === 'fixed') {
+    return { rate_kind: 'fixed', rate: track.rate, cpi_linked: track.linked }
+  }
+  const rate = track.kind === 'prime_minus' ? `-${track.rate}` : track.rate
+  return { rate_kind: 'prime', rate, cpi_linked: false }
 }
 
 /**
@@ -123,10 +132,10 @@ interface Props {
  * A lender's offer as a form: who the lender is, one row per track offered (its kind, its
  * percentage and, for fixed interest, whether it is linked to the index), and the longest period.
  * The boxes start with what the person already said. Sending marks every box that is empty or out
- * of range and sends nothing; a valid form goes as one worded message, which the model saves the
- * offer from. A line says an offer may be described in words in the chat box instead; a person
- * with no offer yet has a button that answers the form with that choice and points them to the
- * chat's examples and offer chips.
+ * of range and sends nothing; a valid form goes as one worded message beside the offer's fields,
+ * which the server saves the offer from. A line says an offer may be described in words in the
+ * chat box instead; a person with no offer yet has a button that answers the form with that
+ * choice and points them to the chat's examples and offer chips.
  */
 export function OfferForm({ entry, question, live, onAnswer, onNoOffer }: Props) {
   const [lender, setLender] = useState(question.lender ?? '')
@@ -178,7 +187,10 @@ export function OfferForm({ entry, question, live, onAnswer, onNoOffer }: Props)
     setRejection(null)
     setBusy(true)
     try {
-      await onAnswer({ line: offerLine(named, tracks, period), update: null })
+      await onAnswer({
+        line: offerLine(named, tracks, period),
+        offer: { lender: named, tracks: tracks.map(trackOf), max_term_months: period },
+      })
     } catch (caught) {
       setRejection(rejectionText(caught))
     } finally {

@@ -1,3 +1,6 @@
+"""The input models refuse a track, loan, profile or scenario outside the limits the engine prices,
+with an error that names the field."""
+
 from decimal import Decimal
 
 import pytest

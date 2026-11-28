@@ -1,3 +1,6 @@
+"""The checkpoint serializer restores LangChain messages, decimals and the domain types listed in
+CHECKPOINTED_TYPES, and no other class; libpq_dsn drops the driver suffix of the database URL."""
+
 from decimal import Decimal
 
 import pytest

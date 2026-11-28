@@ -179,10 +179,10 @@ function MessageStatusLine({ status }: { status: MessageStatus }) {
 /**
  * The conversation of a check: its bubbles, question bubbles and the cards and replies of the
  * offers the person described, each with the time it was said, and the chips, the message input
- * and the person's message status under it, which an archived check does not have. Under the reply that presented the check's
- * recommendation a link leads to the recommendation's pane. A new check shows its opening card
- * alone until the card is sent. A request of the checks list scrolls an awaiting offer's card
- * into view and holds it there until the person scrolls or sends.
+ * and the person's message status under it, which an archived check does not have. Under the
+ * reply that presented the check's recommendation a link leads to the recommendation's pane. A
+ * new check shows its opening card alone until the card is sent. A request of the checks list
+ * scrolls an awaiting offer's card into view and holds it there until the person scrolls or sends.
  */
 export function Chat({
   messages: entries,

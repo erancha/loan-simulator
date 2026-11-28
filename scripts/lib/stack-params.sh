@@ -92,6 +92,13 @@ export POSTGRES_DB="loan"
 # The length of that rolling window, in hours.
 # export AGENT_TURN_WINDOW_HOURS="24"
 
+# ── Model ────────────────────────────────────────────────────────────────────────
+# How long an OpenAI reasoning model thinks (minimal, low, medium or high) on the model calls that
+# act on tool results rather than read the person's message, every call after a turn's first;
+# blank keeps the provider's default. A turn's first call, which reads what the person wrote, keeps
+# the default.
+export LLM_FOLLOW_UP_EFFORT="minimal"
+
 # ── Sign-in cookie ───────────────────────────────────────────────────────────────
 # True where people reach the agent only over HTTPS that ends before it, so the sign-in cookie is
 # marked Secure; docker-compose.ec2.yml sets it for the EC2 instance behind CloudFront.

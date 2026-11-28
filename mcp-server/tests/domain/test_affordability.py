@@ -1,3 +1,6 @@
+"""The payment ceiling is the lower of the income-share cap and the disposable-income cap, never
+below zero, and its reasons name the cap that set it."""
+
 from decimal import Decimal
 
 from loan_engine.domain.affordability import assess_affordability

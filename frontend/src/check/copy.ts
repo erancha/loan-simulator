@@ -374,7 +374,8 @@ export function skipLine(label: string): string {
   return `דילוג על: ${label}`
 }
 
-/** The income and expenses labels and hints, shared by the question bubble and the data panel. */
+/** The income and expenses labels and hints, shared by the question bubble and the finances
+ * panel. */
 export const INCOME_LABEL = 'הכנסה קבועה'
 export const INCOME_HINT =
   'המשכורת שנכנסת לחשבון כל חודש, אחרי מסים וניכויים, ועוד ההכנסה המשתנה שנכנסת גם בחודש חלש.'
@@ -534,8 +535,8 @@ export function termsCeilingNote(ceiling: string): string {
     ' אפשר לבחור גם מספר חודשים כזה.'
 }
 
-/** The question a bubble shows: a field's question, the term card, the terms card, the clone
- * offer, or the model's own sentence. */
+/** The question a bubble shows: a field's question, the term card's line, the title of the terms
+ * card, the offer form or a scenario form, the clone offer, or the model's own sentence. */
 export function questionText(question: Question): string {
   if (question.kind === 'term') {
     return termLine(question.term_months, question.first_payment, question.basis)
@@ -623,11 +624,11 @@ export interface OfferTrack {
 }
 
 /**
- * The message the offer form sends: a complete offer in the words the model reads typed offers
- * in. The lender's name follows its own label, so the model never takes "גוף מלווה" for it.
- * Every track says whether it is linked, so the model has nothing left to ask, and names its
- * kind by the form's own label: a margin under prime written with a minus sign would read as a
- * dash.
+ * The line the chat shows for the offer form's offer, sent beside the offer's fields, which the
+ * server saves: a complete offer in the words a typed offer uses, so the conversation the model
+ * reads later says what was offered. The lender's name follows its own label, so no reader takes
+ * "גוף מלווה" for it. Every track says whether it is linked and names its kind by the form's own
+ * label: a margin under prime written with a minus sign would read as a dash.
  */
 export function offerLine(lender: string, tracks: OfferTrack[], months: number): string {
   const listed = tracks.map(
@@ -781,7 +782,8 @@ export const CEILING_SOURCE = {
   finances: 'לפי ההכנסה וההוצאות',
 } as const satisfies Record<CeilingSource, string>
 
-/** The person's message for a figure edited in the data panel; the agent's prompt quotes it. */
+/** The person's message for a figure edited in the finances panel; the agent's prompt quotes
+ * it. */
 export function updateLine(label: string, amount: string): string {
   return `עודכן: ${label} ${amountText(amount)}`
 }
@@ -1053,7 +1055,7 @@ export const SPOKEN = {
   income: (amount: string) => `ההכנסה הקבועה שלי היא ${amount} בחודש, נטו.`,
   expenses: (amount: string) => `ההוצאות הקבועות שלי הן ${amount} בחודש.`,
   skipped: 'נדלג על זה בינתיים.',
-  /** Key: a data panel field's label; value: the field named with "the". */
+  /** Key: a finances panel field's label; value: the field named with "the". */
   updatedField: { [INCOME_LABEL]: 'ההכנסה הקבועה', [EXPENSES_LABEL]: 'ההוצאות הקבועות' } as Record<
     string,
     string

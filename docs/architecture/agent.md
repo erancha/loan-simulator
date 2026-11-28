@@ -6,7 +6,7 @@ layers are in [Design patterns](../design-patterns.md#layers-whose-imports-point
 tables in [Data model](../data-model.md) and the sign-in in [sign-in.md](../sign-in.md). The page
 that renders the conversation is described in [page.md](page.md).
 
-**Contents:** [The loop](#the-loop) · [Tools](#tools) · [The guardrail](#the-guardrail) ·
+**Contents:** [The loop](#the-loop) · [Tools](#tools) · [The recommendation](#the-recommendation) ·
 [Turns and the turn cap](#turns-and-the-turn-cap) · [Events](#events) ·
 [Failure and restart](#failure-and-restart) ·
 [An assistant, not an agent](#an-assistant-not-an-agent)
@@ -37,21 +37,23 @@ graph checkpoints and resumes, named by the check's id. The graph loops between 
 model node sends the Hebrew system prompt (`application/prompts/system_he.md`) and the thread's
 messages to the chat model, which either answers or asks for tool calls; the tool node runs the
 calls and appends their results; the loop repeats until the model answers without a tool call,
-puts a question on the person's screen with `ask`, `ask_term` or `ask_offer`, or has `read_offer`
-put an offer's readings, or the line that its type was not recognized, on the screen as every
-result of its calls. A refused question goes back to the model like any other tool error, and so
-does an identified offer, which the model compares and recommends on. A reply whose tool calls
+puts a question on the person's screen with `ask`, `ask_term`, `ask_offer` or `compare_terms`, or
+has `read_offer` put an offer's readings, or the line that its type was not recognized, on the
+screen as every result of its calls. A refused question goes back to the model like any other
+tool error, and so does an identified offer, which the model compares and recommends on. A reply
+whose tool calls
 hold a NUL character in an argument never reaches the tool node: every call of it is answered
 with a refusal and the model sends them again, because Postgres stores no NUL and a tool that
 saved one would end the turn. A reply with a NUL in its text is discarded and written again once,
 for the same reason. A prompt the provider's usage filter flags, which it does to ordinary loan
 conversations now and then, is sent once more before the turn fails. The system prompt fixes
 the agent's manner (Hebrew only, plain terms, a calm tone, every question through `ask`,
-`ask_term` or `ask_offer`) and the arc of the conversation, which starts from the loan and goes
-to the offers:
+`ask_term`, `ask_offer` or `compare_terms`) and the arc of the conversation, which starts from the
+loan and goes to the offers:
 
-1. The opening card on the page gives the loan's purpose and amount. The runner saves them as the
-   loan and shows the term card, with no model call. A loan the person writes in the chat, as an
+1. The opening card on the page gives the loan's purpose and amount. The check runner
+   (`CheckRunner` in `platform/check_runner.py`, which runs each turn) saves them as the loan and
+   shows the term card, with no model call. A loan the person writes in the chat, as an
    amount or as a price and the own capital put in, the model saves itself; the loan is the price
    less the own capital, and neither is stored.
 2. The term card shows a first calculation of a term with its first payment and the assumption
@@ -139,11 +141,13 @@ The model sees two sets of tools. An agent tool's result is a compact `key: valu
 |---|---|---|
 | Engine | `simulate_loan` | Cost and worst-case figures of a loan. |
 | Engine | `market_series` | Today's prime and the latest months of the prime and of the CPI's monthly change. |
-| Agent | `set_loan` | Saves the loan: its amount and an optional purpose, and a payment ceiling the person named in the same message, saved as stated before the term card proposes a term. Refuses an empty purpose, a ceiling of 0 or less, an amount of 0 or less, and an amount outside the principal limits the engine prices, naming them. When the check's recommendation is for another amount, its result tells the model to save options of the new amount and recommend again. |
+| Agent | `set_loan` | Saves the loan: its amount and an optional purpose, and a payment ceiling the person named in the same message, saved as stated before the term card proposes a term. Refuses an empty purpose, a ceiling of 0 or less, an amount of 0 or less, and an amount outside the principal limits the engine prices, naming them. When the check's recommendation is for another amount, it is withdrawn, and code recommends on the options of the new amount; with examples only, the result tells the model to save them again first. |
 | Agent | `ask_term` | Puts the term card on the person's screen. Without a term it proposes one (below); with a number of months, it shows that term's first payment, and marks the card as the recommendation's suggested shorter term when the number is that term, as the person's typed term otherwise. Refuses a term outside 6 to 84 months, a check with no loan, and the term the last card already showed, which the person's answer confirms, so the model calls `set_term` instead of showing the same card again. |
+| Agent | `compare_terms` | Puts the terms card on the person's screen when they ask for a shorter or longer term without a number: the recommended option priced at its own term and at the next two terms 6 months apart in that direction, each with its payment today, its worst-case payment and its total. A shorter term whose payment is above the ceiling is left out, and a longer one stops at the longest term the option's lender allows. Refuses a check with no loan, no confirmed term or no recommendation, an offer whose lender fixed its term, and a direction with no term left to price. |
 | Agent | `ask_offer` | Puts the offer form on the person's screen, with the lender, tracks and longest term the person already said filled in, when a message about a real offer lacks one of them. Refuses a check with no loan, and an offer that lacks none of them, which `save_offer` saves: the form would ask the person again for what they said. The refusal names the longest term for `save_offer` to carry, so the saved offer keeps its term open. |
 | Agent | `read_offer` | Reads an offer described in words that quotes a monthly payment or leaves its type open, from only what the person said: the lender, the amount and months the lender quoted, the number stated, the payment and the type words (פריים, קבוע, צמוד). The engine's `offer_readings` prices each loan the words may mean on the quoted amount and term, and `application/offer_reading.py` decides (below): an identified reading is saved as a real offer on the check's loan amount and goes back to the model to recommend on, unless the quoted amount is below the check's loan, when it is stored as awaiting the lender's answer on the amount; an offer left open is stored as awaiting its lender, with the readings its card shows, which removes the check's examples; an unrecognized one saves nothing. With an awaiting offer's id it adds the new detail to that offer and decides again, and it refuses describing an awaiting offer anew, naming its id. It also refuses a check with no loan, a missing lender, an unknown term, and an offer with neither a number nor a payment, which goes to the form instead. |
 | Agent | (runner) | `POST /api/checks/{check_id}/opening`, from the opening card, saves its purpose and amount as the loan through `set_loan` before the line is stored, so a refused loan answers 422 with its reason and records nothing, then shows the term card through `ask_term` with no model call. A check that already holds a loan is refused. |
+| Agent | (runner) | `POST /api/checks/{check_id}/messages` with `offer`, from the offer form, saves the offer's tracks through `save_form_offer` (each at the check's loan amount and confirmed term, with equal payments) before the line is stored, so the model never reads the offer back from the line. The model's conversation records the save right after the line, as a `save_offer` call of the model's own with the tool's result: an offer in words with no save beside it would leave the model to work out whether it still has to save it. Code recommends before the turn's first call. Refuses a check with no loan or no confirmed term, recording nothing. |
 | Agent | (runner) | `POST /api/checks/{check_id}/term-confirmation`, the line of a term the page saved through `PUT /api/checks/{check_id}/term`: a check with no option, example or offer, and no awaiting offer gets the empty offer form through `ask_offer` with no model call; any other check gets a model turn, which makes the examples again at the term when the check holds only examples, or recommends on its offers. |
 | Agent | `answer_offer_amount` | The lender's answer, told in the chat, on an awaiting offer quoted for less than the check's loan: with `covers` it saves the offer's reading (the one it holds, or the one named) on the check's loan amount at the quoted term and goes back to the model to recommend; without it the offer leaves the check with an `offer.dropped` and the model says in one line what comes next. Refuses an unknown id, an offer quoted for the loan amount or more, and a yes on an offer whose type is still open between several readings without naming one. |
 | Agent | (runner) | `PUT /api/checks/{check_id}/awaiting-offers/{awaiting_id}/amount`, the lender's answer on the card of an offer quoted for less than the check's loan (`covers`, and the chosen `reading`): saves the offer on the loan amount or drops it, before the page sends "אישור: <loan> באותם תנאים אצל <lender>, <reading>" or "לא: אין הצעה של <lender> על <loan>", the line the model answers. It answers 404, 409 and 422 as the reading confirmation does, and 422 for an offer with no amount question. |
@@ -152,14 +156,14 @@ The model sees two sets of tools. An agent tool's result is a compact `key: valu
 | Agent | (runner) | `POST /api/checks/{check_id}/term-ceiling`, from the term card's ceiling box, saves the ceiling as stated through `set_ceiling` and shows a new card through `ask_term` with no term, with no model call, and records both in the conversation. |
 | Agent | (runner) | `POST /api/checks/{check_id}/unanswered`, a line nothing answers (a skip of the ceiling question, the offer form's "אין לי עדיין הצעה"), stored as the person's message with no model call and no reply, so the person goes on in the chat as they choose; the model's conversation, which must end on a model message, never holds it. |
 | Agent | `set_term` | Saves a term the person typed in the conversation with no card open. A term confirmed on the card is saved by the page through `PUT /api/checks/{check_id}/term`, which runs the same tool code and saves a ceiling typed beside it as stated, before the line "אישור: N חודשים" reaches the model. Either way it prices every offer that leaves its term open again at the new term, up to the offer's maximum, before saving anything, and names those offers in its result. |
-| Agent | `set_ceiling` | Saves the monthly payment the person stated as the ceiling, replacing any ceiling the check held. Refuses 0 or less. Its result tells the model to recommend again when the check holds a recommendation, or, when the term is confirmed and the check holds no option yet, to call `ask_term` with no term, so the person sees the term the new ceiling fits. |
+| Agent | `set_ceiling` | Saves the monthly payment the person stated as the ceiling, replacing any ceiling the check held. Refuses 0 or less. When the check holds a recommendation, its result tells the model that code's recommendation against the new ceiling follows; or, when the term is confirmed and the check holds no option yet, to call `ask_term` with no term, so the person sees the term the new ceiling fits. |
 | Agent | `update_finances` | Saves net fixed income or fixed expenses on this check; once both are known, the engine's `assess_affordability` derives the ceiling, which replaces any ceiling the check held. |
 | Agent | `ask` | Puts one question on the person's screen: a loan, ceiling or finances field, the offer to clone the check, or free text with two or more optional choices, under an optional Hebrew lead-in. Refuses a field the check already holds, the clone offer while the check has no recommendation, an English word in the text the person would see, and every question of a model message that asks more than one. |
 | Agent | `save_examples` | Saves the example tracks for the check's loan amount and term in one call: it asks the engine's `suggest_tracks` for them (a fixed and a prime track priced from the published average rate, and a pension fund's fixed track linked to the CPI), simulates each and saves all of them as options, or none. The model takes no part in choosing them, so the check never holds some of the examples. An example already saved with the same figures is kept in place of saving it again. Refuses a check with no confirmed term, and any example once the check holds a real offer of its loan amount or an offer awaiting its lender. Its result names each example's track and compares it with each saved option of the same term, classing each gap: a first-payment gap under 2% of the larger is "זניח" and not mentioned; a total-cost gap under 3% is "במקצת" and worded so, since the total still decides; anything larger is "ברור". The classes are Hebrew because the model quotes them. |
-| Agent | `save_offer` | Saves a real offer with every track it names in one call, refusing a track listed twice. A lender's tracks are alternatives for the whole loan amount, so each is simulated and saved as an option of its own; every track is priced before any is saved, so a refusal of one, which names the track, saves none. It refuses a track whose principal is not the check's loan amount, an offer already saved with the same lender, date, maximum and figures, naming it, and a track saved with `max_term_months` at any term but the check's confirmed term, or the maximum when that is shorter; before a term is confirmed, the one the engine's offer search gives for that track (below). The maximum is stored with each option, so a later term change can price it again. Its result gives each track's option and comparisons as `save_examples` does, and tells the model to recommend again. |
+| Agent | `save_offer` | Saves a real offer with every track it names in one call, refusing a track listed twice. A lender's tracks are alternatives for the whole loan amount, so each is simulated and saved as an option of its own; every track is priced before any is saved, so a refusal of one, which names the track, saves none. It refuses a track whose principal is not the check's loan amount, an offer already saved with the same lender, date, maximum and figures, naming it, and a track saved with `max_term_months` at any term but the check's confirmed term, or the maximum when that is shorter; before a term is confirmed, the one the engine's offer search gives for that track (below). The maximum is stored with each option, so a later term change can price it again. Its result gives each track's option and comparisons as `save_examples` does, and tells the model that code's recommendation follows. |
 | Agent | `show_chart` | Fetches the prime or the CPI's monthly change for the latest months from the engine and puts it in the conversation as a chart. |
 | Agent | `show_scenario` | Prices every saved option of the check on the scenario the person named (`cpi_per_year`, `prime_per_year`, or for a movement "as in the last N years" `cpi_like_last_years` / `prime_like_last_years`, which the engine averages; each passed only when named, and the model asks "3 שנים / 5 שנים / 10 שנים" when the person gave no number of years) with the engine's `simulate_scenario`, and once more on the default scenario, and puts them in the conversation as one table. The model gets only the cheapest option on the scenario, its track, and whether its lead over the next option is slight or clear (the 3% share that classes a gap between saved options), not the figures the table shows, and is told to reply with one sentence naming it as preferred, slightly when the lead is slight, and why from its track. Refuses a check with no saved option. After the turn, the runner itself puts up the form for the movement, prime first, that no table since the latest saved option named (`scenario_offer_next`): "סימולציה למקרה שהפריים יעלה", one box for the yearly rise, sent as "סימולציה: הפריים יעלה X% בשנה". The code, not the model, decides, so a simulation is never offered twice on the same offers. |
-| Agent | `present_recommendation` | Saves a preferred option and an optional alternative as the recommendation, through the guardrail. |
+| Agent | `choose_option` | Recommends the saved option the person said they want, with their words, while it fits the ceiling (below). |
 
 The model gets only two of the engine's tools, `simulate_loan` and `market_series`
 (`MODEL_ENGINE_TOOLS` in `adapters/engine_mcp.py`). The example tracks, the scenario pricing, the
@@ -200,10 +204,10 @@ of tool:
   lends the loan amount on the same terms, because the check compares single loans of its amount
   and a lender who quoted less may not lend it.
 
-A change of the ceiling or of the figures, while the check holds a recommendation, comes back
-with a `next_step` telling the model to recommend again in the same turn, so the card is checked
-against the new ceiling. The page sends a line in the person's name for a figure saved on the
-panel, so the model explains the new ceiling in the chat.
+A change of the ceiling or of the figures, while the check holds a recommendation, makes code
+recommend again before the model's next call, so the card is checked against the new ceiling,
+and the change's `next_step` tells the model that the result follows. The page sends a line in the
+person's name for a figure saved on the panel, so the model explains the new ceiling in the chat.
 
 The engine's tools are listed from the running engine at startup, so the agent follows the
 engine's schemas. An engine tool returns its result twice: as text, which is all the model's
@@ -212,49 +216,53 @@ the page in the `option.saved` event and never reaches the model. For `simulate_
 a short summary and the structured content also holds the month-by-month schedule; for the other
 tools the text is the result as JSON. Money is a decimal string in both directions.
 
-A tool that refuses (a missing field, an unknown option id, the guardrail) raises an error whose
-message tells the model what is wrong and what to do next, and the model reads it as the tool's
-result and corrects the call.
+A tool that refuses (a missing field, an unknown option id, an option above the ceiling) raises an
+error whose message tells the model what is wrong and what to do next, and the model reads it as
+the tool's result and corrects the call.
 
-## The guardrail
+## The recommendation
 
-`present_recommendation` is the only way to make a recommendation. It reads the loan and the
-ceiling from the stored check rather than trusting figures the model passes. The amount the
-person asked for is the amount recommended: nothing sizes it. It refuses when:
+Code makes the recommendation; the model only explains it
+([ADR 0016](../adr/0016-code-chooses-the-recommendation.md)). Before each model call the model
+node asks `recommendation_due` of the check's tools whether the card still describes the check.
+It does not when the check holds options of its loan amount and term and the recommendation is
+missing, of another amount or ceiling, names an option no longer among them, or is older than one
+of them: an offer just saved, by a tool or by the page, a term or an amount changed, a ceiling
+set. Then `recommend` runs, with no model call, and the conversation records it as a `recommend`
+call with its result, made in the model's place (`code_call`), so the model writes its reply from
+that result. It reads the loan and the ceiling from the stored check, and the amount the person
+asked for is the amount recommended: nothing sizes it. Its rule:
 
-- the check has no loan yet;
-- a named option, preferred or alternative, borrows another amount than the check's loan;
-- a named option is an example of another term than the check's. Offers count at any term,
-  since saving the term prices an open offer at it;
-- the check has a ceiling, a named option's worst-case recurring payment, from the replay of
-  history, is above it, and a saved option for the check's term fits. Fits means at or below the
-  full ceiling, with no safety margin, and each option is judged on its own. A balloon is paid
-  once at the end, so it is not a recurring payment;
-- the preferred option is an example while a real offer of the loan amount exists that fits the
-  ceiling, or any such offer while the check has no ceiling: an example is an average nobody can
-  take;
-- another option of the preferred one's source and term fits the ceiling, or the check has none,
-  and costs less in total, unless `person_preference` carries what the person said that makes the
-  dearer one suit them. The refusal names the cheapest such option.
+- only options of the check's loan amount and term count. Offers count at any term, since saving
+  the term prices an open offer at it, and saving a real offer removes the examples;
+- the preferred option is the cheapest in total paid among those whose worst-case recurring
+  payment, from the replay of history, fits the ceiling, or among all of them without a ceiling.
+  Fits means at or below the full ceiling, with no safety margin, and each option is judged on
+  its own. A balloon is paid once at the end, so it is not a recurring payment;
+- the alternative is the next cheapest by the same rule, when there is one;
+- when the person chose an option, `choose_option` recommends it with their words, and the rule
+  keeps it while it stays among those options and fits the ceiling.
 
-A refusal for an option above the ceiling says which argument to change. When the preferred
-option is above it, the refusal names the saved options for the term that fit. When only the
-alternative is, it says the preferred option stands and to call again without the alternative, or
-with one that fits. When
-none fits, the term is the person's to keep, so the recommendation is presented and the card marks
-it above the ceiling. Its result names the remedy the model offers the person once: the shortest
-term up to 84 months at which an unlinked example track fits, with the tracks that do and their
-worst-case payments; else the largest loan that fits at the confirmed term
-(`largest_comfortable_loan`, at 84 months while no term is confirmed), with the question whether to
-borrow less or put in more own capital; else that no loan the simulator prices fits. The result
-tells the model to change neither the amount nor the term until the person chooses, and that a kept
-term leaves the recommendation standing.
+The card's sentence of why is Hebrew text code picks by the case of the rule (cheapest, the only
+one that fits, none fits, the only offer, the person's choice), never the model's. `choose_option`
+refuses an option of another amount or term, an unknown id, naming the options it can choose, and
+an option above the ceiling, telling the model what to say.
 
-A presented recommendation's result gives the preferred and the alternative option's term and
-figures as they stand, `preferred_figures` and `alternative_figures`, and the reply quotes only
-those, so it never repeats figures from before a term change. An option whose payment never
-changes has no worst period in history: its figures say `payment_changes never` in place of the
-three historical figures, so the model has no period to describe. With a ceiling, it also gives
+When no option fits, the term is the person's to keep, so the cheapest worst-case payment is
+recommended and the card marks it above the ceiling. Its result names the remedy the model offers
+the person once: the shortest term up to 84 months at which an unlinked example track fits, with
+the tracks that do and their worst-case payments; else the largest loan that fits at the confirmed
+term (`largest_comfortable_loan`, at 84 months while no term is confirmed), with the question
+whether to borrow less or put in more own capital; else that no loan the simulator prices fits.
+A check with real offers is measured by its offers alone. The result tells the model to change
+neither the amount nor the term until the person chooses, and that a kept term leaves the
+recommendation standing.
+
+The result gives the preferred and the alternative option's term and figures as they stand,
+`preferred_figures` and `alternative_figures`, and the reply quotes only those, so it never
+repeats figures from before a term change. An option whose payment never changes has no worst
+period in history: its figures say `payment_changes never` in place of the three historical
+figures, so the model has no period to describe. With a ceiling, it also gives
 `preferred_ceiling_margin` and `alternative_ceiling_margin`: how far each option's worst-case
 payment is below the ceiling, in shekels and as a share of it, so the reply states the distance
 beside that payment, in numbers the model did not compute. When the preferred
@@ -282,30 +290,22 @@ another offer to compare. "One option alone" is `compares_options` in `domain/mo
 options the card shows, those the recommendation names and every other one for the check's term,
 number one. The checks list's chip and the page's card labels follow the same rule.
 
-Without a ceiling the recommendation is on the loans' merits: the cheapest in total paid, unless
-the person stated a preference another option suits better. Within
-those rules the model may argue for any option on the person's stated preferences. A
-recommendation is stored with the loan amount and the ceiling it was checked against, or none, so
-it reads as checked or unchecked; the `recommendation.presented` event says which. An error from
-the engine itself during this step ends the turn as a failure rather than reaching the model,
-since after the agent's own validation it means a broken invariant.
+A recommendation is stored with the loan amount and the ceiling it was checked against, or none,
+so it reads as checked or unchecked, and with the person's words when they chose it; the
+`recommendation.presented` event says which. An error from the engine itself during this step ends
+the turn as a failure, since after the agent's own validation it means a broken invariant.
 
-The model can write a recommendation as text and skip the tools, which saves nothing and leaves the
-card unchanged. So the model node reads each reply before it enters the conversation: a reply with
-the recommendation section, or the single offer's section in its place, and no successful
-`present_recommendation` in this turn is discarded and
-the model is told once to redo it. The second reply stands, because a reply about a case with no
-recommendation may share the heading. A discarded reply is only ever streamed live, never stored.
+The model can write a recommendation section on a check that has none, since it holds no
+option of its loan amount and term. So the model node reads each reply before it enters the
+conversation: such a reply, with the recommendation section or the single offer's section in its
+place, is discarded and the model is told once to write it without that section. The second reply
+stands. A discarded reply is only ever streamed live, never stored.
 
-The card also goes out of date when an option is saved and no recommendation follows: the page's
-answer on an awaiting offer saves the offer before the turn that follows it, and a tool's result
-asks the model for the call in words only. So before each model call the model node asks
-`recommendation_due` of the check's tools whether the card still describes the check. It does not
-when the check holds options of its loan amount and term and the recommendation is missing, of
-another amount or ceiling, names an option no longer among them, or is older than one of them. The
-call is then bound to `present_recommendation`, which the provider makes the model call; the model
-still chooses the option and writes the reasoning. A refused forced call goes back to the model
-unforced, so it can first make what the refusal names, and the turn never loops on it.
+Only a turn's first call reads what the person wrote; every later call acts on tool results
+already in the conversation. Those calls run on a model instance of their own, built with
+`LLM_FOLLOW_UP_EFFORT` (`minimal` in `stack-params.sh`): an OpenAI reasoning model thinks that long
+before it answers, while a turn's first call keeps the provider's default. A recommendation code
+made is no model call, so a turn that opens with one still reads the person on its first call.
 
 The agent speaks only in answer to a message, so a reply that promises results later ("אעדכן",
 "אחזור אליך", "אחזור ו...", "רוצה שאחשב", "זה לוקח כמה שניות", "אני הולך ל...") leaves the person
@@ -319,8 +319,7 @@ pattern, two Latin letters in a row, guards every text the person sees. A reply 
 the person did not write themselves, such as a lender's name, is discarded and rewritten once in
 the same way, and the words are logged as a warning with the check's id. The runner stops
 streaming such a reply at the word and sends `message.retracted`, so the page drops it. `ask`
-and `present_recommendation` refuse a question, a choice, a lead-in or a reasoning with a match,
-so the model calls again in Hebrew.
+refuses a question, a choice or a lead-in with a match, so the model calls again in Hebrew.
 
 ## Turns and the turn cap
 
@@ -401,9 +400,10 @@ person may send another message.
 | `loan.set`, `term.set` | A tool saved the loan or the confirmed term. |
 | `ceiling.set` | The person stated a ceiling; carries it with the source `stated`. |
 | `finances.updated` | A figure was saved; carries both figures, the ones missing, and the check's ceiling and its source after the save. |
-| `question.asked` | The runner put up the scenario form after a scenario table (kind `scenario`, with the movement it simulates) or the term card of the shorter term a recommendation suggested, or the model asked one question, or put up the term card (kind `term`, with the term, its first payment and `basis`: how the term was chosen, `first_payment_target` or `ceiling` with the amount and whether the term fits it, `shorter` for the shorter term a recommendation suggested, with the ceiling, the term it shortens, the worst-case payment and the saving, or `typed`) or the offer form (kind `offer`, with what the person already said); the page renders it with a control. |
+| `question.asked` | The runner put up the scenario form after a scenario table (kind `scenario`, with the movement it simulates) or the term card of the shorter term a recommendation suggested, or the model asked one question, or put up the term card (kind `term`, with the term, its first payment and `basis`: how the term was chosen, `first_payment_target` or `ceiling` with the amount and whether the term fits it, `shorter` for the shorter term a recommendation suggested, with the ceiling, the term it shortens, the worst-case payment and the saving, or `typed`), the terms card (kind `terms`, with the direction, the recommended option's lender and source, the ceiling and a row per term) or the offer form (kind `offer`, with what the person already said); the page renders it with a control. |
 | `chart.shown` | A market series for the page to draw: which series, its date and its monthly values. |
 | `scenario.shown` | Every saved option priced on a scenario: the scenario with its defaults filled in, the values the person named, and per option the fields its card names it by, its payment today, highest payment and total on the scenario, and its highest payment and total in today's calculation. |
+| `check.archived`, `check.restored` | The person archived the check, with the time, or restored it; the page closes the conversation with a note on the first and removes the note on the second. |
 | `check.cloned` | Left on the source check after a clone, naming the copy; the page adds a handoff note to the source's conversation, with a button to the copy, and the source stays open. A clone does not copy it. |
 | `option.saved` | An option was saved; carries the engine's full result. |
 | `examples.removed` | A real offer saved or awaiting removed the check's examples; carries their ids and whether the recommendation, which named one, was removed with them. |
@@ -413,7 +413,7 @@ person may send another message.
 | `offer.unrecognized` | No reading fit the offer, so nothing was saved; carries the lender, and the page asks the person to get more details from the lender. |
 | `offer.settled` | An awaiting offer became a saved offer: its id, the reading's kind and the reading it was saved by. Emitted both when the person confirms a reading on the card and when a later detail identifies the awaiting offer, whose reading the card may not hold; the page shows the saved reading on the settled card. |
 | `offer.dropped` | An awaiting offer quoted for less than the check's loan left the check, since its lender does not lend the loan amount on the same terms: its id, the lender, and the quoted and the check's loan amounts; the page shows on its card that the offer does not cover the loan. |
-| `recommendation.presented` | A recommendation passed the guardrail; carries the loan amount, the ceiling and its source or none, whether it was checked, both options and the reasoning. |
+| `recommendation.presented` | Code made a recommendation; carries the loan amount, the ceiling and its source or none, whether it was checked, both options and the reasoning. |
 | `turn.status` | `running` when a turn starts, `idle` when it ends. |
 | `turn.step` | Live only, never stored: a model call of the running turn started (its number within the turn, no tools) or chose the tools it runs next (their names); the page's thinking bubble names what each tool does. |
 | `turn.failed` | A Hebrew message the page shows as is, sent before `idle` when a turn failed. |
@@ -452,7 +452,7 @@ take a goal and work toward it on its own.
 
 What the model decides is narrow. Each turn answers one message from the person, and the turn ends
 with a reply, a question on the screen or a card. The system prompt lays out the conversation's
-course, the model never produces a figure, and the guardrail in code refuses a recommendation
-outside the bounds the check sets. The model's freedom is which question to ask next and which
-calculation to call. Nothing runs between the person's messages, and no tool the model calls
-changes anything beyond the check's own records.
+course, the model never produces a figure, and code, not the model, chooses the recommendation.
+The model's freedom is which question to ask next and which calculation to call. Nothing runs
+between the person's messages, and no tool the model calls changes anything beyond the check's own
+records.

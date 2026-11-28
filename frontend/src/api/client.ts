@@ -1,3 +1,7 @@
+/**
+ * The page's HTTP client for the agent API: JSON requests by method, a failed answer thrown as an
+ * ApiException with the server's detail, and a window event on any 401.
+ */
 import { REQUEST_DATA_REFUSED, requestFailed } from '../copy.ts'
 
 /** The message of a failed call, whatever was thrown. */

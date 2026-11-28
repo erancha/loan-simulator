@@ -375,8 +375,8 @@ export const identifiedMax: OfferIdentified = {
   loan_amount: '45000',
 }
 
-/** Max's prime + 6.45 at 934 a month, identified on its 20,000 and awaiting Max's answer on the
- * check's loan of 45,000. */
+/** Max's prime + 6.45 at 934 a month, identified on its 20,000 and awaiting Max's answer on a
+ * check whose loan is larger. */
 export const awaitingMaxShort: AwaitingOffer = {
   awaiting_id: 'a-max',
   lender: 'מקס',
@@ -439,7 +439,9 @@ export function avisReading(kind: ReadingKind): Reading {
   return reading
 }
 
-/** בנק הפועלים's fixed offer and the pension fund example on CPI +5% a year, prime unchanged. */
+/** Two offers in a scenario of the index rising 5% a year with prime unchanged: Bank Hapoalim's
+ * fixed-rate offer, which the scenario moves, and a second lender's prime offer, which it does
+ * not. */
 export const scenarioCpi5: ScenarioShown = {
   scenario: {
     cpi_per_year: '5',

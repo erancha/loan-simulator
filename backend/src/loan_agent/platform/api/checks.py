@@ -12,8 +12,8 @@ Core building blocks:
   save, a term save, a reading or an amount answer while a turn runs answers 409, as do a
   message, a finances save, a term save, a reading or an amount answer to an archived check, a
   second archive, and a restore of a check that is open; figures, a term, a reading, an amount
-  answer or an opening's loan that cannot be saved answer 422 with the reason; a message over the
-  cap answers 429 with Retry-After
+  answer, an opening's loan or a form's offer that cannot be saved answer 422 with the reason; a
+  message over the cap answers 429 with Retry-After
 """
 
 import math
@@ -36,6 +36,7 @@ from loan_agent.domain.models import Recommendation as DomainRecommendation
 from loan_agent.platform.api.auth import CurrentUser
 from loan_agent.platform.api.schemas import (
     AmountAnswer,
+    ChatMessage,
     CheckSummary,
     CheckView,
     CreatedCheck,
@@ -178,9 +179,19 @@ async def delete_check(check_id: str, user: CurrentUser, runner: Runner) -> None
 
 
 @router.post("/{check_id}/messages", status_code=status.HTTP_202_ACCEPTED)
-async def send_message(check_id: str, body: Message, user: CurrentUser, runner: Runner) -> None:
-    """Accepted once the message is stored; the reply arrives on the check's event stream."""
-    await runner.send(user, check_id, body.text)
+async def send_message(check_id: str, body: ChatMessage, user: CurrentUser, runner: Runner) -> None:
+    """Accepted once the message is stored; the reply arrives on the check's event stream. An
+    offer from the form is saved first, and 422 with the reason when it cannot be."""
+    if body.offer is None:
+        assert body.text is not None, "ChatMessage holds text or an offer"
+        await runner.send(user, check_id, body.text)
+        return
+    offer = body.offer
+    tracks = [
+        {"rate_kind": t.rate_kind, "rate": str(t.rate), "cpi_linked": t.cpi_linked}
+        for t in offer.tracks
+    ]
+    await runner.send_offer(user, check_id, offer.line, offer.lender, tracks, offer.max_term_months)
 
 
 @router.post("/{check_id}/offer-sample", status_code=status.HTTP_202_ACCEPTED)

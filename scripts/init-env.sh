@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 #
 # Create the gitignored settings files under scripts/lib/ (secrets.sh, params.sh and
-# aws-config.sh) from their .example.sh files, with the generated values. An existing file is
-# kept unless --force.
+# aws-config.sh) from their .example.sh files, filling in the values it generates. An existing
+# file is kept unless --force.
 #
 #   ./scripts/init-env.sh             # create each file that is missing
 #   ./scripts/init-env.sh --force     # replace every file, hand-filled keys included
+#   -h, --help                        # show this help
 #
 # In secrets.sh the bearer token is 48 hex characters and the database password 32, both from
 # openssl, and the agent's database URL is written from the ports and database names of
@@ -31,8 +32,8 @@ done
 # shellcheck source=lib/stack-params.sh
 source "$STACK_PARAMS_FILE"
 
-# Each new file is built and verified beside its target and renamed over it only when both are
-# complete, so a failure leaves no partial file. mktemp creates a draft readable by the owner
+# Each new file is built and verified beside its target and renamed over it only when every one
+# is complete, so a failure leaves no partial file. mktemp creates a draft readable by the owner
 # only, as the files hold secrets.
 drafts=()
 trap 'rm -f "${drafts[@]}"' EXIT

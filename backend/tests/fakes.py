@@ -205,8 +205,8 @@ class Ids:
 
 
 class InMemoryCheckRepository:
-    """clone copies options, awaiting offers and the recommendation only when option_store,
-    awaiting_store and recommendation_store are set."""
+    """Keeps checks by id in place of the checks table. clone copies options, awaiting offers and
+    the recommendation only when option_store, awaiting_store and recommendation_store are set."""
 
     def __init__(self) -> None:
         self.rows: dict[str, Check] = {}
@@ -288,6 +288,8 @@ class InMemoryCheckRepository:
 
 
 class InMemoryOptionRepository:
+    """Keeps each check's options in the order they were added."""
+
     def __init__(self) -> None:
         self.rows: dict[str, list[Option]] = {}
 
@@ -368,6 +370,8 @@ def awaiting_offer(
 
 
 class InMemoryRecommendationRepository:
+    """Keeps one recommendation per check, the one saved last."""
+
     def __init__(self) -> None:
         self.rows: dict[str, Recommendation] = {}
 
@@ -382,6 +386,9 @@ class InMemoryRecommendationRepository:
 
 
 class InMemoryCheckEventStore:
+    """Keeps each check's event log, stamped by the given clock. count_since also counts the kept
+    times of a deleted check's events and leaves out the events a clone copied from its source."""
+
     def __init__(self, checks: InMemoryCheckRepository, clock: Callable[[], datetime]) -> None:
         self._checks = checks
         self._clock = clock
@@ -451,7 +458,9 @@ class InMemoryCheckEventStore:
 
 @dataclass
 class FakeLoanEngine:
-    """simulations are answered in order; simulate_error, suggest_error, assess_error and
+    """Answers in place of the loan engine and records every call in calls.
+
+    simulations are answered in order; simulate_error, suggest_error, assess_error and
     market_error, when set, are raised instead; scenarios are answered in order, or
     scenario_error raised when set; suggest answers the captured tracks at the
     principal and term asked for; market_series answers from the captured engine result.
@@ -586,6 +595,8 @@ class RecordedEvent:
 
 
 class RecordingSink:
+    """Records the events emitted for storing in events and the live-only ones in live."""
+
     def __init__(self) -> None:
         self.events: list[RecordedEvent] = []
         self.live: list[RecordedEvent] = []

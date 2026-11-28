@@ -34,15 +34,15 @@ from fakes import (
 from loan_agent.adapters.engine_mcp import MODEL_ENGINE_TOOLS
 from loan_agent.application.agent_graph import (
     EVALUATION_HEADING,
-    PRESENT_RECOMMENDATION,
+    RECOMMEND,
     RECOMMENDATION_HEADING,
     SYSTEM_PROMPT,
     AskArgs,
     AskOfferArgs,
     AskQuestion,
     AskTermArgs,
+    ChooseOptionArgs,
     OfferTrackArgs,
-    PresentRecommendationArgs,
     QuestionField,
     ReadOfferArgs,
     SetCeilingArgs,
@@ -96,7 +96,7 @@ CHECK_TOOL_NAMES = {
     "save_offer",
     "read_offer",
     "answer_offer_amount",
-    "present_recommendation",
+    "choose_option",
     "ask",
     "show_chart",
     "show_scenario",
@@ -179,9 +179,15 @@ def calls(*tool_calls: tuple[str, dict[str, Any]]) -> AIMessage:
     )
 
 
-def run(world: World, model: ScriptedChatModel, engine_tools: list[BaseTool] | None = None) -> Any:
+def run(
+    world: World,
+    model: ScriptedChatModel,
+    engine_tools: list[BaseTool] | None = None,
+    follow_up_model: ScriptedChatModel | None = None,
+) -> Any:
     return build_agent_graph(
         model,
+        follow_up_model=model if follow_up_model is None else follow_up_model,
         engine_tools=[fake_simulate_loan()] if engine_tools is None else engine_tools,
         tool_deps=world.deps,
         checkpointer=world.saver,
@@ -217,12 +223,14 @@ async def test_tool_call_runs_and_model_sees_summary_only(world: World) -> None:
     assert state["messages"][-1].content == "ההחזר החודשי הוא כ-1,888 ₪"
 
 
-async def test_guardrail_refusal_reaches_model_which_retries(world: World) -> None:
+async def test_code_recommends_the_option_that_fits_once_the_examples_are_saved(
+    world: World,
+) -> None:
     await world.checks.set_loan(CHECK, LoanRequest("רכב", Decimal(80000)))
     await world.checks.set_term(CHECK, 48)
     await world.checks.set_ceiling(CHECK, Decimal(1500), "stated")
-    # The three examples, the third above the ceiling like the first; the last prices the
-    # accepted option at the shorter term the engine's search finds.
+    # The three examples, the first and the third above the ceiling; the last prices the
+    # recommended option at the shorter term the engine's search finds.
     above = replace(PRIME_SIMULATION.figures, worst_peak_payment=Decimal(2100))
     world.engine.simulations = [
         PRIME_SIMULATION,
@@ -230,34 +238,17 @@ async def test_guardrail_refusal_reaches_model_which_retries(world: World) -> No
         replace(PRIME_SIMULATION, figures=above),
         BALLOON_SIMULATION,
     ]
-    model = ScriptedChatModel(
-        replies=[
-            calls(("save_examples", {})),
-            calls(
-                (
-                    "present_recommendation",
-                    {"preferred_option_id": "option-1", "reasoning": "הזול ביותר"},
-                )
-            ),
-            calls(
-                (
-                    "present_recommendation",
-                    {"preferred_option_id": "option-2", "reasoning": "בתוך התקרה"},
-                )
-            ),
-            AIMessage("ההמלצה מוכנה"),
-        ]
-    )
-    graph = run(world, model)
+    model = ScriptedChatModel(replies=[calls(("save_examples", {})), AIMessage("ההמלצה מוכנה")])
 
-    state = await graph.ainvoke(said("מה ההמלצה?"), check_config(PERSON, CHECK))
+    state = await run(world, model).ainvoke(said("מה ההמלצה?"), check_config(PERSON, CHECK))
 
-    refusal, accepted = tool_messages(state["messages"])[1:]
-    assert refusal.status == "error"
-    assert "above the payment_ceiling of 1500" in str(refusal.content)
-    assert "option option-2 fits" in str(refusal.content)
-    assert refusal in model.received[2]
-    assert accepted.status == "success"
+    assert len(model.received) == 2
+    (recommended,) = [
+        message
+        for message in model.received[1]
+        if isinstance(message, ToolMessage) and message.name == RECOMMEND
+    ]
+    assert "preferred_option_id: option-2" in str(recommended.content)
     recommendation = await world.recommendations.latest(CHECK)
     assert recommendation is not None
     assert recommendation.preferred_option_id == "option-2"
@@ -494,7 +485,7 @@ async def test_every_tool_the_system_prompt_names_is_bound(world: World) -> None
         *TrackArgs.model_fields,
         *AskQuestion.model_fields,
         *AskArgs.model_fields,
-        *PresentRecommendationArgs.model_fields,
+        *ChooseOptionArgs.model_fields,
         *ReadOfferArgs.model_fields,
         *ShowScenarioArgs.model_fields,
     }
@@ -524,7 +515,7 @@ async def test_every_tool_the_system_prompt_names_is_bound(world: World) -> None
         - state_keys
         - result_keys
     )
-    assert "present_recommendation" in named_tools
+    assert "choose_option" in named_tools
     assert named_tools <= {tool.name for tool in model.tools}
     assert re.search(r"\bask\b", SYSTEM_PROMPT)
     assert "ask" in {tool.name for tool in model.tools}
@@ -762,23 +753,21 @@ def recommendation_text() -> AIMessage:
     return AIMessage(f"**הנתונים**\nמטרה\n\n**{RECOMMENDATION_HEADING}**\nלקחת את ההלוואה")
 
 
-async def test_a_recommendation_written_without_its_tool_is_redone_and_never_saved(
-    world: World,
-) -> None:
+async def test_a_recommendation_section_on_a_check_with_none_is_redone(world: World) -> None:
     model = ScriptedChatModel(replies=[recommendation_text(), AIMessage("אין עדיין המלצה")])
     graph = run(world, model)
 
     state = await graph.ainvoke(said("לקחת הלוואה"), check_config(PERSON, CHECK))
 
     assert len(model.received) == 2
-    assert "present_recommendation" in model.received[1][-1].content
+    assert "the check has no recommendation" in model.received[1][-1].content
     assert [message.content for message in state["messages"]] == [
         "לקחת הלוואה",
         "אין עדיין המלצה",
     ]
 
 
-async def test_an_evaluation_of_one_offer_written_without_its_tool_is_redone(
+async def test_an_evaluation_of_one_offer_on_a_check_with_none_is_redone(
     world: World,
 ) -> None:
     evaluation = AIMessage(f"**{EVALUATION_HEADING}**\nההצעה של לאומי")
@@ -788,7 +777,7 @@ async def test_an_evaluation_of_one_offer_written_without_its_tool_is_redone(
     state = await graph.ainvoke(said("הצעה"), check_config(PERSON, CHECK))
 
     assert len(model.received) == 2
-    assert "present_recommendation" in model.received[1][-1].content
+    assert "the check has no recommendation" in model.received[1][-1].content
     assert state["messages"][-1].content == "עוד אין הצעה"
 
 
@@ -802,30 +791,21 @@ async def test_a_recommendation_is_redone_only_once(world: World) -> None:
     assert RECOMMENDATION_HEADING in state["messages"][-1].content
 
 
-async def test_a_recommendation_from_an_earlier_turn_does_not_back_this_ones_text(
+async def test_a_recommendation_section_stands_once_the_check_has_a_recommendation(
     world: World,
 ) -> None:
     await world.checks.set_loan(CHECK, LoanRequest("רכב", Decimal(80000)))
     world.engine.simulations = [PRIME_SIMULATION]
     first = ScriptedChatModel(
-        replies=[
-            calls(("save_offer", {"tracks": [PRIME_TRACK]})),
-            calls(
-                (
-                    "present_recommendation",
-                    {"preferred_option_id": "option-1", "reasoning": "בתוך התקרה"},
-                )
-            ),
-            recommendation_text(),
-        ]
+        replies=[calls(("save_offer", {"tracks": [PRIME_TRACK]})), recommendation_text()]
     )
     await run(world, first).ainvoke(said("הצעה"), check_config(PERSON, CHECK))
-    assert len(first.received) == 3, "this turn's call backs its own text"
+    assert len(first.received) == 2
 
-    second = ScriptedChatModel(replies=[recommendation_text(), AIMessage("נמשיך")])
-    await run(world, second).ainvoke(said("עוד אחת"), check_config(PERSON, CHECK))
+    second = ScriptedChatModel(replies=[recommendation_text()])
+    await run(world, second).ainvoke(said("מה ההמלצה?"), check_config(PERSON, CHECK))
 
-    assert len(second.received) == 2
+    assert len(second.received) == 1
 
 
 def test_the_recommendation_heading_is_the_one_the_system_prompt_asks_for() -> None:
@@ -1109,10 +1089,6 @@ LEUMI_OFFER = {
 }
 
 
-def recommend(option_id: str) -> tuple[str, dict[str, Any]]:
-    return ("present_recommendation", {"preferred_option_id": option_id, "reasoning": "הזולה"})
-
-
 def test_a_reply_with_no_tool_results_goes_back_to_the_model() -> None:
     assert _after_tools({"messages": [HumanMessage("שלום"), AIMessage("")]}) == "model"
 
@@ -1137,14 +1113,13 @@ async def test_an_identified_offer_goes_back_to_the_model_for_the_recommendation
     model = ScriptedChatModel(
         replies=[
             calls(("read_offer", LEUMI_OFFER)),
-            calls(recommend("option-1")),
             AIMessage(f"**{RECOMMENDATION_HEADING}**\nלקחת את ההצעה של לאומי"),
         ]
     )
 
     await run(world, model).ainvoke(said("לאומי: פריים 6, 972 ₪"), check_config(PERSON, CHECK))
 
-    assert len(model.received) == 3
+    assert len(model.received) == 2
     assert OFFER_IDENTIFIED in [event.type for event in world.sink.events]
     recommendation = await world.recommendations.latest(CHECK)
     assert recommendation is not None
@@ -1160,14 +1135,13 @@ async def test_a_carded_offer_beside_an_identified_one_does_not_end_the_turn(wor
     model = ScriptedChatModel(
         replies=[
             calls(("read_offer", AVIS_OFFER), ("read_offer", LEUMI_OFFER)),
-            calls(recommend("option-1")),
             AIMessage("ההמלצה מוכנה"),
         ]
     )
 
     await run(world, model).ainvoke(said("אוויס ולאומי"), check_config(PERSON, CHECK))
 
-    assert len(model.received) == 3
+    assert len(model.received) == 2
     types = [event.type for event in world.sink.events]
     assert OFFER_AWAITING in types and OFFER_IDENTIFIED in types
 
@@ -1182,7 +1156,6 @@ async def test_the_lenders_answer_on_the_amount_in_words_saves_the_short_offer(
     model = ScriptedChatModel(
         replies=[
             calls(("answer_offer_amount", {"awaiting_id": "awaiting-1", "covers": True})),
-            calls(recommend("awaiting-1")),
             AIMessage("ההמלצה מוכנה"),
         ]
     )
@@ -1216,31 +1189,88 @@ async def offer_saved_by_the_page(world: World) -> None:
     await CheckTools(PERSON, CHECK, world.deps).save_offer([track], "אוויס")
 
 
-async def test_an_option_no_recommendation_covers_forces_the_recommendation(world: World) -> None:
-    await offer_saved_by_the_page(world)
-    model = ScriptedChatModel(replies=[calls(recommend("option-1")), AIMessage("ההמלצה מוכנה")])
-
-    await run(world, model).ainvoke(
-        said("אישור: 80,000 ₪ באותם תנאים אצל אוויס"), check_config(PERSON, CHECK)
-    )
-
-    assert model.tool_choices == [PRESENT_RECOMMENDATION, None]
-    recommendation = await world.recommendations.latest(CHECK)
-    assert recommendation is not None and recommendation.preferred_option_id == "option-1"
-
-
-async def test_a_refused_forced_recommendation_goes_back_to_the_model_unforced(
+async def test_code_recommends_an_option_no_recommendation_covers_before_the_model_call(
     world: World,
 ) -> None:
     await offer_saved_by_the_page(world)
-    model = ScriptedChatModel(
-        replies=[calls(recommend("option-9")), calls(recommend("option-1")), AIMessage("מוכן")]
+    model = ScriptedChatModel(replies=[AIMessage("ההמלצה מוכנה")])
+
+    state = await run(world, model).ainvoke(
+        said("אישור: 80,000 ₪ באותם תנאים אצל אוויס"), check_config(PERSON, CHECK)
     )
 
-    await run(world, model).ainvoke(said("מה עכשיו?"), check_config(PERSON, CHECK))
+    (seen,) = model.received
+    assert [message.name for message in seen if isinstance(message, ToolMessage)] == [RECOMMEND]
+    assert model.tool_choices == [None]
+    recommendation = await world.recommendations.latest(CHECK)
+    assert recommendation is not None and recommendation.preferred_option_id == "option-1"
+    assert [type(message) for message in state["messages"]] == [
+        HumanMessage,
+        AIMessage,
+        ToolMessage,
+        AIMessage,
+    ]
 
-    assert model.tool_choices == [PRESENT_RECOMMENDATION, None, None]
-    assert await world.recommendations.latest(CHECK) is not None
+
+async def test_a_turn_that_opens_with_codes_recommendation_reads_the_person_on_its_first_call(
+    world: World,
+) -> None:
+    await offer_saved_by_the_page(world)
+    model = ScriptedChatModel(replies=[AIMessage("מוכן")])
+    following = ScriptedChatModel(replies=[])
+
+    await run(world, model, follow_up_model=following).ainvoke(
+        said("מה עכשיו?"), check_config(PERSON, CHECK)
+    )
+
+    assert (len(model.received), following.received) == (1, [])
+
+
+async def test_the_first_call_of_a_turn_reads_the_person_and_the_next_ones_follow_up(
+    world: World,
+) -> None:
+    await car_loan_of_60_months(world)
+    nameless = {key: value for key, value in AVIS_OFFER.items() if key != "lender"}
+    model = ScriptedChatModel(replies=[calls(("read_offer", nameless))])
+    following = ScriptedChatModel(replies=[AIMessage("מי נתן את ההצעה?")])
+
+    await run(world, model, follow_up_model=following).ainvoke(
+        said("969 ₪ בחודש"), check_config(PERSON, CHECK)
+    )
+
+    assert (len(model.received), len(following.received)) == (1, 1)
+
+
+async def test_the_person_choosing_a_dearer_option_moves_the_card_to_it(world: World) -> None:
+    await world.checks.set_loan(CHECK, LoanRequest("רכב", Decimal(80000)))
+    await world.checks.set_term(CHECK, 60)
+    world.engine.simulations = [PRIME_SIMULATION, BALLOON_SIMULATION]
+    track = {
+        "principal": "80000",
+        "term_months": 60,
+        "rate_kind": "prime",
+        "prime_spread": "1.5",
+        "cpi_linked": False,
+        "method": "spitzer",
+    }
+    tools = CheckTools(PERSON, CHECK, world.deps)
+    await tools.save_offer([track, {**track, "prime_spread": "2"}], "אוויס")
+    await tools.recommend()
+    latest = await world.recommendations.latest(CHECK)
+    assert latest is not None
+    dearer = "option-2" if latest.preferred_option_id == "option-1" else "option-1"
+    model = ScriptedChatModel(
+        replies=[
+            calls(("choose_option", {"option_id": dearer, "person_words": "אני רוצה את השני"})),
+            AIMessage("עודכן"),
+        ]
+    )
+
+    await run(world, model).ainvoke(said("אני רוצה את השני"), check_config(PERSON, CHECK))
+
+    chosen = await world.recommendations.latest(CHECK)
+    assert chosen is not None
+    assert (chosen.preferred_option_id, chosen.person_choice) == (dearer, "אני רוצה את השני")
 
 
 async def test_the_lender_refusing_the_amount_in_words_drops_the_short_offer(
@@ -1348,7 +1378,6 @@ async def test_harels_offer_from_the_form_is_saved_directly(world: World) -> Non
                     {"tracks": tracks, "lender": "הראל פנסיה", "max_term_months": 84},
                 )
             ),
-            calls(recommend("option-1")),
             AIMessage("ההמלצה מוכנה"),
         ]
     )

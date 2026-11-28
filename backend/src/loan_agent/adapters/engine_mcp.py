@@ -38,6 +38,9 @@ MODEL_ENGINE_TOOLS = frozenset({"simulate_loan", "market_series"})
 
 
 class McpLoanEngine:
+    """The LoanEngine port over one MCP client: each method calls one engine tool and parses its
+    structured content; an error result of the engine raises EngineError with its text."""
+
     def __init__(self, url: str, token: str) -> None:
         """url: the engine's MCP endpoint, path included (e.g. http://engine:8020/mcp)."""
         self._client = MultiServerMCPClient(

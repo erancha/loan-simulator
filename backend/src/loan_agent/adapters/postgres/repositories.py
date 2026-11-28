@@ -94,6 +94,10 @@ def _finances(data: Mapping[str, str | None]) -> Finances:
 
 
 class PostgresCheckRepository:
+    """The CheckRepository port over the checks table. delete and clone also write the check's
+    options, awaiting offers, recommendation and events, and delete keeps the times of the
+    events the message cap still counts."""
+
     def __init__(self, sessions: Sessions) -> None:
         self._sessions = sessions
 
@@ -283,6 +287,9 @@ def _check(row: CheckRow) -> Check:
 
 
 class PostgresOptionRepository:
+    """The OptionRepository port over the options table; an option is found by its check's id
+    and its own."""
+
     def __init__(self, sessions: Sessions) -> None:
         self._sessions = sessions
 
@@ -353,6 +360,8 @@ def _option(row: OptionRow) -> Option:
 
 
 class PostgresAwaitingOfferRepository:
+    """The AwaitingOfferRepository port over the awaiting_offers table."""
+
     def __init__(self, sessions: Sessions) -> None:
         self._sessions = sessions
 
@@ -429,6 +438,9 @@ def _awaiting(row: AwaitingOfferRow) -> AwaitingOffer:
 
 
 class PostgresRecommendationRepository:
+    """The RecommendationRepository port over the recommendations table: one row per check,
+    which a save replaces."""
+
     def __init__(self, sessions: Sessions) -> None:
         self._sessions = sessions
 
@@ -439,6 +451,7 @@ class PostgresRecommendationRepository:
             "reasoning": recommendation.reasoning,
             "loan_amount": str(recommendation.loan_amount),
             "payment_ceiling": _text_or_none(recommendation.payment_ceiling),
+            "person_choice": recommendation.person_choice,
         }
         statement = insert(RecommendationRow).values(
             check_id=recommendation.check_id, data=data, created_at=recommendation.created_at
@@ -464,6 +477,7 @@ class PostgresRecommendationRepository:
             loan_amount=Decimal(data["loan_amount"]),
             payment_ceiling=_decimal_or_none(data["payment_ceiling"]),
             created_at=_utc(row.created_at),
+            person_choice=data["person_choice"],
         )
 
     async def remove(self, check_id: str) -> None:
@@ -474,6 +488,10 @@ class PostgresRecommendationRepository:
 
 
 class PostgresCheckEventStore:
+    """The CheckEventStore port over the check_events table: appends an event under its check's
+    next sequence number, lists a check's log, and counts a person's events of one type, those
+    of deleted checks included."""
+
     def __init__(self, sessions: Sessions) -> None:
         self._sessions = sessions
 

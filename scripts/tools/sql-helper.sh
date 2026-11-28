@@ -8,7 +8,8 @@
 #   ./scripts/tools/sql-helper.sh --counts           row count of every table, largest first
 #   ./scripts/tools/sql-helper.sh --rows [--limit N] the first 20 rows of every table (or N),
 #                                                    values cut to 80 characters
-#   ./scripts/tools/sql-helper.sh -f <file> [args]   run a host SQL file (streamed in via stdin)
+#   ./scripts/tools/sql-helper.sh -f <file> [args]   run a host SQL file through stdin (alias
+#                                                    --file)
 #   ./scripts/tools/sql-helper.sh [psql-args...]     forward args to psql, e.g. -c "SELECT 1"
 #   ./scripts/tools/sql-helper.sh --backup <file>    write the whole database to a file on this
 #                                                    machine (pg_dump custom format); refuses to

@@ -1,3 +1,5 @@
+"""SeriesStore restores the history it saved and keeps the stored file when a save fails."""
+
 import os
 from datetime import UTC, date, datetime
 from decimal import Decimal

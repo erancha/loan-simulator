@@ -1,3 +1,6 @@
+"""The Bank of Israel fetchers parse the recorded CSV and refuse a malformed number; boi_monthly()
+takes the rate in effect on each first of month."""
+
 from collections.abc import Callable
 from datetime import date
 from decimal import Decimal

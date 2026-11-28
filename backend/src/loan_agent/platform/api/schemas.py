@@ -3,9 +3,9 @@ so no amount passes through a binary float; dates and datetimes are ISO strings.
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Self
+from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from loan_agent.application.check_tools import MAX_TERM, MIN_TERM
 from loan_agent.domain.models import (
@@ -171,6 +171,40 @@ class Message(BaseModel):
         if not text.strip():
             raise ValueError("text is empty")
         return text
+
+
+class FormTrack(BaseModel):
+    """One track of the offer form: the annual percent of a fixed track, or the margin over prime
+    of a prime one, negative under prime."""
+
+    rate_kind: Literal["fixed", "prime"]
+    rate: Decimal
+    cpi_linked: bool
+
+
+class FormOffer(BaseModel):
+    """An offer the page's form filled in, with the line the chat shows for it."""
+
+    line: str = Field(min_length=1)
+    lender: str = Field(min_length=1)
+    tracks: list[FormTrack] = Field(min_length=1)
+    max_term_months: int = Field(ge=MIN_TERM, le=MAX_TERM)
+
+
+class ChatMessage(BaseModel):
+    """What the person sends in the chat: free text the model reads, or an offer from the form,
+    which the server saves before the turn; never both."""
+
+    text: str | None = None
+    offer: FormOffer | None = None
+
+    @model_validator(mode="after")
+    def _text_or_offer(self) -> Self:
+        if (self.text is None) == (self.offer is None):
+            raise ValueError("send either text or offer")
+        if self.text is not None and not self.text.strip():
+            raise ValueError("text is empty")
+        return self
 
 
 class Opening(Message):

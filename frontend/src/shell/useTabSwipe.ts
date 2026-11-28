@@ -1,6 +1,6 @@
 /**
  * Switches the phone-width pane with a sideways swipe, in the tab bar's order and around it:
- * בדיקות, שיחה, המלצה, then בדיקות again.
+ * the checks list, the conversation, the recommendation, then the checks list again.
  *
  * A swipe counts only while the tab bar shows, so a wide screen with all three columns ignores
  * it. Scrolling wins over switching: a mostly vertical move, and any move that starts inside

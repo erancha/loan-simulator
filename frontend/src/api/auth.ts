@@ -1,3 +1,4 @@
+/** The agent API's sign-in routes: the Google client id, who is signed in, sign-in, sign-out. */
 import { apiDelete, apiGet, apiPost } from './client.ts'
 import type { User } from './types.ts'
 

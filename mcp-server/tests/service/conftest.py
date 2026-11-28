@@ -1,3 +1,5 @@
+"""Fixtures of the service tests: a synthetic market history and the engine's settings."""
+
 from datetime import date
 from decimal import Decimal
 

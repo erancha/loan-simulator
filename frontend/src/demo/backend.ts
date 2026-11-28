@@ -166,7 +166,7 @@ function examplesOnly({ preferred, alternative }: RecommendationPresented): bool
  * for an answer to the term card or the offer form, which is worded from several boxes, and for a
  * term chosen on the terms card, a tap too.
  * An answer to any other live question was typed into the question's own box, as its value alone:
- * the money box shows its own ₪. Any other message was typed into the chat's composer.
+ * the money box shows its own ₪. Any other message was typed into the chat box.
  */
 function entryOf(text: string, live: Question | null): Entry | null {
   if (live === null) return { box: INPUT_LABEL, value: text }

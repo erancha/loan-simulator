@@ -56,7 +56,11 @@ arrives on the event stream. Only a message, and a term confirmation on some che
 model, and only those count under the cap; [Tools](architecture/agent.md#tools) has what each
 does.
 
-- `POST /api/checks/{check_id}/messages` — a message the model answers.
+- `POST /api/checks/{check_id}/messages` — a message the model answers: `text` the person typed,
+  or `offer` from the offer form (`line`, `lender`, `tracks` of `rate_kind`, `rate` and
+  `cpi_linked`, `max_term_months`), never both. An offer is saved before its line is stored, so
+  the model starts from presenting the recommendation; 422 with the reason when it cannot be
+  saved.
 - `POST /api/checks/{check_id}/opening` — the opening card's `purpose` and `amount`, saved as the
   loan before the line is stored.
 - `POST /api/checks/{check_id}/term-ceiling` — a `payment_ceiling` typed on the term card.
@@ -119,8 +123,7 @@ same tools ([Try the engine with MCP Inspector](development.md#try-the-engine-wi
 
 The model calls `simulate_loan` and `market_series`; the agent's own check code calls the
 rest, `offer_readings` among them, so the examples, the term card, the ceiling, the reading of
-a vague offer and the guardrail's remedies come from code rather than from the model's choice
-of tool
-([architecture/agent.md](architecture/agent.md#tools)).
+a vague offer, the recommendation and its remedies come from code rather than from the model's
+choice of tool ([architecture/agent.md](architecture/agent.md#tools)).
 
 **Resources:** `rates://boi/history`, `rates://cpi/history` and `rates://current`.

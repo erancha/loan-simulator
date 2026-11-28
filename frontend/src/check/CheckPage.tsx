@@ -7,6 +7,7 @@ import {
   saveTerm,
   sendMarketSample,
   sendMessage,
+  sendOffer,
   sendUnanswered,
   sendOfferSample,
   sendOpening,
@@ -216,10 +217,11 @@ export function CheckPage({
   }
 
   /**
-   * A finances answer, from a bubble or the data panel, or a confirmed term with any ceiling
+   * A finances answer, from a bubble or the finances panel, or a confirmed term with any ceiling
    * typed beside it is saved before its line is sent; a refused save propagates to the control
    * that asked. A new ceiling alone from the term card goes with its line in one request, which
-   * the server answers with a new card.
+   * the server answers with a new card. An offer from the offer form goes with its line in one
+   * request too, and the server saves it before the turn.
    */
   async function answer(given: Answer): Promise<boolean> {
     if ('term' in given) {
@@ -227,6 +229,8 @@ export function CheckPage({
       return deliver(() => sendTermConfirmation(checkId, given.line))
     } else if ('ceiling' in given) {
       return deliver(() => sendTermCeiling(checkId, given.line, given.ceiling))
+    } else if ('offer' in given) {
+      return deliver(() => sendOffer(checkId, given.line, given.offer))
     } else if (given.update !== null) {
       await saveFinances(checkId, given.update)
       onChecksChanged()

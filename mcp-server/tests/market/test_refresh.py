@@ -1,3 +1,6 @@
+"""build_history() aligns the fetched series; refresh() saves a fresh history and returns the
+stored one when a fetch or the alignment fails."""
+
 import json
 from datetime import date
 from decimal import Decimal
@@ -10,7 +13,8 @@ from structlog.testing import capture_logs
 from loan_engine.market.refresh import MarketDataUnavailableError, build_history, refresh
 from loan_engine.market.store import SeriesStore
 
-# The last two months of the Bank of Israel and CPI fixtures, which share 2022-01..2023-06.
+# Consumer rates for the last two of the months the Bank of Israel and CPI fixtures share,
+# 2022-01..2023-06.
 CONSUMER_CSV = "TIME_PERIOD,OBS_VALUE\n2023-05,6.5\n2023-06,6.6\n"
 
 

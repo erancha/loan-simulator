@@ -25,8 +25,8 @@ loan engine, the agent (the service that runs the conversations) and the page.
 - **Offers first**: a check opens with a card for the loan's goal (car, renovation or general)
   and its amount, typed or worked out from a price less the money put in. A terms card proposes
   a term with its first payment (with a stated monthly limit, the shortest term that fits it;
-  otherwise 60 months for a car, or the shortest term whose first payment is under 1,000 ₪, up
-  to 84 months), and the person confirms or changes it. The offer form follows. An offer entered
+  otherwise the shortest term whose first payment is under 1,000 ₪, up to 84 months), and the
+  person confirms or changes it. The offer form follows. An offer entered
   there is saved as it is; one described in words is read back in the simulator's terms
   ("prime + 6.45%, which is 11.2% today"). When its words fit several loans and its payment
   does not tell them apart, the person sees each and the exact question to ask the lender, and
@@ -47,7 +47,7 @@ loan engine, the agent (the service that runs the conversations) and the page.
   and the ceiling when there is one. Every figure on it comes from the engine's results, never
   from the model's text. The amount recommended is always the amount the person asked for.
   Without a ceiling the card says the recommendation is not yet checked against what the person
-  can pay; with one, a guardrail in code refuses an option whose worst case is above it, and the
+  can pay; with one, code recommends the cheapest option whose worst case fits it, and the
   assistant offers a longer term or names the largest loan that fits. A term the person picks that
   fits today and passes the ceiling only in the worst past window stands, with that warning; the
   "קיצור תקופה" and "הארכת תקופה" chips compare the term with two shorter or longer ones.
@@ -131,7 +131,8 @@ walk-through and the tests.
 - `test.sh` — the checks and tests of the engine, the agent and the page
 - `deploy.sh` — builds and starts Postgres, the engine and the agent in Docker; `--ec2` does it
   on one EC2 instance behind CloudFront, and `--ec2 --preview` runs the working tree beside it
-- `docker-helper.sh` — stops the stack, follows its logs or shows its status
+- `docker-helper.sh` — stops the stack, follows its logs, shows its status or sums its model
+  spend; `--ec2` acts on the EC2 instance
 
 Each script's header comment is its full documentation, and `--help` prints it.
 
@@ -143,7 +144,7 @@ Each script's header comment is its full documentation, and `--help` prints it.
   call it and what it answers
 - [Workers' responsibilities and flows](docs/workers.md) — the conversation turns, the daily
   market-data refresh and the schema migration
-- [The agent](docs/architecture/agent.md) — how a conversation runs, the guardrail, the message
+- [The agent](docs/architecture/agent.md) — how a conversation runs, the recommendation, the message
   cap and the events
 - [The page](docs/architecture/page.md) — the layout, the data flow and how the page is served
 - [Domain rules](docs/domain-rules.md) — every formula and policy number, with its reasoning
@@ -156,8 +157,9 @@ Each script's header comment is its full documentation, and `--help` prints it.
   scripts, the addresses and MCP Inspector
 - [Testing](docs/testing.md) — what each test layer proves
 - [Decisions](docs/adr/) — one record per founding decision: the engine, the worst case, the
-  agent, storage, sign-in, the model setting, Compose, the page, EC2, the loan-first flow, and
-  reading a vague offer in code
+  agent, storage, sign-in, the model setting, Compose, the page, EC2, the loan-first flow,
+  reading a vague offer in code, the instance shared by several repos, the preview, who may sign
+  in, and the recommendation chosen in code
 
 ## License
 

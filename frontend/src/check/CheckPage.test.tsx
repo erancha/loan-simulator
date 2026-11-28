@@ -29,7 +29,16 @@ import {
 import { restoreScrollIntoView, stubScrollIntoView } from '../test/scrollIntoView.ts'
 import type { AwaitingFocus } from './Chat.tsx'
 import { CheckPage } from './CheckPage.tsx'
-import { CONTINUE_TO_ANOTHER_OFFER, NO_OFFER_YET, TO_CARD } from './copy.ts'
+import {
+  CONTINUE,
+  CONTINUE_TO_ANOTHER_OFFER,
+  NO_OFFER_YET,
+  OFFER_LENDER_LABEL,
+  OFFER_MONTHS_LABEL,
+  offerLine,
+  offerRateBox,
+  TO_CARD,
+} from './copy.ts'
 import { wholeText } from '../test/wholeText.ts'
 
 const MESSAGES = '/api/checks/c1/messages'
@@ -781,7 +790,7 @@ test('a refused reading sends no line', async () => {
   expect(sentTexts(fetchStub)).toEqual([])
 })
 
-/** Max's offer quoted on 20,000, awaiting his answer on the check's loan of 29,000. */
+/** Max's offer quoted on 20,000, awaiting Max's answer on the check's loan of 29,000. */
 function maxShortCard() {
   renderPage()
   emit(
@@ -948,6 +957,27 @@ test("the offer form's no-offer choice closes the form and sweeps both ways forw
 
   expect(screen.getByRole('button', { name: 'דוגמאות' })).toHaveClass('border-sweep')
   expect(screen.getByRole('button', { name: 'הצעה מגוף מלווה' })).toHaveClass('border-sweep')
+})
+
+test("the offer form's offer goes on the message route as fields with its line", async () => {
+  const fetchStub = stubApi()
+  renderPage()
+  emit(userMessage(1, 'אישור: 60 חודשים'), withSeq(loanSet, 2), withSeq(termSet, 3))
+  emit(questionAsked(4, OFFER_FORM), turnStatus(5, 'idle'))
+  const form = document.querySelector<HTMLElement>('.bubble-question')!
+  await userEvent.type(within(form).getByRole('textbox', { name: OFFER_LENDER_LABEL }), 'הראל')
+  await userEvent.type(within(form).getByRole('textbox', { name: offerRateBox(1) }), '1.5')
+  await userEvent.type(within(form).getByRole('textbox', { name: OFFER_MONTHS_LABEL }), '84')
+  await userEvent.click(within(form).getByRole('button', { name: CONTINUE }))
+  const offer = {
+    line: offerLine('הראל', [{ kind: 'prime_plus', rate: '1.5', linked: false }], 84),
+    lender: 'הראל',
+    tracks: [{ rate_kind: 'prime', rate: '1.5', cpi_linked: false }],
+    max_term_months: 84,
+  }
+  await waitFor(() =>
+    expect(requests(fetchStub)).toEqual([`POST ${MESSAGES} ${JSON.stringify({ offer })}`]),
+  )
 })
 
 test('a link of the list brings its card into view', () => {

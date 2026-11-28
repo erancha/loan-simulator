@@ -95,6 +95,7 @@ class World:
             engine=self.engine,
             engine_tools=self.engine_tools,
             model=self.model,
+            follow_up_model=self.model,
             retry_model=None,
             checkpointer=self.saver,
             ready=self._ready,

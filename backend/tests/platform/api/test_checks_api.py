@@ -379,6 +379,39 @@ def test_an_opening_with_a_blank_purpose_or_no_amount_is_422(client: TestClient)
         assert client.post(f"/api/checks/{check_id}/opening", json=body).status_code == 422
 
 
+FORM_OFFER = {
+    "line": "קיבלתי הצעה. הגוף המלווה: בנק. (1) פריים פלוס 1.5%, לא צמוד למדד.",
+    "lender": "בנק",
+    "tracks": [{"rate_kind": "prime", "rate": "1.5", "cpi_linked": False}],
+    "max_term_months": 84,
+}
+
+
+def test_an_offer_from_the_form_is_accepted_with_202_and_saved(
+    world: World, client: TestClient
+) -> None:
+    world.replies(AIMessage("מוכן"))
+    world.engine.simulations = [PRIME_SIMULATION] * 6
+    check_id = client.post("/api/checks").json()["id"]
+    client.post(f"/api/checks/{check_id}/opening", json=OPENING)
+    world.drain(client)
+    client.put(f"/api/checks/{check_id}/term", json={"term_months": 48})
+
+    response = client.post(f"/api/checks/{check_id}/messages", json={"offer": FORM_OFFER})
+    world.drain(client)
+
+    assert response.status_code == 202
+    texts = [e.data.get("text") for e in world.events.rows[check_id] if e.type == "message.user"]
+    assert texts[-1] == FORM_OFFER["line"]
+    assert "option.saved" in [event.type for event in world.events.rows[check_id]]
+
+
+def test_a_message_takes_text_or_an_offer_never_both_or_neither(client: TestClient) -> None:
+    check_id = client.post("/api/checks").json()["id"]
+    for body in ({"text": "שלום", "offer": FORM_OFFER}, {}):
+        assert client.post(f"/api/checks/{check_id}/messages", json=body).status_code == 422
+
+
 def test_a_skipped_ceiling_question_is_accepted_with_202_and_gets_no_reply(
     world: World, client: TestClient
 ) -> None:

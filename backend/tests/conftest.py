@@ -1,3 +1,6 @@
+"""Fixtures every backend test shares: settings read from the test's environment alone, the test
+key pair's public half as a file, and a Postgres container migrated to head, one per module."""
+
 import os
 from collections.abc import Iterator
 from pathlib import Path

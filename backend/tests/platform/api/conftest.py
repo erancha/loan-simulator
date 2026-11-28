@@ -1,3 +1,5 @@
+"""Fixtures of the API tests: a World per test, and a client of its app signed in as Dana."""
+
 from collections.abc import Iterator
 from pathlib import Path
 

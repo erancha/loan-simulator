@@ -29,8 +29,8 @@ implementing the ports and never importing `application` or `platform`.
 - `ports` are the protocols the inner layers call: the engine, the repositories, the event sink
   and bus, token verification.
 - `application` holds the agent graph (the only inner-layer module that imports `langgraph`
-  and `langchain_core`), the check tools with the guardrail, the choice between the readings of
-  an offer described in words (`application/offer_reading.py`), and the event sink.
+  and `langchain_core`), the check tools with the recommendation's rule, the choice between the
+  readings of an offer described in words (`application/offer_reading.py`), and the event sink.
 - `adapters` implement the ports: the engine client over MCP, Google token verification, Postgres
   repositories, the in-memory event bus and the chat model.
 - `platform` is the HTTP API, configuration, logging, the checkpointer, the check runner and the

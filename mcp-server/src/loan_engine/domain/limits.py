@@ -8,8 +8,8 @@ MIN_TERM = 6
 MAX_TERM = 84
 MIN_ANNUAL_RATE = 0
 MAX_ANNUAL_RATE = 30
-# Prime is the Bank of Israel rate plus PRIME_MARGIN, so a margin under prime goes no lower than
-# the Bank of Israel rate itself.
+# Prime is the Bank of Israel rate plus PRIME_MARGIN, so the lowest spread brings a prime track's
+# rate down to the Bank of Israel rate itself.
 MIN_PRIME_SPREAD = -PRIME_MARGIN
 MAX_PRIME_SPREAD = 20
 # A scenario's yearly CPI rise, in percent, and yearly prime rise, in percentage points.

@@ -9,6 +9,9 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    """The engine's settings, validated when the process starts: the bearer token, the Host values
+    it answers, its public URL, its data directory and its port."""
+
     model_config = SettingsConfigDict(env_prefix="ENGINE_")
 
     bearer_token: SecretStr = Field(min_length=32)

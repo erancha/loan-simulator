@@ -43,6 +43,7 @@ x-agent-env: &agent-env
   ENGINE_URL: http://engine:${ENGINE_PORT:?set in stack-params.sh}/mcp
   LLM_MODEL:
   LLM_API_KEY:
+  LLM_FOLLOW_UP_EFFORT:
   LLM_RETRY_MODEL:
   LLM_RETRY_EMAILS:
   GOOGLE_CLIENT_ID:

@@ -1,3 +1,6 @@
+"""fetch_cpi() reads the published monthly percent from the recorded response and refuses a
+malformed percent or a response of more than one page."""
+
 import json
 from datetime import date
 from decimal import Decimal
