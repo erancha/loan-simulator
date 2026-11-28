@@ -1,8 +1,8 @@
-import { type ChangeEvent, useLayoutEffect, useRef } from 'react'
+import { type ChangeEvent, type InputHTMLAttributes, useLayoutEffect, useRef } from 'react'
 import { groupTypedAmount } from '../money.ts'
 
-interface Props {
-  id: string
+/** The box's own attributes besides its text (its label, hint, placeholder, focus handlers). */
+type Props = Omit<InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange'> & {
   /** The box's text, grouped. */
   value: string
   onChange: (text: string) => void
@@ -23,7 +23,7 @@ function caretAfter(text: string, characters: number): number {
  * moves the digits, so the caret is put back after the digit it followed, and an edit in the
  * middle of the amount goes on where the person was typing.
  */
-export function GroupedAmountInput({ id, value, onChange }: Props) {
+export function GroupedAmountInput({ value, onChange, ...attributes }: Props) {
   const input = useRef<HTMLInputElement>(null)
   // The caret to restore once the grouped text is rendered; null when there is none to restore.
   const caret = useRef<number | null>(null)
@@ -47,8 +47,8 @@ export function GroupedAmountInput({ id, value, onChange }: Props) {
 
   return (
     <input
+      {...attributes}
       ref={input}
-      id={id}
       type="text"
       inputMode="decimal"
       dir="ltr"

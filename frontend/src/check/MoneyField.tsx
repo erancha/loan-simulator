@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { formatAmount, normaliseMoneyInput } from '../money.ts'
+import { formatAmount, groupTypedAmount, normaliseMoneyInput } from '../money.ts'
+import { GroupedAmountInput } from './GroupedAmountInput.tsx'
 import { NOT_COUNTED_YET } from './copy.ts'
 import { FieldHint } from './FieldHint.tsx'
 import { rejectionText } from './rejection.ts'
@@ -24,7 +25,7 @@ interface Props {
   onCommit: (amount: string) => Promise<void>
 }
 
-/** A shekel input that shows grouped digits at rest and the typed text while editing. */
+/** A shekel input that groups its digits by thousands, at rest and while edited. */
 export function MoneyField({
   id,
   label,
@@ -58,16 +59,16 @@ export function MoneyField({
         <FieldHint id={`${id}-hint`} text={hint} />
       </span>
       <span className="field-input">
-        <input
+        <GroupedAmountInput
           id={id}
           aria-describedby={`${id}-hint`}
-          type="text"
           disabled={disabled}
-          inputMode="decimal"
           placeholder={NOT_COUNTED_YET}
           value={draft ?? (value === null ? '' : formatAmount(value))}
-          onFocus={() => setDraft((current) => current ?? value ?? '')}
-          onChange={(event) => setDraft(event.target.value)}
+          onFocus={() =>
+            setDraft((current) => current ?? (value === null ? '' : groupTypedAmount(value)))
+          }
+          onChange={setDraft}
           onBlur={(event) => void commit(event.target.value)}
         />
         <span className="unit">₪</span>

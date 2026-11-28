@@ -85,3 +85,13 @@ test('a read-only panel offers no edit', () => {
   expect(screen.getByText('9,300 ₪')).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'עריכה' })).not.toBeInTheDocument()
 })
+
+test('a field groups the amount by thousands while it is edited', async () => {
+  renderPanel()
+  await userEvent.click(screen.getByRole('button', { name: 'עריכה' }))
+  const income = screen.getByRole('textbox', { name: 'הכנסה קבועה' })
+  await userEvent.click(income)
+  expect(income).toHaveValue('9,300')
+  await userEvent.type(income, '0')
+  expect(income).toHaveValue('93,000')
+})

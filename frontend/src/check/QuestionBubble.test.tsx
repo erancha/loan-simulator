@@ -810,3 +810,30 @@ it('the scenario form refuses a rise that is not a number and sends nothing', as
   expect(screen.getByRole('alert')).toBeInTheDocument()
 })
 
+
+it('a money box groups the amount by thousands as it is typed', async () => {
+  const user = userEvent.setup()
+  render(
+    <QuestionBubble
+      entry={entryFor({ field: 'payment_ceiling', text: null, choices: null })}
+      live
+      finances={null}
+      ceiling={null}
+      ceilingFormula={null}
+      onAnswer={vi.fn()}
+      onSkip={vi.fn()}
+      onNoOffer={null}
+      onClone={vi.fn()}
+    />,
+  )
+  const box = screen.getByRole('textbox')
+  await user.type(box, '1000')
+  expect(box).toHaveValue('1,000')
+})
+
+it('the term card\'s ceiling box groups the amount by thousands as it is typed', async () => {
+  const user = userEvent.setup()
+  renderTerm()
+  await user.type(ceilingBox(), '2500')
+  expect(ceilingBox()).toHaveValue('2,500')
+})

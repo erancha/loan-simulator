@@ -42,6 +42,7 @@ import {
 import { withValues } from './emphasis.tsx'
 import type { QuestionEntry } from './events.ts'
 import { FieldHint } from './FieldHint.tsx'
+import { GroupedAmountInput } from './GroupedAmountInput.tsx'
 import { hasBothFinances } from './FinancesPanel.tsx'
 import { OfferForm } from './OfferForm.tsx'
 import { ScenarioForm } from './ScenarioForm.tsx'
@@ -137,13 +138,11 @@ function MoneyBox(props: {
 }) {
   return (
     <span className="field-input">
-      <input
-        type="text"
-        inputMode="decimal"
+      <GroupedAmountInput
         aria-label={props.label}
         aria-describedby={props.describedBy}
         value={props.value}
-        onChange={(event) => props.onChange(event.target.value)}
+        onChange={props.onChange}
       />
       <span className="unit">₪</span>
     </span>
@@ -307,13 +306,7 @@ function TermBubble({
           />
           <label htmlFor={ceilingId}>{CEILING_LABEL}</label>
           <span className="field-input">
-            <input
-              id={ceilingId}
-              type="text"
-              inputMode="decimal"
-              value={ceilingText}
-              onChange={(event) => setCeilingText(event.target.value)}
-            />
+            <GroupedAmountInput id={ceilingId} value={ceilingText} onChange={setCeilingText} />
             <span className="unit">₪</span>
             {ceilingFormula !== null && ceilingText === ceilingDraft(ceiling) && (
               <span className="ceiling-formula">{ceilingFormula}</span>
