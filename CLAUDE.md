@@ -75,3 +75,8 @@ than the license contact (`PUBLISHED_SETTINGS` of `lib/settings-guard.sh`).
   and migrates it; `--copy-live` alone does the same into the local database.
 - `tools/lock.sh` — recompiles each component's `requirements.txt` inside its Dockerfile's
   Python image after editing a dependency list.
+- `tools/turn-timing.sh [--scenario one-track|two-tracks] [--runs N] [--pause S]` — times the
+  agent's turns on one fixed scenario (a one-track offer; or a two-track offer, then ceilings of
+  1,000 and 2,000), N times on the local stack with the real model, and checks each
+  recommendation; it starts its own agent on port 8111 that signs in with a test key, so it needs
+  no Google sign-in and never runs on the preview or production.

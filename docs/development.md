@@ -115,10 +115,14 @@ Docker runs the stack; `deploy.sh` and `docker-helper.sh` stop when it is not re
   sign-in is a first visit, and `--clone <from> <to>`, which copies one account's checks to
   another with no records; `--ec2` first acts on the instance, `--ec2 --preview` on the
   preview, and `--ec2 --preview --copy-live` copies production's database into it; `--copy-live`
-  alone copies it into this machine's database and migrates it there) and
+  alone copies it into this machine's database and migrates it there),
   [`lock.sh`](../scripts/tools/lock.sh) (recompiles `mcp-server/requirements.txt` and
   `backend/requirements.txt` inside each Dockerfile's Python image; run it after editing a
-  dependency list). [`tools/README.md`](../scripts/tools/README.md) lists them.
+  dependency list) and [`turn-timing.sh`](../scripts/tools/turn-timing.sh) (runs one fixed
+  scenario several times against the local stack with the real model, through an agent of its
+  own that signs in with a test key, and prints each turn's time, each model call's seconds and
+  reasoning, and whether each recommendation is the right one).
+  [`tools/README.md`](../scripts/tools/README.md) lists them.
 
 `scripts/common.sh` holds what the scripts share: the repo paths, the help printer, the loader
 of the settings files, Compose access, and the virtualenv setup for the engine and the agent.
